@@ -1,4 +1,4 @@
-# Didact — Spécification complète v0.1
+# Didact — Spécification complète v0.2
 
 > Document de référence du projet. À lire en entier avant toute contribution ou nouvelle session de développement.
 
@@ -61,25 +61,63 @@ Niveau 3 — escape hatch raw.latex / raw.matplotlib  ←  pour les experts
 
 Il n'y a pas de niveau 1 ultra-simplifié : **l'IA joue ce rôle**. L'utilisateur décrit en langage naturel, l'IA génère le niveau 2.
 
-### 3.4 Moteur en arrière-plan
+### 3.4 Le compilateur EST le renderer
 
-Didact ne réinvente pas le rendu mathématique :
+Dans Didact, compiler = afficher le rendu. Ce sont la même chose.
 
 ```
-Didact  →  compile vers  →  LaTeX       (équations, tableaux)
-Didact  →  compile vers  →  Matplotlib  (graphes, courbes)
+didact cours.dct  →  ouvre une fenêtre avec l'animation
+                      exactement comme matplotlib ouvre une fenêtre avec les graphes
+```
+
+Le compilateur Didact est un **programme unique** qui :
+- Lit le fichier `.dct`
+- Parse la structure (lexer + parser)
+- Dessine les figures
+- Joue la timeline
+- Affiche le résultat
+
+**Il n'y a pas de dépendance web obligatoire.** Le navigateur n'est qu'un contexte de déploiement parmi d'autres.
+
+Didact utilise des moteurs existants en arrière-plan pour ne pas réinventer le rendu mathématique :
+```
+Didact  →  appelle  →  LaTeX       (équations, tableaux)
+Didact  →  appelle  →  Matplotlib  (graphes, courbes)
 Didact  →  gère lui-même →  positionnement, animations, timeline
 ```
 
-Comme TypeScript compile vers JavaScript : l'utilisateur écrit du Didact propre, les moteurs existants font le rendu lourd.
-
 ### 3.5 Embarquabilité universelle
 
-```html
-<didact src="cours.dct" lang="FR" />
+Le même fichier `.dct` fonctionne dans tous les contextes :
+
+```
+Ligne de commande :
+    didact cours.dct           →  ouvre une fenêtre animée (usage principal)
+
+Site web :
+    <didact src="cours.dct" /> →  joue dans le cadre de la page
+
+Exports optionnels :
+    didact cours.dct --export mp4   →  fichier vidéo
+    didact cours.dct --export html  →  page HTML autonome
 ```
 
-Un fichier Didact peut être embarqué dans n'importe quel contexte, comme une vidéo YouTube. Le renderer tourne dans le navigateur (WebAssembly). Pas besoin de compiler vers MP4 sauf cas exceptionnel.
+**Modèle de stockage web :**
+```
+Serveur stocke    cours.dct         (quelques ko, texte brut)
+Visiteur arrive   →  télécharge cours.dct
+                  →  le renderer WebAssembly s'exécute localement
+                  →  l'animation se joue dans le cadre
+                  →  rien d'autre à télécharger
+```
+
+Comparaison avec la vidéo classique :
+```
+MP4    →  serveur stocke 500 mo  →  visiteur télécharge 500 mo
+Didact →  serveur stocke 15 ko   →  visiteur télécharge 15 ko
+```
+
+Le rendu se fait **chez le visiteur**, pas sur le serveur. Comme Desmos.
 
 ---
 
@@ -560,46 +598,83 @@ Un seul fichier source, autant de langues que nécessaire. Le choix de langue es
 
 ## 10. Architecture technique
 
-### 10.1 Le compilateur
+### 10.1 Le compilateur / renderer
 
-Le compilateur Didact est écrit en **Rust** :
-- Performances maximales
-- Compile vers WebAssembly → tourne dans le navigateur
-- Un seul exécutable, rien à installer pour l'utilisateur final
+Le compilateur Didact est écrit en **Rust**. C'est un **programme unique** qui joue tous les rôles :
+
+```
+Contexte desktop  →  compile le .dct en Rust natif  →  ouvre une fenêtre
+Contexte web      →  compile le .dct en WebAssembly →  joue dans le navigateur
+```
+
+Pourquoi Rust :
+- Performances maximales (comparable au C)
+- Compile vers WebAssembly natif → même code, deux contextes
+- Un seul exécutable, rien à installer
 - Typage strict → moins de bugs
+- Écosystème moderne
 
-### 10.2 Pipeline de compilation
+### 10.2 Pipeline : du fichier .dct à l'écran
 
 ```
-Fichier .dct
+fichier.dct
     ↓
-Lexer (tokenisation)
+1. Lexer          →  transforme le texte en tokens
     ↓
-Parser (AST — arbre syntaxique)
+2. Parser         →  construit l'AST (arbre syntaxique)
     ↓
-Validation sémantique
+3. Validation     →  vérifie les références, les destroy, etc.
     ↓
-Renderers
-    ├── LaTeX        →  équations, tableaux
-    ├── Matplotlib   →  graphes, courbes
-    └── Didact natif →  géométrie, animations, timeline
+4. Renderer
+    ├── Géométrie          →  dessiné nativement par Didact
+    ├── Équations LaTeX    →  délégué à LaTeX / KaTeX
+    ├── Graphes            →  délégué à Matplotlib / bibliothèque native
+    └── Timeline           →  géré nativement par Didact
     ↓
-Output
-    ├── Navigateur (WebAssembly / Canvas)   ←  principal
-    ├── MP4                                 ←  optionnel
-    └── Podcast (TTS)                       ←  plus tard
+5. Output
+    ├── Fenêtre desktop    ←  usage principal (comme matplotlib)
+    ├── WebAssembly        ←  embarquable dans un site
+    ├── Export MP4         ←  optionnel
+    └── Export HTML        ←  optionnel
 ```
 
-### 10.3 Structure du projet Rust
+### 10.3 Les deux modes de compilation
+
+**Mode natif (desktop)**
+```
+cargo build --release
+didact cours.dct        →  fenêtre qui s'ouvre avec l'animation
+```
+
+**Mode WebAssembly (web)**
+```
+cargo build --target wasm32-unknown-unknown
+# produit un fichier .wasm embarquable dans n'importe quel site
+```
+
+C'est le **même code source Rust** dans les deux cas. Rust gère la différence.
+
+### 10.4 Structure du projet Rust
 
 ```
 didact/
   Cargo.toml
   src/
-    main.rs      ←  point d'entrée CLI
-    lexer.rs     ←  tokenisation
-    ast.rs       ←  structures de données (AST)
-    parser.rs    ←  parser récursif descendant
+    main.rs        ←  point d'entrée CLI
+    lexer.rs       ←  tokenisation  ✅ fait
+    ast.rs         ←  structures de données (AST)  ✅ fait
+    parser.rs      ←  parser récursif descendant  ✅ fait
+    validator.rs   ←  validation sémantique  🔲 à faire
+    renderer/
+      mod.rs       ←  orchestration du rendu  🔲 à faire
+      geometry.rs  ←  dessin des figures géométriques  🔲 à faire
+      timeline.rs  ←  moteur de timeline  🔲 à faire
+      latex.rs     ←  intégration LaTeX  🔲 à faire
+      math.rs      ←  intégration Matplotlib  🔲 à faire
+    output/
+      window.rs    ←  affichage fenêtre desktop  🔲 à faire
+      wasm.rs      ←  export WebAssembly  🔲 à faire
+      mp4.rs       ←  export vidéo  🔲 à faire (optionnel)
 ```
 
 ---
@@ -620,19 +695,24 @@ Voir `exemple.dct` dans le repo pour un exemple complet avec :
 
 ### ✅ Fait
 
-- Spécification du langage (v0.1)
-- Lexer complet
-- Parser (config + figures + timeline)
-- Fichier exemple
+- Spécification du langage (v0.2)
+- Lexer complet (`src/lexer.rs`)
+- AST — structures de données (`src/ast.rs`)
+- Parser récursif descendant (`src/parser.rs`)
+- Fichier exemple (`exemple.dct`)
+- Publié sur GitHub avec licence MIT
 
-### 🔲 Prochaines étapes
+### 🔲 Prochaines étapes (dans l'ordre)
 
-- [ ] Validation sémantique (vérifier les références, les destroy, etc.)
-- [ ] Renderer basique dans le navigateur (Canvas/WebGL)
-- [ ] Intégration LaTeX pour les équations
-- [ ] Intégration Matplotlib pour les graphes
+- [ ] Corriger le bug parser (`defstyle`/`deffigure` — voir section 12.1)
+- [ ] Validation sémantique (`src/validator.rs`)
+- [ ] Renderer géométrie de base — lignes, cercles, rectangles (`src/renderer/geometry.rs`)
+- [ ] Moteur de timeline (`src/renderer/timeline.rs`)
+- [ ] Affichage fenêtre desktop (`src/output/window.rs`)
+- [ ] Intégration LaTeX / KaTeX pour les équations
+- [ ] Intégration graphes (Matplotlib ou bibliothèque Rust native)
+- [ ] Compilation vers WebAssembly (`src/output/wasm.rs`)
 - [ ] Support fichiers séparés (`.dct.cfg` / `.dct.spc` / `.dct.tl`)
-- [ ] Interface Overleaf-like (éditeur web + prévisualisation)
 - [ ] Export MP4 optionnel
 - [ ] Mode podcast (TTS)
 - [ ] Packages communautaires (figures réutilisables)
@@ -645,13 +725,13 @@ Voir `exemple.dct` dans le repo pour un exemple complet avec :
 
 ---
 
-## 13. Décisions de design actées
+## 12. Décisions de design actées
 
 Cette section résume les choix importants et leurs raisons, pour ne pas les remettre en question inutilement.
 
 | Décision | Choix | Raison |
 |---|---|---|
-| Format de sortie principal | Navigateur (pas MP4) | Embarquable, vivant, pas besoin de recompiler |
+| Format de sortie principal | Fenêtre desktop (comme matplotlib) + WebAssembly optionnel | Pas de dépendance web obligatoire, embarquable si besoin |
 | Nombre de niveaux de syntaxe | 2 (pas 3) | L'IA remplace le niveau 1 simplifié |
 | Unité de temps | Secondes.millisecondes | Simple, non ambigu, facile à parser |
 | Noms des figures | Libres (style Python) | Lisibilité humaine et IA |
@@ -665,3 +745,5 @@ Cette section résume les choix importants et leurs raisons, pour ne pas les rem
 | Moteur de rendu | LaTeX + Matplotlib en arrière-plan | Ne pas réinventer le rendu mathématique |
 | Format binaire | Non (pour l'instant) | Gain négligeable, perd la lisibilité |
 | Timeline audio | Dans .dct.tl (pas séparé) | Vision globale en un coup d'œil |
+| Compilateur = Renderer | Un seul programme | Lit le .dct et affiche le rendu, comme matplotlib |
+| Stockage web | Serveur stocke .dct (ko), rendu local (WASM) | Léger, pas de serveur de rendu, comme Desmos |
