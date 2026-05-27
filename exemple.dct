@@ -1,0 +1,127 @@
+# ─────────────────────────────────────────────
+#  Exemple Didact : rectangle qui suit une sinusoïde
+#  avec une étoile et un angle theta
+# ─────────────────────────────────────────────
+
+[config]
+window       : [1920, 1080]
+background   : white
+languages    : [FR, NL, EN]
+default_lang : FR
+
+[figures]
+
+# --- Styles ---
+
+defstyle trait_fin =
+    width   : 2px
+    opacity : 1.0
+
+defstyle trait_epais =
+    extends : trait_fin
+    width   : 4px
+
+# --- Axes sans graduation ---
+
+deffigure axes_xy =
+    type    : axes
+    origin  : (10%, 50%)
+    xrange  : [0, 10]
+    yrange  : [-1, 1]
+    grid    : false
+    ticks   : false
+    xlabel  : ""
+    ylabel  : ""
+    style   : trait_fin
+
+# --- La courbe sinus ---
+
+deffigure courbe_sin =
+    type    : plot
+    expr    : sin(x)
+    axes    : axes_xy
+    color   : black
+    style   : trait_fin
+
+# --- Le rectangle orange ---
+
+deffigure rect_mobile =
+    type    : rect
+    width   : 3%
+    height  : 4%
+    fill    : orange
+    color   : orange
+    opacity : 0.8
+    anchor  : center
+    rotate  : auto_tangent(courbe_sin)
+
+# --- L'étoile en (3, 4) ---
+
+deffigure etoile =
+    type    : star
+    points  : 5
+    pos     : axes_xy(3, 4)
+    size    : 2%
+    color   : gold
+    fill    : gold
+
+# --- La ligne vers l'étoile ---
+
+deffigure ligne_direction =
+    type    : line
+    from    : center(rect_mobile)
+    to      : center(etoile)
+    color   : blue
+    width   : 2px
+    arrow   : end
+
+# --- L'arc pour l'angle theta ---
+
+deffigure arc_theta =
+    type        : arc
+    center      : center(rect_mobile)
+    from_angle  : 0
+    to_angle    : angle(ligne_direction)
+    radius      : 5%
+    color       : red
+    width       : 2px
+    arrow       : end
+
+# --- Le label theta ---
+
+deffigure label_theta =
+    type    : text
+    content : "$\theta$"
+    pos     : offset(arc_theta, 1%)
+    color   : red
+    font    : 20px
+
+[timeline]
+
+# Apparition des axes et de la courbe
+0.000 => {
+    start : [axes_xy, courbe_sin, etoile]
+    comment : ["Voici un axe avec une sinusoïde", "Hier is een as met een sinusoïde", "Here is an axis with a sine curve"]
+}
+
+# Le rectangle apparaît et commence à parcourir la courbe
+1.000 => {
+    start : [rect_mobile, ligne_direction, arc_theta, label_theta]
+    anim  : [rect_mobile follow(path=courbe_sin, speed=1cm/s, rotate=tangent)]
+}
+
+# Au milieu : les axes et la courbe disparaissent, le rectangle continue
+30.000 => {
+    end : [axes_xy fadeout(0.5s), courbe_sin fadeout(0.5s)]
+    comment : ["La courbe disparaît mais le rectangle continue", "De curve verdwijnt maar de rechthoek gaat verder", "The curve disappears but the rectangle continues"]
+}
+
+# Fin de tout
+55.000 => {
+    end : [rect_mobile fadeout(0.3s), ligne_direction fadeout(0.3s), arc_theta fadeout(0.3s), label_theta fadeout(0.3s), etoile fadeout(0.3s)]
+}
+
+# Nettoyage
+56.000 => {
+    destroy : [axes_xy, courbe_sin, rect_mobile, ligne_direction, arc_theta, label_theta, etoile]
+}

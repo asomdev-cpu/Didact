@@ -1,0 +1,11 @@
+[package]
+name = "didact"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "didact"
+path = "src/main.rs"
+
+[dependencies]
+# aucune dépendance externe pour l'instant
