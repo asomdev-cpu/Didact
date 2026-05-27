@@ -2,17 +2,15 @@
 
 > Langage de description d'animations éducatives — style 3Blue1Brown, accessible à tous, embarquable partout.
 
-**Statut : prototype — parser v0.1**
+**Statut :** prototype en cours de développement — parser fonctionnel, renderer à venir.
 
 ---
 
 ## Qu'est-ce que Didact ?
 
-Didact permet de créer des vidéos animées éducatives en écrivant un fichier texte simple. Pas de code Python, pas de PowerPoint, pas de compilation vers MP4 à chaque modification.
+Didact permet de créer des animations éducatives en écrivant un fichier texte simple. Pas de code Python, pas de PowerPoint, pas de compilation vers MP4.
 
 ```
-# mon_cours.dct
-
 [config]
 window : [16:9]
 languages : [FR, EN]
@@ -43,35 +41,43 @@ deffigure courbe_sin =
 }
 ```
 
-Le fichier tourne directement dans le navigateur. On le partage comme du code, pas comme une vidéo.
+Le compilateur lit ce fichier et ouvre une fenêtre avec l'animation — comme matplotlib avec ses graphes.
 
 ---
 
 ## Pourquoi Didact ?
 
-| Outil | Problème |
+| Outil | Limite |
 |---|---|
-| Manim | Faut coder en Python, pas embarquable |
+| Manim | Code Python obligatoire, pas embarquable |
 | PowerPoint | Fermé, pas versionnable, pas IA-friendly |
 | LaTeX Beamer | Statique, pas animé |
-| Canva/Prezi | Fermé, pas open source |
+| Canva / Prezi | Fermé, pas open source |
 | **Didact** | Texte lisible, embarquable, open source, IA-friendly |
 
 ---
 
-## Installation
+## Documentation
+
+Trois documents complémentaires :
+
+| Document | Pour qui |
+|---|---|
+| [**SPEC.md**](SPEC.md) | Utilisateurs — comment écrire un fichier `.dct` |
+| [**ARCHITECTURE.md**](ARCHITECTURE.md) | Développeurs — comment fonctionne le compilateur |
+| [**DECISIONS.md**](DECISIONS.md) | Tous — journal de design, état d'avancement, roadmap |
+
+---
+
+## Installation et test
 
 ```bash
-# Installer Rust si pas déjà fait : https://rustup.rs
+# Installer Rust : https://rustup.rs
 cargo build
 cargo run -- exemple.dct
 ```
 
----
-
-## Documentation complète
-
-→ Voir **[DIDACT_SPEC.md](DIDACT_SPEC.md)** pour la spécification complète du langage.
+Le parser affichera l'AST du fichier. Le renderer n'est pas encore implémenté (voir DECISIONS.md pour la roadmap).
 
 ---
 
@@ -79,29 +85,32 @@ cargo run -- exemple.dct
 
 ```
 didact/
-  Cargo.toml
-  exemple.dct       ←  exemple complet
-  README.md
-  DIDACT_SPEC.md    ←  spécification complète
-  src/
-    main.rs         ←  point d'entrée
-    lexer.rs        ←  tokenisation
-    ast.rs          ←  structures de données
-    parser.rs       ←  parser
+├── README.md            ← ce fichier
+├── SPEC.md              ← documentation du langage
+├── ARCHITECTURE.md      ← documentation technique
+├── DECISIONS.md         ← journal de design
+├── exemple.dct          ← exemple complet
+├── Cargo.toml
+└── src/
+    ├── main.rs          ← point d'entrée CLI
+    ├── lexer.rs         ← tokenisation
+    ├── ast.rs           ← structures de données
+    └── parser.rs        ← parser récursif descendant
 ```
 
 ---
 
 ## Contribuer
 
-Le projet en est à ses débuts. Les contributions bienvenues :
-- Renderer navigateur (Canvas/WebGL/WebAssembly)
-- Intégration LaTeX
-- Intégration Matplotlib
-- Interface Overleaf-like
+Le projet est aux tout débuts. Pour contribuer :
+
+1. Lire `SPEC.md` (comprendre le langage)
+2. Lire `ARCHITECTURE.md` (comprendre le compilateur)
+3. Lire `DECISIONS.md` (voir ce qui est prioritaire)
+4. Ouvrir une issue ou une PR
 
 ---
 
 ## Licence
 
-À définir.
+MIT — voir [LICENSE](LICENSE).
