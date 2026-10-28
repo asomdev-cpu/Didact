@@ -271,6 +271,15 @@ Cette section liste les choix importants qui ont été tranchés. Chaque décisi
 
 **Alternative rejetée :** exécution dans l'ordre d'écriture — oblige à faire attention à l'ordre des lignes dans chaque bloc.
 
+### `stroke` pour l'épaisseur du trait
+
+**Décision :** L'épaisseur du trait s'appelle `stroke`. `width` et `height` sont réservés aux dimensions d'un `rect`.
+
+**Raisonnement :**
+- Avec `width` pour les deux, un style d'épaisseur (`width : 2px`) appliqué à un `rect` changeait sa largeur
+- Un nom = un sens, quel que soit le type de figure
+- Le validateur refuse `width` sur une figure qui n'est pas un `rect` et suggère `stroke`
+
 ### Noms sensibles à la casse
 
 **Décision :** `Ma_Ligne` et `ma_ligne` sont deux noms distincts. Pas d'avertissement si deux noms ne diffèrent que par la casse.
@@ -400,6 +409,7 @@ Idées qui ont été discutées et rejetées explicitement.
 - Documentation restructurée en trois fichiers (SPEC, ARCHITECTURE, DECISIONS)
 - Clarification du modèle compilateur = renderer
 - Parser : correction de la reconnaissance de `defstyle`/`deffigure`/`defgroup`
+- `width` → `stroke` pour l'épaisseur du trait (`width` réservé aux `rect`)
 - Résolveur : styles et chaîne `extends` appliqués, surcharges, tri par `layer`, timeline triée
 - Numéros de ligne dans toutes les erreurs (lexer → AST → parser/validateur)
 - Validateur : noms uniques, pas de référence en avant, types et animations connus, timestamps uniques, nombre de traductions, `destroy` vérifié

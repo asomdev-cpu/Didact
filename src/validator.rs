@@ -89,7 +89,7 @@ pub fn validate(doc: &Document) -> Result<(), Vec<String>> {
     v.check_config(&doc.config);
     v.collect_definitions(doc);
     v.check_styles(&doc.styles);
-    v.check_figures(&doc.figures);
+    v.check_figures(&doc.figures, &doc.styles);
     v.check_timeline(doc);
 
     if v.errors.is_empty() {
@@ -211,17 +211,46 @@ impl Validator {
         }
     }
 
-    fn check_figures(&mut self, figures: &[FigureDef]) {
+    fn check_figures(&mut self, figures: &[FigureDef], styles: &[StyleDef]) {
+        let styles_by_name: HashMap<&str, &StyleDef> =
+            styles.iter().map(|s| (s.name.as_str(), s)).collect();
+
         for f in figures {
             let line_of = |key: &str| f.prop_lines.get(key).copied().unwrap_or(f.line);
 
             // Type obligatoire et connu
-            match f.properties.get("type") {
-                Some(PropValue::Single(t)) if FIGURE_TYPES.contains(&t.as_str()) => {}
-                Some(PropValue::Single(t)) => {
-                    self.error(line_of("type"), format!("'{}' : type inconnu '{}'", f.name, t));
+            let ftype = match f.properties.get("type") {
+                Some(PropValue::Single(t)) => t.as_str(),
+                _ => "",
+            };
+            if ftype.is_empty() {
+                self.error(f.line, format!("'{}' : propriété `type` manquante", f.name));
+            } else if !FIGURE_TYPES.contains(&ftype) {
+                self.error(line_of("type"), format!("'{}' : type inconnu '{}'", f.name, ftype));
+            }
+
+            // `width` est réservé aux rect (l'épaisseur du trait s'appelle `stroke`),
+            // qu'il soit écrit sur la figure ou hérité d'un style
+            if !ftype.is_empty() && ftype != "rect" {
+                if f.properties.contains_key("width") {
+                    self.error(
+                        line_of("width"),
+                        format!(
+                            "'{}' : `width` est réservé aux rect ; pour l'épaisseur du trait, utiliser `stroke`",
+                            f.name
+                        ),
+                    );
+                } else if let Some(PropValue::Single(style)) = f.properties.get("style") {
+                    if let Some((style_name, line)) = find_in_style_chain(style, "width", &styles_by_name) {
+                        self.error(
+                            line,
+                            format!(
+                                "'{}' ({}) hérite `width` du style '{}' ; `width` est réservé aux rect, utiliser `stroke` pour l'épaisseur du trait",
+                                f.name, ftype, style_name
+                            ),
+                        );
+                    }
                 }
-                _ => self.error(f.line, format!("'{}' : propriété `type` manquante", f.name)),
             }
 
             let mut refs = Vec::new();
@@ -445,6 +474,29 @@ impl Validator {
             self.error_t(line, t, format!("'{}' : animation inconnue '{}'", figure, anim));
         }
     }
+}
+
+/// Cherche `key` dans un style et ses ancêtres (`extends`).
+/// Renvoie le style qui la définit et la ligne, ou None.
+fn find_in_style_chain<'a>(
+    start: &str,
+    key: &str,
+    styles: &HashMap<&str, &'a StyleDef>,
+) -> Option<(&'a str, usize)> {
+    let mut visited = Vec::new(); // garde-fou si la chaîne est invalide (déjà signalé ailleurs)
+    let mut current = styles.get(start).copied();
+    while let Some(style) = current {
+        if visited.contains(&style.name.as_str()) {
+            return None;
+        }
+        visited.push(style.name.as_str());
+        if style.properties.contains_key(key) {
+            let line = style.prop_lines.get(key).copied().unwrap_or(style.line);
+            return Some((style.name.as_str(), line));
+        }
+        current = style.extends.as_deref().and_then(|p| styles.get(p).copied());
+    }
+    None
 }
 
 /// Découpe "offset(arc_theta,1%)" en ("offset", ["arc_theta", "1%"])
@@ -680,6 +732,50 @@ mod tests {
                 anim  : [a teleport(1s)]
             }",
             "ligne 7 (t=0.000) : 'a' : animation inconnue 'teleport'",
+        );
+    }
+
+    #[test]
+    fn width_interdit_hors_rect() {
+        assert_error(
+            "[figures]
+            deffigure a =
+                type  : line
+                width : 2px
+            [timeline]",
+            "ligne 4 : 'a' : `width` est réservé aux rect",
+        );
+    }
+
+    #[test]
+    fn width_herite_d_un_style() {
+        assert_error(
+            "[figures]
+            defstyle base =
+                width : 2px
+            defstyle epais =
+                extends : base
+            deffigure a =
+                type  : circle
+                style : epais
+            [timeline]",
+            "ligne 3 : 'a' (circle) hérite `width` du style 'base'",
+        );
+    }
+
+    #[test]
+    fn width_ok_sur_rect() {
+        assert_eq!(
+            check(
+                "[figures]
+                deffigure r =
+                    type   : rect
+                    width  : 30%
+                    height : 20%
+                    stroke : 2px
+                [timeline]"
+            ),
+            Ok(())
         );
     }
 

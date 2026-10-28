@@ -14,12 +14,12 @@ default_lang : FR
 # --- Styles ---
 
 defstyle trait_fin =
-    width   : 2px
+    stroke  : 2px
     opacity : 1.0
 
 defstyle trait_epais =
     extends : trait_fin
-    width   : 4px
+    stroke  : 4px
 
 # --- Axes sans graduation ---
 
@@ -72,7 +72,7 @@ deffigure ligne_direction =
     from    : center(rect_mobile)
     to      : center(etoile)
     color   : blue
-    width   : 2px
+    stroke  : 2px
     arrow   : end
 
 # --- L'arc pour l'angle theta ---
@@ -84,7 +84,7 @@ deffigure arc_theta =
     to_angle    : angle(ligne_direction)
     radius      : 5%
     color       : red
-    width       : 2px
+    stroke      : 2px
     arrow       : end
 
 # --- Le label theta ---

@@ -362,11 +362,13 @@ Cette section liste les types et propriétés **explicitement décidés**. Les d
 color    : red / #FF0000
 fill     : none / red / #FF0000
 opacity  : 0.0 → 1.0
-width    : épaisseur du trait (ex: 2px)
+stroke   : épaisseur du trait (ex: 2px)
 style    : nom d'un style à appliquer
 layer    : ordre d'affichage
 anchor   : point d'ancrage (ex: center)
 ```
+
+**`stroke` vs `width` :** `stroke` est l'épaisseur du trait, pour toutes les figures. `width` et `height` sont uniquement les dimensions d'un `rect`.
 
 **`layer` :** un nombre. Les petites valeurs sont dessinées en premier (donc en dessous). Sans `layer`, la valeur est 0. À `layer` égal, l'ordre de définition dans le fichier est conservé.
 
@@ -380,7 +382,7 @@ deffigure ma_ligne =
     from  : (20%, 50%)
     to    : (80%, 50%)
     color : red
-    width : 2px
+    stroke: 2px
     arrow : none / start / end / both
 ```
 
@@ -428,7 +430,7 @@ deffigure mon_arc =
     from_angle : 0
     to_angle   : 90
     color      : red
-    width      : 2px
+    stroke     : 2px
     arrow      : end
 ```
 
@@ -525,7 +527,7 @@ deffigure mon_plot =
     expr  : sin(x)
     axes  : mes_axes
     color : red
-    width : 2px
+    stroke: 2px
 ```
 
 #### `scatter`
@@ -559,7 +561,7 @@ deffigure mon_histo =
 ```
 defstyle trait_fin =
     color   : red
-    width   : 2px
+    stroke  : 2px
     opacity : 1.0
 ```
 
@@ -580,7 +582,7 @@ Les propriétés définies directement sur la figure **écrasent** celles du sty
 ```
 defstyle trait_fin =
     color : red
-    width : 2px
+    stroke: 2px
 
 deffigure ma_ligne =
     type  : line
@@ -595,12 +597,12 @@ deffigure ma_ligne =
 ```
 defstyle base =
     opacity : 1.0
-    width   : 2px
+    stroke  : 2px
 
 defstyle rouge_epais =
     extends : base
     color   : red
-    width   : 4px       # ← écrase le width de base
+    stroke  : 4px       # ← écrase le stroke de base
 ```
 
 ---
@@ -816,10 +818,6 @@ Une même figure peut-elle appartenir à plusieurs groupes simultanément ?
 ### Effacer un commentaire sans le remplacer
 
 Comment terminer un sous-titre sans en afficher un nouveau ? `comment : []` ? Une commande explicite ?
-
-### `width` : épaisseur du trait ou largeur ?
-
-`width` désigne l'épaisseur du trait (§8.1) mais aussi la largeur d'un `rect` (§8.2). Un style `width : 2px` appliqué à un `rect` change donc sa largeur, pas son trait. Renommer l'un des deux (ex : `stroke` pour le trait) ?
 
 ### Effets de bord du compilateur
 

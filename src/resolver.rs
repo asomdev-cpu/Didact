@@ -164,7 +164,7 @@ mod tests {
             "[figures]
             defstyle rouge =
                 color : red
-                width : 2px
+                stroke : 2px
             deffigure a =
                 type  : line
                 style : rouge
@@ -172,7 +172,7 @@ mod tests {
         );
         let a = fig(&doc, "a");
         assert_eq!(prop(a, "color"), "red");
-        assert_eq!(prop(a, "width"), "2px");
+        assert_eq!(prop(a, "stroke"), "2px");
         assert!(!a.properties.contains_key("style"));
     }
 
@@ -182,7 +182,7 @@ mod tests {
             "[figures]
             defstyle rouge =
                 color : red
-                width : 2px
+                stroke : 2px
             deffigure a =
                 type  : line
                 style : rouge
@@ -191,10 +191,10 @@ mod tests {
         );
         let a = fig(&doc, "a");
         assert_eq!(prop(a, "color"), "blue");
-        assert_eq!(prop(a, "width"), "2px");
+        assert_eq!(prop(a, "stroke"), "2px");
         // La ligne pointe là où la valeur effective est écrite
         assert_eq!(a.prop_lines["color"], 8);
-        assert_eq!(a.prop_lines["width"], 4);
+        assert_eq!(a.prop_lines["stroke"], 4);
     }
 
     #[test]
@@ -203,11 +203,11 @@ mod tests {
             "[figures]
             defstyle base =
                 opacity : 0.5
-                width   : 1px
+                stroke  : 1px
                 color   : black
             defstyle moyen =
                 extends : base
-                width   : 2px
+                stroke  : 2px
             defstyle fort =
                 extends : moyen
                 color   : red
@@ -218,7 +218,7 @@ mod tests {
         );
         let a = fig(&doc, "a");
         assert_eq!(prop(a, "opacity"), "0.5"); // de base
-        assert_eq!(prop(a, "width"), "2px");   // moyen écrase base
+        assert_eq!(prop(a, "stroke"), "2px");   // moyen écrase base
         assert_eq!(prop(a, "color"), "red");   // fort écrase base
         assert!(!a.properties.contains_key("extends"));
     }
@@ -262,7 +262,7 @@ mod tests {
         let doc = resolve_src(include_str!("../exemple.dct"));
         // axes_xy utilise trait_fin
         let axes = fig(&doc, "axes_xy");
-        assert_eq!(prop(axes, "width"), "2px");
+        assert_eq!(prop(axes, "stroke"), "2px");
         assert_eq!(prop(axes, "opacity"), "1");
         assert_eq!(axes.ftype, "axes");
     }
