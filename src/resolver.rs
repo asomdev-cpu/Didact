@@ -17,6 +17,8 @@ use std::collections::HashMap;
 #[derive(Debug, Clone)]
 pub struct ResolvedFigure {
     pub name: String,
+    /// Position de la définition dans le fichier (ordre de calcul des références)
+    pub index: usize,
     /// Type de la figure (line, circle, group, ...)
     pub ftype: String,
     /// Ordre de dessin : les petites valeurs sont dessinées en premier (donc en dessous)
@@ -103,6 +105,7 @@ fn resolve_figure(f: &FigureDef, styles: &HashMap<&str, &StyleDef>) -> ResolvedF
 
     ResolvedFigure {
         name: f.name.clone(),
+        index: f.index,
         ftype,
         layer,
         line: f.line,

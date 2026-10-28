@@ -14,6 +14,7 @@
 
 use crate::ast::{Config, PropValue, WindowConfig};
 use crate::resolver::{fmt_value, ResolvedFigure};
+use std::collections::HashMap;
 
 // ─────────────────────────────────────────────
 //  TYPES DE BASE
@@ -59,6 +60,24 @@ pub struct Shape {
     /// Couleur et épaisseur du trait (en pixels)
     pub stroke: Option<(Rgba, f32)>,
 }
+
+/// Géométrie calculée d'une figure à l'instant t, utilisée par les références
+/// dynamiques des figures définies plus bas (`center(fig)`, `angle(fig)`, `offset(fig, d)`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Geom {
+    /// Centre (pixels)
+    pub center: (f32, f32),
+    /// Angle en degrés, sens trigonométrique : direction pour une line, rotation sinon
+    pub angle: f32,
+    /// Boîte englobante : (x min, y min, x max, y max) en pixels
+    pub bbox: (f32, f32, f32, f32),
+    /// Point d'accroche d'une étiquette et direction vers l'extérieur
+    /// (milieu d'un arc) ; None → coin haut-droit de la boîte
+    pub label: Option<((f32, f32), (f32, f32))>,
+}
+
+/// Géométries des figures déjà calculées, par nom
+pub type Refs = HashMap<String, Geom>;
 
 /// La zone de dessin
 #[derive(Debug, Clone)]
@@ -113,7 +132,7 @@ struct Look {
     stroke: f32,
 }
 
-pub fn figure_shapes(f: &ResolvedFigure, scene: &Scene) -> Result<Vec<Shape>, String> {
+pub fn figure_shapes(f: &ResolvedFigure, scene: &Scene, refs: &Refs) -> Result<Vec<Shape>, String> {
     let opacity = match f.properties.get("opacity") {
         Some(PropValue::Number(n)) => (*n as f32).clamp(0.0, 1.0),
         Some(v) => return Err(format!("opacity invalide '{}'", fmt_value(v))),
@@ -135,19 +154,19 @@ pub fn figure_shapes(f: &ResolvedFigure, scene: &Scene) -> Result<Vec<Shape>, St
     };
 
     match f.ftype.as_str() {
-        "line" => line(f, scene, &look),
-        "circle" => circle(f, scene, &look),
-        "rect" => rect(f, scene, &look),
+        "line" => line(f, scene, refs, &look),
+        "circle" => circle(f, scene, refs, &look),
+        "rect" => rect(f, scene, refs, &look),
         "polygon" => polygon(f, scene, &look),
-        "arc" => arc(f, scene, &look),
-        "star" => star(f, scene, &look),
+        "arc" => arc(f, scene, refs, &look),
+        "star" => star(f, scene, refs, &look),
         other => Err(format!("type '{}' pas encore dessiné", other)),
     }
 }
 
-fn line(f: &ResolvedFigure, scene: &Scene, look: &Look) -> Result<Vec<Shape>, String> {
-    let (x1, y1) = point(require(f, "from")?, scene)?;
-    let (x2, y2) = point(require(f, "to")?, scene)?;
+fn line(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<Vec<Shape>, String> {
+    let (x1, y1) = point(require(f, "from")?, scene, refs)?;
+    let (x2, y2) = point(require(f, "to")?, scene, refs)?;
     let (start_arrow, end_arrow) = arrows(f)?;
     let color = look.color.unwrap_or(Rgba::BLACK);
 
@@ -180,8 +199,8 @@ fn line(f: &ResolvedFigure, scene: &Scene, look: &Look) -> Result<Vec<Shape>, St
     Ok(shapes)
 }
 
-fn circle(f: &ResolvedFigure, scene: &Scene, look: &Look) -> Result<Vec<Shape>, String> {
-    let (cx, cy) = point(require(f, "center")?, scene)?;
+fn circle(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<Vec<Shape>, String> {
+    let (cx, cy) = point(require(f, "center")?, scene, refs)?;
     let r = length(require(f, "radius")?, scene, scene.min_side())?;
     Ok(vec![Shape {
         path: circle_path(cx, cy, r),
@@ -190,8 +209,8 @@ fn circle(f: &ResolvedFigure, scene: &Scene, look: &Look) -> Result<Vec<Shape>, 
     }])
 }
 
-fn rect(f: &ResolvedFigure, scene: &Scene, look: &Look) -> Result<Vec<Shape>, String> {
-    let (x, y) = point(require(f, "pos")?, scene)?;
+fn rect(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<Vec<Shape>, String> {
+    let (x, y) = point(require(f, "pos")?, scene, refs)?;
     // En % du plus petit côté : width = height donne toujours un carré
     let w = length(require(f, "width")?, scene, scene.min_side())?;
     let h = length(require(f, "height")?, scene, scene.min_side())?;
@@ -233,11 +252,11 @@ fn polygon(f: &ResolvedFigure, scene: &Scene, look: &Look) -> Result<Vec<Shape>,
     Ok(vec![Shape { path, fill: look.fill, stroke: look.color.map(|c| (c, look.stroke)) }])
 }
 
-fn arc(f: &ResolvedFigure, scene: &Scene, look: &Look) -> Result<Vec<Shape>, String> {
-    let (cx, cy) = point(require(f, "center")?, scene)?;
+fn arc(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<Vec<Shape>, String> {
+    let (cx, cy) = point(require(f, "center")?, scene, refs)?;
     let r = length(require(f, "radius")?, scene, scene.min_side())?;
-    let a0 = angle(require(f, "from_angle")?)?;
-    let a1 = angle(require(f, "to_angle")?)?;
+    let a0 = angle(require(f, "from_angle")?, refs)?;
+    let a1 = angle(require(f, "to_angle")?, refs)?;
     let (start_arrow, end_arrow) = arrows(f)?;
     let color = look.color.unwrap_or(Rgba::BLACK);
 
@@ -277,8 +296,8 @@ fn arc(f: &ResolvedFigure, scene: &Scene, look: &Look) -> Result<Vec<Shape>, Str
     Ok(shapes)
 }
 
-fn star(f: &ResolvedFigure, scene: &Scene, look: &Look) -> Result<Vec<Shape>, String> {
-    let (cx, cy) = point(require(f, "pos")?, scene)?;
+fn star(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<Vec<Shape>, String> {
+    let (cx, cy) = point(require(f, "pos")?, scene, refs)?;
     let outer = length(require(f, "size")?, scene, scene.min_side())?;
     let n = match f.properties.get("points") {
         Some(PropValue::Number(n)) if *n >= 3.0 => *n as usize,
@@ -363,17 +382,71 @@ fn require<'a>(f: &'a ResolvedFigure, key: &str) -> Result<&'a PropValue, String
         .ok_or_else(|| format!("propriété `{}` manquante", key))
 }
 
-/// Position (x, y) en pixels à partir d'un tuple (20%, 50%)
-fn point(v: &PropValue, scene: &Scene) -> Result<(f32, f32), String> {
+/// Position (x, y) en pixels : tuple (20%, 50%) ou référence dynamique center(fig), offset(fig, d)
+fn point(v: &PropValue, scene: &Scene, refs: &Refs) -> Result<(f32, f32), String> {
     match v {
         PropValue::Tuple(items) if items.len() == 2 => {
             Ok((coord(&items[0], scene, true)?, coord(&items[1], scene, false)?))
         }
-        PropValue::Single(s) if s.contains('(') => Err(format!(
-            "référence dynamique '{}' pas encore supportée (Phase 2)",
-            s
-        )),
+        PropValue::Single(s) if s.contains('(') => ref_point(s, scene, refs),
         _ => Err(format!("position invalide '{}', attendu (x%, y%)", fmt_value(v))),
+    }
+}
+
+/// Position écrite en texte : "(80%,50%)" ou "center(b)" (paramètre `to=` de move)
+pub fn resolve_point(s: &str, scene: &Scene, refs: &Refs) -> Result<(f32, f32), String> {
+    if s.trim_start().starts_with('(') {
+        point_str(s, scene)
+    } else {
+        ref_point(s, scene, refs)
+    }
+}
+
+/// Récupère la géométrie d'une figure référencée
+fn geom<'a>(name: &str, refs: &'a Refs) -> Result<&'a Geom, String> {
+    refs.get(name)
+        .ok_or_else(|| format!("la figure référencée '{}' n'a pas pu être calculée", name))
+}
+
+/// center(fig) ou offset(fig, d)
+fn ref_point(s: &str, scene: &Scene, refs: &Refs) -> Result<(f32, f32), String> {
+    let (fname, args) = split_call(s);
+    match (fname, args.as_slice()) {
+        ("center", [name]) => Ok(geom(name, refs)?.center),
+        ("offset", [name, d]) => {
+            let g = geom(name, refs)?;
+            let d = length_str(d, scene)?;
+            Ok(match g.label {
+                // Milieu d'un arc : on s'écarte vers l'extérieur
+                Some(((x, y), (dx, dy))) => (x + dx * d, y + dy * d),
+                // Sinon : en haut à droite de la figure
+                None => (g.bbox.2 + d, g.bbox.1 - d),
+            })
+        }
+        ("center" | "offset", _) => Err(format!("'{}' : nombre d'arguments invalide", s)),
+        ("auto_tangent", _) => Err(format!("'{}' : pas encore supporté (nécessite plot, Phase 3)", s)),
+        // mes_axes(3, 4) : position dans un repère
+        _ => Err(format!("'{}' : repère axes pas encore supporté (Phase 3)", s)),
+    }
+}
+
+/// "offset(arc_theta,1%)" → ("offset", ["arc_theta", "1%"])
+fn split_call(s: &str) -> (&str, Vec<&str>) {
+    match s.split_once('(') {
+        Some((name, rest)) => (
+            name.trim(),
+            rest.trim_end_matches(')').split(',').map(|a| a.trim()).filter(|a| !a.is_empty()).collect(),
+        ),
+        None => (s.trim(), Vec::new()),
+    }
+}
+
+/// Longueur écrite en texte : "1%" (du plus petit côté) ou "5px"
+fn length_str(s: &str, scene: &Scene) -> Result<f32, String> {
+    if s.ends_with('%') {
+        length(&PropValue::Percent(s.to_string()), scene, scene.min_side())
+    } else {
+        length(&PropValue::Single(s.to_string()), scene, 0.0)
     }
 }
 
@@ -416,18 +489,18 @@ fn length(v: &PropValue, scene: &Scene, base: f32) -> Result<f32, String> {
     }
 }
 
-/// Angle en degrés : 90 ou "90deg"
-fn angle(v: &PropValue) -> Result<f32, String> {
+/// Angle en degrés : 90, "90deg" ou angle(fig)
+fn angle(v: &PropValue, refs: &Refs) -> Result<f32, String> {
     match v {
         PropValue::Number(n) => Ok(*n as f32),
         PropValue::Single(s) if s.ends_with("deg") => s
             .trim_end_matches("deg")
             .parse()
             .map_err(|_| format!("angle invalide '{}'", s)),
-        PropValue::Single(s) if s.contains('(') => Err(format!(
-            "référence dynamique '{}' pas encore supportée (Phase 2)",
-            s
-        )),
+        PropValue::Single(s) if s.contains('(') => match split_call(s) {
+            ("angle", args) if args.len() == 1 => Ok(geom(args[0], refs)?.angle),
+            _ => Err(format!("angle invalide '{}' (attendu un nombre ou angle(fig))", s)),
+        },
         _ => Err(format!("angle invalide '{}'", fmt_value(v))),
     }
 }
@@ -520,13 +593,14 @@ mod tests {
         properties.insert("height".to_string(), PropValue::Percent("20%".into()));
         let f = ResolvedFigure {
             name: "r".into(),
+            index: 0,
             ftype: "rect".into(),
             layer: 0.0,
             line: 1,
             properties,
             prop_lines: HashMap::new(),
         };
-        let shapes = figure_shapes(&f, &scene()).unwrap(); // scène 1000 × 500
+        let shapes = figure_shapes(&f, &scene(), &Refs::new()).unwrap(); // scène 1000 × 500
         let xs: Vec<f32> = shapes[0].path.iter().filter_map(|c| match c { PathCmd::LineTo(x, _) | PathCmd::MoveTo(x, _) => Some(*x), _ => None }).collect();
         let ys: Vec<f32> = shapes[0].path.iter().filter_map(|c| match c { PathCmd::LineTo(_, y) | PathCmd::MoveTo(_, y) => Some(*y), _ => None }).collect();
         let w = xs.iter().cloned().fold(f32::MIN, f32::max) - xs.iter().cloned().fold(f32::MAX, f32::min);
@@ -536,7 +610,8 @@ mod tests {
 
     #[test]
     fn angles() {
-        assert_eq!(angle(&PropValue::Number(90.0)).unwrap(), 90.0);
-        assert_eq!(angle(&PropValue::Single("45deg".into())).unwrap(), 45.0);
+        let refs = Refs::new();
+        assert_eq!(angle(&PropValue::Number(90.0), &refs).unwrap(), 90.0);
+        assert_eq!(angle(&PropValue::Single("45deg".into()), &refs).unwrap(), 45.0);
     }
 }

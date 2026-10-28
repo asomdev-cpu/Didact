@@ -1,8 +1,9 @@
 //! Moteur d'exécution : calcule l'état de la scène à un instant donné.
 //!
-//! Pour l'instant (Phase 1) : uniquement la visibilité (start / end / destroy),
-//! les commentaires et l'audio. Les animations viendront dans `animation.rs`.
+//! - `timeline` : visibilité (start / end / destroy), commentaires, audio, planification des animations
+//! - `animation` : lecture des appels d'animation, easing, progression
 
+pub mod animation;
 pub mod timeline;
 
 pub use timeline::Timeline;

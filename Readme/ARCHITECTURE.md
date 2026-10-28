@@ -177,13 +177,15 @@ L'export n'est pas le mode normal d'utilisation. C'est une fonctionnalité opt-i
 - Calcule les valeurs effectives pour chaque propriété
 - Trie les figures par `layer`
 
-**Moteur d'exécution (`src/runtime/`) — ⚠️ partiel (timeline sans animations)**
+**Moteur d'exécution (`src/runtime/`) — ✅ implémenté**
+- `animation.rs` : lecture des appels (`move(to=..., 2s, ease=...)`), easing, progression 0 → 1 d'une animation
+- `timeline.rs` : planifie les animations par figure au chargement (enchaînements, sorties animées)
 - Au chargement, rejoue la timeline une fois et garde un instantané de l'état après chaque bloc
 - État à l'instant t = instantané du dernier bloc ≤ t (recherche dichotomique) : on peut avancer, reculer ou sauter librement
 - Maintient l'état courant : quelles figures sont visibles, leurs positions, leurs animations en cours
 - À chaque frame, calcule le nouvel état en fonction du timestamp
 - Exécute les commandes d'un bloc dans l'ordre fixe `destroy` → `end` → `start` → `anim` → `comment`
-- Évalue les références dynamiques (`center()`, `angle()`, etc.)
+- Évalue les références dynamiques (`center()`, `angle()`, `offset()`) — fait par le renderer : à chaque frame, toutes les figures sont calculées dans l'ordre de définition (formes → animations → géométrie publiée), ce qui suffit puisqu'il n'y a pas de référence en avant
 - Interpole les animations selon les courbes d'easing
 
 **Renderer (`src/renderer/`) — ⚠️ partiel (line, circle, rect, polygon, arc, star)**

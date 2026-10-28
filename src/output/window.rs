@@ -22,7 +22,7 @@ struct DidactApp {
     lang: String,
     backend: Option<SkiaBackend>,
     texture: Option<egui::TextureHandle>,
-    /// Figures déjà signalées comme non dessinables (pour ne pas spammer la console)
+    /// Problèmes déjà signalés (pour ne pas répéter le même message à chaque frame)
     warned: HashSet<String>,
 }
 
@@ -177,7 +177,7 @@ impl DidactApp {
         let scene = Scene::new(&self.config, pw, ph);
         let skipped = renderer::render_frame(&frame, &scene, backend);
         for (name, reason) in skipped {
-            if self.warned.insert(name.clone()) {
+            if self.warned.insert(format!("{}|{}", name, reason)) {
                 eprintln!("Attention : '{}' non dessinée : {}", name, reason);
             }
         }

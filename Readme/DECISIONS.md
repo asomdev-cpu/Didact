@@ -28,7 +28,7 @@ Ce document garde la trace des décisions importantes prises pendant le dévelop
 | Parser | ✅ Fonctionnel | `src/parser.rs` |
 | Validateur | ✅ Fonctionnel (15 tests) | `src/validator.rs` |
 | Résolveur | ✅ Fonctionnel (6 tests) | `src/resolver.rs` |
-| Runtime | ⚠️ Partiel : visibilité, commentaires, audio (pas d'animations) | `src/runtime/` |
+| Runtime | ✅ Visibilité, commentaires, audio, animations, easing | `src/runtime/` |
 | Renderer | ⚠️ Partiel : line, circle, rect, polygon, arc, star | `src/renderer/` |
 | Output natif | ✅ Fenêtre + export PNG d'une frame | `src/output/window.rs` |
 | Output WASM | 🔲 Pas commencé | - |
@@ -66,10 +66,10 @@ L'objectif est d'arriver à un `cargo run -- exemple.dct` qui ouvre une fenêtre
 
 ### Phase 2 — Animations et temps réel
 
-7. **Système d'animations** — fadein, move, color
-8. **Easing functions** — linear, ease-in-out, etc.
-9. **Références dynamiques** — center(), angle(), offset()
-10. **Contrôles utilisateur** — pause, play, scrubber temporel
+7. ~~**Système d'animations** — fadein, move, color~~ ✅ (+ fadeout, grow, shrink, scale, rotate)
+8. ~~**Easing functions** — linear, ease-in-out, etc.~~ ✅ (smooth, linear, ease_in, ease_out)
+9. ~~**Références dynamiques** — center(), angle(), offset()~~ ✅
+10. ~~**Contrôles utilisateur** — pause, play, scrubber temporel~~ ✅ (fait avec la fenêtre)
 
 ### Phase 3 — Maths et graphes
 
@@ -443,6 +443,8 @@ Idées qui ont été discutées et rejetées explicitement.
 - `width` → `stroke` pour l'épaisseur du trait (`width` réservé aux `rect`)
 - Runtime timeline : instantanés après chaque bloc, état à t par recherche dichotomique (avancer/reculer gratuit), commentaires dans la langue choisie, audio
 - CLI : `--lang XX`, `--debug` (tokens et AST seulement sur demande), `--summary`, `--png <t> <fichier>`
+- Animations : entrée (`start`), sortie (`end`, la figure reste affichée pendant le fondu), `anim`, enchaînements ; fadein, fadeout, grow, shrink, move, color, scale, rotate ; easing
+- Références dynamiques : `center()`, `angle()`, `offset()` recalculées à chaque frame, dans l'ordre de définition
 - Renderer tiny-skia + fenêtre egui (lecture/pause, barre de lecture, langue, sous-titres)
 - Lexer : couleurs hexadécimales `#FF0000` (avant : lues comme un commentaire)
 - Parser : listes de points `[(20%, 80%), ...]` (avant : les points étaient perdus)

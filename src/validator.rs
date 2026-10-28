@@ -11,6 +11,8 @@
 //! Chaque erreur commence par "ligne N : ...".
 
 use crate::ast::*;
+use crate::renderer::geometry::parse_color;
+use crate::runtime::animation::{self, AnimKind};
 use std::collections::HashMap;
 
 // ─────────────────────────────────────────────
@@ -416,33 +418,64 @@ impl Validator {
                 }
                 self.check_usable(line, t, &item.name, &destroyed);
                 if let Some(call) = &item.anim {
-                    let (fname, _) = split_call(call);
-                    self.check_anim_name(line, t, &item.name, fname);
+                    self.check_anim_call(t, &item.name, call, &destroyed);
                 }
             }
 
             // 3. start
             for (line, item) in start {
-                if let StartItem::Figure(name) = item {
+                if let StartItem::Figure { name, anim } = item {
                     self.check_usable(line, t, name, &destroyed);
+                    if let Some(call) = anim {
+                        self.check_anim_call(t, name, call, &destroyed);
+                    }
                 }
             }
 
             // 4. anim
             for (line, item) in anim {
                 self.check_usable(line, t, &item.figure, &destroyed);
-                self.check_anim_name(line, t, &item.figure, &item.call.name);
-                // Paramètres qui désignent une figure : follow(path=…), transform(to=…)
-                for p in &item.call.params {
-                    let target = match (item.call.name.as_str(), p.split_once('=')) {
-                        ("follow", Some(("path", v))) => Some(v),
-                        ("transform", Some(("to", v))) => Some(v),
-                        _ => None,
-                    };
-                    if let Some(target) = target {
-                        self.check_usable(line, t, target, &destroyed);
+                for call in &item.calls {
+                    self.check_anim_call(t, &item.figure, call, &destroyed);
+                }
+            }
+        }
+    }
+
+    /// Vérifie un appel d'animation : nom connu, paramètres valides (via le même code
+    /// que le runtime), et figures citées dans les paramètres.
+    fn check_anim_call(&mut self, t: f64, figure: &str, call: &AnimCall, destroyed: &HashMap<String, f64>) {
+        let line = call.line;
+        if !ANIMATIONS.contains(&call.name.as_str()) {
+            self.error_t(line, t, format!("'{}' : animation inconnue '{}'", figure, call.name));
+            return;
+        }
+        match animation::parse_call(call) {
+            Err(e) => self.error_t(line, t, format!("'{}' : {}", figure, e)),
+            Ok((AnimKind::Color { to }, _, _)) => {
+                if let Err(e) = parse_color(&to) {
+                    self.error_t(line, t, format!("'{}' : {}", figure, e));
+                }
+            }
+            Ok(_) => {}
+        }
+        // Figures citées dans les paramètres : follow(path=…), transform(to=…), move(to=center(…))
+        for p in &call.params {
+            let Some((key, value)) = p.split_once('=') else { continue };
+            let target = match (call.name.as_str(), key) {
+                ("follow", "path") | ("transform", "to") => Some(value.to_string()),
+                ("move", "to") if value.contains('(') && !value.starts_with('(') => {
+                    let (fname, args) = split_call(value);
+                    if REF_FUNCTIONS.contains(&fname) {
+                        args.first().map(|a| a.to_string())
+                    } else {
+                        Some(fname.to_string()) // mes_axes(3, 4)
                     }
                 }
+                _ => None,
+            };
+            if let Some(target) = target {
+                self.check_usable(line, t, &target, destroyed);
             }
         }
     }
@@ -472,11 +505,6 @@ impl Validator {
         }
     }
 
-    fn check_anim_name(&mut self, line: usize, t: f64, figure: &str, anim: &str) {
-        if !ANIMATIONS.contains(&anim) {
-            self.error_t(line, t, format!("'{}' : animation inconnue '{}'", figure, anim));
-        }
-    }
 }
 
 /// Cherche `key` dans un style et ses ancêtres (`extends`).
@@ -779,6 +807,70 @@ mod tests {
                 [timeline]"
             ),
             Ok(())
+        );
+    }
+
+    #[test]
+    fn animations_valides() {
+        assert_eq!(
+            check(
+                "[figures]
+                deffigure a =
+                    type : circle
+                deffigure b =
+                    type : line
+                [timeline]
+                0.000 => {
+                    start : [a fadein(1s), b]
+                    anim  : [b [move(to=center(a), 2s), color(to=#FF0000, 500ms, ease=linear)]]
+                }
+                3.000 => { end : [a fadeout(0.5s)] }"
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn animation_sans_duree() {
+        assert_error(
+            "[figures]
+            deffigure a =
+                type : line
+            [timeline]
+            0.000 => {
+                start : [a]
+                anim  : [a
+                    fadeout()]
+            }",
+            "ligne 8 (t=0.000) : 'a' : fadeout : durée manquante",
+        );
+    }
+
+    #[test]
+    fn animation_parametres_invalides() {
+        assert_error(
+            "[figures]
+            deffigure a =
+                type : line
+            [timeline]
+            0.000 => { start : [a fadein(1s, ease=rapide)] }",
+            "easing inconnu 'rapide'",
+        );
+        assert_error(
+            "[figures]
+            deffigure a =
+                type : line
+            [timeline]
+            0.000 => { anim : [a color(to=rouge, 1s)] }",
+            "couleur inconnue 'rouge'",
+        );
+        assert_error(
+            "[figures]
+            deffigure a =
+                type : line
+            [timeline]
+            0.000 => { anim : [a move(to=center(fantome), 1s)] }",
+            "'fantome' n'est pas défini",
         );
     }
 

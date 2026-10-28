@@ -497,14 +497,14 @@ impl Parser {
         Ok(TimelineEvent { timestamp, line, actions })
     }
 
-    /// Parse : [fig1, fig2, audio musique.mp3 volume=0.5]
+    /// Parse : [fig1, fig2 fadein(1s), audio musique.mp3 volume=0.5]
     fn parse_start_list(&mut self) -> Result<Vec<StartItem>, String> {
         self.expect(&Token::LBracket)?;
         let mut items = Vec::new();
 
         loop {
             match self.peek().clone() {
-                Token::RBracket => { self.advance(); break; }
+                Token::RBracket | Token::EOF => { self.advance(); break; }
                 Token::Comma => { self.advance(); }
                 Token::Ident(s) => {
                     self.advance();
@@ -523,7 +523,9 @@ impl Parser {
                         }
                         items.push(StartItem::Audio { file, volume });
                     } else {
-                        items.push(StartItem::Figure(s));
+                        // Optionnellement une animation d'entrée : fig fadein(1s)
+                        let anim = self.parse_optional_anim()?;
+                        items.push(StartItem::Figure { name: s, anim });
                     }
                 }
                 _ => { self.advance(); }
@@ -533,14 +535,14 @@ impl Parser {
         Ok(items)
     }
 
-    /// Parse : [fig1, fig2 fadeout(0.5s)]
+    /// Parse : [fig1, fig2 fadeout(0.5s), audio musique.mp3]
     fn parse_end_list(&mut self) -> Result<Vec<EndItem>, String> {
         self.expect(&Token::LBracket)?;
         let mut items = Vec::new();
 
         loop {
             match self.peek().clone() {
-                Token::RBracket => { self.advance(); break; }
+                Token::RBracket | Token::EOF => { self.advance(); break; }
                 Token::Comma => { self.advance(); }
                 Token::Ident(name) => {
                     self.advance();
@@ -551,11 +553,7 @@ impl Parser {
                         continue;
                     }
                     // Optionnellement une animation de sortie
-                    let anim = if let Token::Ident(_) = self.peek() {
-                        Some(self.parse_anim_call_string()?)
-                    } else {
-                        None
-                    };
+                    let anim = self.parse_optional_anim()?;
                     items.push(EndItem { name, anim, audio: false });
                 }
                 _ => { self.advance(); }
@@ -565,36 +563,42 @@ impl Parser {
         Ok(items)
     }
 
-    /// Parse : [fig1 move(down, 2s), fig2 fadein(0.5s)]
+    /// Une animation optionnelle juste après un nom de figure (`fig fadein(1s)`)
+    fn parse_optional_anim(&mut self) -> Result<Option<AnimCall>, String> {
+        if let Token::Ident(_) = self.peek() {
+            Ok(Some(self.parse_anim_call()?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Parse : [fig1 move(to=(80%, 50%), 2s), fig2 [fadein(0.5s), color(to=red, 1s)]]
+    /// Une liste entre crochets après la figure = animations enchaînées (l'une après l'autre).
     fn parse_anim_list(&mut self) -> Result<Vec<AnimItem>, String> {
         self.expect(&Token::LBracket)?;
         let mut items = Vec::new();
 
         loop {
             match self.peek().clone() {
-                Token::RBracket => { self.advance(); break; }
+                Token::RBracket | Token::EOF => { self.advance(); break; }
                 Token::Comma => { self.advance(); }
                 Token::Ident(figure) => {
                     self.advance();
-                    // Une ou plusieurs animations enchaînées
+                    let mut calls = Vec::new();
                     if *self.peek() == Token::LBracket {
-                        // animations enchaînées : [move(...), color(...)]
                         self.advance();
                         loop {
                             match self.peek().clone() {
-                                Token::RBracket => { self.advance(); break; }
+                                Token::RBracket | Token::EOF => { self.advance(); break; }
                                 Token::Comma => { self.advance(); }
-                                Token::Ident(_) => {
-                                    let call = self.parse_anim_call()?;
-                                    items.push(AnimItem { figure: figure.clone(), call });
-                                }
+                                Token::Ident(_) => calls.push(self.parse_anim_call()?),
                                 _ => { self.advance(); }
                             }
                         }
                     } else {
-                        let call = self.parse_anim_call()?;
-                        items.push(AnimItem { figure, call });
+                        calls.push(self.parse_anim_call()?);
                     }
+                    items.push(AnimItem { figure, calls });
                 }
                 _ => { self.advance(); }
             }
@@ -603,8 +607,10 @@ impl Parser {
         Ok(items)
     }
 
-    /// Parse un appel d'animation : move(down, 2s)
+    /// Parse un appel d'animation : move(to=(50%, 50%), 2s, ease=linear)
+    /// Les paramètres sont gardés sous forme de texte : "to=(50%,50%)", "2s", "ease=linear".
     fn parse_anim_call(&mut self) -> Result<AnimCall, String> {
+        let line = self.line();
         let name = self.expect_ident()?;
         let mut params = Vec::new();
 
@@ -612,68 +618,83 @@ impl Parser {
             self.advance();
             loop {
                 match self.peek().clone() {
-                    Token::RParen => { self.advance(); break; }
+                    Token::RParen | Token::EOF => { self.advance(); break; }
                     Token::Comma => { self.advance(); }
-                    Token::Ident(s) => {
-                        // Gérer les paramètres nommés : to=(50%, 50%)
-                        let key = s.clone();
+                    Token::Ident(key) => {
                         self.advance();
                         if *self.peek() == Token::Equals {
+                            // Paramètre nommé : to=..., path=..., ease=...
                             self.advance();
-                            let val = match self.peek().clone() {
-                                Token::LParen => {
-                                    self.advance();
-                                    let mut tuple = String::from("(");
-                                    loop {
-                                        match self.peek().clone() {
-                                            Token::RParen => { self.advance(); break; }
-                                            Token::Comma => { tuple.push(','); self.advance(); }
-                                            Token::Percentage(p) => { tuple.push_str(&p); self.advance(); }
-                                            Token::Number(n) => { tuple.push_str(&n.to_string()); self.advance(); }
-                                            Token::Ident(s) => { tuple.push_str(&s); self.advance(); }
-                                            _ => { self.advance(); }
-                                        }
-                                    }
-                                    tuple.push(')');
-                                    tuple
-                                }
-                                Token::Number(n) => { let v = n.to_string(); self.advance(); v }
-                                Token::Ident(s) => { let v = s.clone(); self.advance(); v }
-                                Token::Percentage(s) => { let v = s.clone(); self.advance(); v }
-                                _ => { self.advance(); String::new() }
-                            };
+                            let val = self.parse_param_value();
                             params.push(format!("{}={}", key, val));
+                        } else if *self.peek() == Token::LParen {
+                            // Valeur appel sans nom : center(b)
+                            params.push(format!("{}{}", key, self.parse_paren_group()));
                         } else {
                             params.push(key);
                         }
                     }
-                    Token::Number(n) => {
-                        let mut val = n.to_string();
-                        self.advance();
-                        // unité : s, ms, px, cm, deg
-                        if let Token::Ident(unit) = self.peek().clone() {
-                            if matches!(unit.as_str(), "s" | "ms" | "px" | "cm" | "deg" | "deg/s") {
-                                val.push_str(&unit);
-                                self.advance();
-                            }
-                        }
-                        params.push(val);
-                    }
-                    Token::Percentage(p) => { params.push(p); self.advance(); }
-                    Token::StringLit(s) => { params.push(s); self.advance(); }
-                    _ => { self.advance(); }
+                    _ => params.push(self.parse_param_value()),
                 }
             }
         }
 
-        Ok(AnimCall { name, params })
+        Ok(AnimCall { name, params, line })
     }
 
-    /// Version string de parse_anim_call (pour end avec animation)
-    fn parse_anim_call_string(&mut self) -> Result<String, String> {
-        let call = self.parse_anim_call()?;
-        let params = call.params.join(", ");
-        Ok(format!("{}({})", call.name, params))
+    /// Une valeur de paramètre : 2s, 50%, red, #FF0000, (50%, 50%), center(b), -45
+    fn parse_param_value(&mut self) -> String {
+        match self.peek().clone() {
+            Token::LParen => self.parse_paren_group(),
+            Token::Number(n) => {
+                self.advance();
+                let mut val = n.to_string();
+                // unité collée : s, ms, px, deg, ...
+                if let Token::Ident(unit) = self.peek().clone() {
+                    if matches!(unit.as_str(), "s" | "ms" | "px" | "cm" | "deg" | "deg/s" | "cm/s" | "px/s") {
+                        val.push_str(&unit);
+                        self.advance();
+                    }
+                }
+                val
+            }
+            Token::Ident(s) => {
+                self.advance();
+                if *self.peek() == Token::LParen {
+                    format!("{}{}", s, self.parse_paren_group())
+                } else {
+                    s
+                }
+            }
+            Token::Percentage(p) => { self.advance(); p }
+            Token::StringLit(s) => { self.advance(); s }
+            _ => { self.advance(); String::new() }
+        }
+    }
+
+    /// "(a, b)" → "(a,b)" ; gère les parenthèses imbriquées
+    fn parse_paren_group(&mut self) -> String {
+        let mut out = String::new();
+        let mut depth = 0;
+        loop {
+            match self.peek().clone() {
+                Token::LParen => { depth += 1; out.push('('); self.advance(); }
+                Token::RParen => {
+                    depth -= 1;
+                    out.push(')');
+                    self.advance();
+                    if depth <= 0 { break; }
+                }
+                Token::EOF => break,
+                Token::Comma => { out.push(','); self.advance(); }
+                Token::Number(n) => { out.push_str(&n.to_string()); self.advance(); }
+                Token::Percentage(p) => { out.push_str(&p); self.advance(); }
+                Token::Ident(s) => { out.push_str(&s); self.advance(); }
+                Token::StringLit(s) => { out.push_str(&s); self.advance(); }
+                _ => { self.advance(); }
+            }
+        }
+        out
     }
 
     // ─────────────────────────────────────────────

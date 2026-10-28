@@ -5,12 +5,16 @@
 //! Ensuite, connaître l'état à l'instant t revient à trouver le dernier bloc
 //! dont le timestamp est ≤ t (recherche dichotomique) et lire son instantané.
 //!
+//! Les animations sont planifiées au chargement (début, durée) et rangées par figure.
+//! Leur effet à l'instant t est calculé par le renderer (qui connaît la géométrie).
+//!
 //! Avantages :
 //! - l'état à t ne dépend que de t, pas des frames précédentes
 //!   → avancer, reculer ou sauter n'importe où (scrubber) est trivial ;
 //! - le coût par frame est O(log n), quel que soit le nombre de blocs.
 
-use crate::ast::{StartItem, TimelineAction};
+use super::animation::{self, Anim, AnimKind};
+use crate::ast::{AnimCall, StartItem, TimelineAction};
 use crate::resolver::{ResolvedDocument, ResolvedFigure};
 use std::collections::HashMap;
 
@@ -32,6 +36,11 @@ pub enum Status {
 struct Snapshot {
     /// Statut de chaque figure ; une figure absente est NotStarted
     status: HashMap<String, Status>,
+    /// Figures cachées par `end` avec une animation de sortie :
+    /// elles restent affichées jusqu'à la fin de cette animation
+    exits: HashMap<String, f64>,
+    /// Dernier `start` de chaque figure
+    last_start: HashMap<String, f64>,
     /// Dernier commentaire affiché (toutes langues), reste jusqu'au suivant
     comment: Option<Vec<String>>,
     /// Pistes audio en cours : fichier → (volume, instant de démarrage)
@@ -47,12 +56,27 @@ pub struct AudioTrack {
     pub position: f64,
 }
 
+/// Une figure à l'instant t, avec ses animations déjà commencées
+#[derive(Debug)]
+pub struct FigureState<'a> {
+    pub fig: &'a ResolvedFigure,
+    /// À dessiner (visible, ou en train de sortir avec une animation)
+    pub visible: bool,
+    /// Animations commencées à t, dans l'ordre de début
+    pub anims: Vec<&'a Anim>,
+    /// Instant du dernier `start` (les fondus d'avant ne comptent plus)
+    pub last_start: f64,
+}
+
 /// Ce qu'il faut afficher à l'instant t
 #[derive(Debug)]
 pub struct Frame<'a> {
     pub t: f64,
-    /// Figures visibles, dans l'ordre de dessin (layer croissant)
+    /// Figures à dessiner, dans l'ordre de dessin (layer croissant)
     pub visible: Vec<&'a ResolvedFigure>,
+    /// Toutes les figures non détruites, dans l'ordre de définition
+    /// (les références dynamiques ont besoin des figures cachées aussi)
+    pub states: Vec<FigureState<'a>>,
     /// Commentaire dans la langue choisie
     pub comment: Option<&'a str>,
     /// Pistes audio en cours
@@ -62,6 +86,10 @@ pub struct Frame<'a> {
 pub struct Timeline {
     /// Toutes les figures, dans l'ordre de dessin
     figures: Vec<ResolvedFigure>,
+    /// Indices dans `figures`, dans l'ordre de définition
+    definition_order: Vec<usize>,
+    /// Animations de chaque figure, triées par début
+    anims: HashMap<String, Vec<Anim>>,
     /// Timestamps des blocs, triés
     times: Vec<f64>,
     /// snapshots[i] = état juste après le bloc times[i]
@@ -71,26 +99,49 @@ pub struct Timeline {
     default_lang: String,
 }
 
+/// Planifie un appel d'animation qui commence à `start`. Renvoie sa durée.
+/// Les erreurs ont déjà été signalées par le validateur : un appel invalide est ignoré.
+fn schedule(anims: &mut HashMap<String, Vec<Anim>>, figure: &str, call: &AnimCall, start: f64) -> f64 {
+    match animation::parse_call(call) {
+        Ok((kind, duration, ease)) => {
+            anims.entry(figure.to_string()).or_default().push(Anim {
+                kind,
+                start,
+                duration,
+                ease,
+                line: call.line,
+            });
+            duration
+        }
+        Err(_) => 0.0,
+    }
+}
+
 impl Timeline {
     /// Construit la timeline en rejouant tous les blocs une fois.
     pub fn new(doc: &ResolvedDocument) -> Timeline {
         let mut times = Vec::new();
         let mut snapshots = Vec::new();
+        let mut anims: HashMap<String, Vec<Anim>> = HashMap::new();
 
         let mut current = Snapshot {
             status: HashMap::new(),
+            exits: HashMap::new(),
+            last_start: HashMap::new(),
             comment: None,
             audio: HashMap::new(),
         };
 
         // doc.timeline est déjà triée par le résolveur
         for ev in &doc.timeline {
+            let t = ev.timestamp;
             // Ordre fixe : destroy → end → start → anim → comment (SPEC §6.3)
             // On parcourt le bloc une fois par commande.
             for located in &ev.actions {
                 if let TimelineAction::Destroy(names) = &located.action {
                     for name in names {
                         current.status.insert(name.clone(), Status::Destroyed);
+                        current.exits.remove(name);
                     }
                 }
             }
@@ -99,8 +150,12 @@ impl Timeline {
                     for item in items {
                         if item.audio {
                             current.audio.remove(&item.name);
-                        } else {
-                            current.status.insert(item.name.clone(), Status::Hidden);
+                            continue;
+                        }
+                        current.status.insert(item.name.clone(), Status::Hidden);
+                        if let Some(call) = &item.anim {
+                            let d = schedule(&mut anims, &item.name, call, t);
+                            current.exits.insert(item.name.clone(), t + d);
                         }
                     }
                 }
@@ -109,29 +164,53 @@ impl Timeline {
                 if let TimelineAction::Start(items) = &located.action {
                     for item in items {
                         match item {
-                            StartItem::Figure(name) => {
+                            StartItem::Figure { name, anim } => {
                                 current.status.insert(name.clone(), Status::Visible);
+                                current.exits.remove(name);
+                                current.last_start.insert(name.clone(), t);
+                                if let Some(call) = anim {
+                                    schedule(&mut anims, name, call, t);
+                                }
                             }
                             StartItem::Audio { file, volume } => {
-                                current.audio.insert(file.clone(), (volume.unwrap_or(1.0), ev.timestamp));
+                                current.audio.insert(file.clone(), (volume.unwrap_or(1.0), t));
                             }
                         }
                     }
                 }
             }
-            // anim : rien pour l'instant (Phase 2)
+            for located in &ev.actions {
+                if let TimelineAction::Anim(items) = &located.action {
+                    for item in items {
+                        // Animations enchaînées : chacune commence à la fin de la précédente
+                        let mut start = t;
+                        for call in &item.calls {
+                            start += schedule(&mut anims, &item.figure, call, start);
+                        }
+                    }
+                }
+            }
             for located in &ev.actions {
                 if let TimelineAction::Comment(texts) = &located.action {
                     current.comment = Some(texts.clone());
                 }
             }
 
-            times.push(ev.timestamp);
+            times.push(t);
             snapshots.push(current.clone());
         }
 
+        for list in anims.values_mut() {
+            list.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
+        }
+
+        let mut definition_order: Vec<usize> = (0..doc.figures.len()).collect();
+        definition_order.sort_by_key(|&i| doc.figures[i].index);
+
         Timeline {
             figures: doc.figures.clone(),
+            definition_order,
+            anims,
             times,
             snapshots,
             languages: doc.config.languages.clone(),
@@ -139,14 +218,38 @@ impl Timeline {
         }
     }
 
-    /// Instant du dernier bloc (fin de la timeline)
+    /// Fin de la timeline : dernier bloc, ou fin de la dernière animation si elle est plus tardive
     pub fn duration(&self) -> f64 {
-        self.times.last().copied().unwrap_or(0.0)
+        let last_block = self.times.last().copied().unwrap_or(0.0);
+        let last_anim = self
+            .anims
+            .values()
+            .flatten()
+            .map(|a| a.end())
+            .fold(0.0, f64::max);
+        last_block.max(last_anim)
     }
 
     /// Timestamps de tous les blocs, triés
     pub fn times(&self) -> &[f64] {
         &self.times
+    }
+
+    /// Animations prévues mais pas encore supportées : (figure, nom), sans doublon
+    pub fn unsupported_anims(&self) -> Vec<(String, String)> {
+        let mut out: Vec<(String, String)> = self
+            .anims
+            .iter()
+            .flat_map(|(fig, list)| {
+                list.iter().filter_map(move |a| match &a.kind {
+                    AnimKind::Unsupported(n) => Some((fig.clone(), n.clone())),
+                    _ => None,
+                })
+            })
+            .collect();
+        out.sort();
+        out.dedup();
+        out
     }
 
     /// Index du dernier bloc dont le timestamp est ≤ t (None si t est avant le premier bloc)
@@ -169,15 +272,34 @@ impl Timeline {
     pub fn frame_at(&self, t: f64, lang: Option<&str>) -> Frame<'_> {
         let snap = match self.snapshot_index(t) {
             None => {
-                return Frame { t, visible: Vec::new(), comment: None, audio: Vec::new() };
+                return Frame { t, visible: Vec::new(), states: Vec::new(), comment: None, audio: Vec::new() };
             }
             Some(i) => &self.snapshots[i],
         };
 
-        let visible = self
-            .figures
+        let shown = |name: &str| match snap.status.get(name) {
+            Some(Status::Visible) => true,
+            Some(Status::Hidden) => snap.exits.get(name).is_some_and(|&until| t < until),
+            _ => false,
+        };
+
+        let visible = self.figures.iter().filter(|f| shown(&f.name)).collect();
+
+        let states = self
+            .definition_order
             .iter()
-            .filter(|f| snap.status.get(&f.name) == Some(&Status::Visible))
+            .map(|&i| &self.figures[i])
+            .filter(|f| snap.status.get(&f.name) != Some(&Status::Destroyed))
+            .map(|f| FigureState {
+                fig: f,
+                visible: shown(&f.name),
+                anims: self
+                    .anims
+                    .get(&f.name)
+                    .map(|list| list.iter().filter(|a| a.start <= t).collect())
+                    .unwrap_or_default(),
+                last_start: snap.last_start.get(&f.name).copied().unwrap_or(0.0),
+            })
             .collect();
 
         let lang = lang.unwrap_or(&self.default_lang);
@@ -200,7 +322,7 @@ impl Timeline {
             .collect();
         audio.sort_by(|a, b| a.file.cmp(&b.file));
 
-        Frame { t, visible, comment, audio }
+        Frame { t, visible, states, comment, audio }
     }
 }
 
@@ -314,6 +436,29 @@ mod tests {
     }
 
     #[test]
+    fn animations_planifiees() {
+        let tl = timeline(
+            "[figures]
+            deffigure a =
+                type : line
+            [timeline]
+            1.000 => {
+                start : [a fadein(1s)]
+                anim  : [a [move(to=(50%, 50%), 2s), color(to=red, 500ms)]]
+            }
+            5.000 => { end : [a fadeout(2s)] }",
+        );
+        let f = tl.frame_at(10.0, None);
+        let st = f.states.iter().find(|s| s.fig.name == "a").unwrap();
+        let starts: Vec<(f64, f64)> = st.anims.iter().map(|a| (a.start, a.duration)).collect();
+        // fadein à 1 s ; move à 1 s ; color enchaîné après move → 3 s ; fadeout à 5 s
+        assert_eq!(starts, [(1.0, 1.0), (1.0, 2.0), (3.0, 0.5), (5.0, 2.0)]);
+        assert_eq!(tl.duration(), 7.0); // le fadeout finit après le dernier bloc
+        assert!(tl.frame_at(6.0, None).visible.len() == 1); // sortie en cours
+        assert!(tl.frame_at(7.0, None).visible.is_empty());
+    }
+
+    #[test]
     fn exemple_officiel() {
         let tl = timeline(include_str!("../../exemple.dct"));
         assert_eq!(tl.duration(), 56.0);
@@ -322,11 +467,18 @@ mod tests {
             visibles(&tl, 10.0),
             ["axes_xy", "courbe_sin", "rect_mobile", "etoile", "ligne_direction", "arc_theta", "label_theta"]
         );
+        // À 30 s : axes et courbe en train de disparaître (fadeout 0.5 s), encore affichés
         assert_eq!(
-            visibles(&tl, 30.0),
+            visibles(&tl, 30.2),
+            ["axes_xy", "courbe_sin", "rect_mobile", "etoile", "ligne_direction", "arc_theta", "label_theta"]
+        );
+        assert_eq!(tl.status_at("axes_xy", 30.2), Status::Hidden);
+        assert_eq!(
+            visibles(&tl, 30.6),
             ["rect_mobile", "etoile", "ligne_direction", "arc_theta", "label_theta"]
         );
-        assert!(visibles(&tl, 55.0).is_empty());
+        assert_eq!(visibles(&tl, 55.1).len(), 5); // fadeout 0.3 s en cours
+        assert!(visibles(&tl, 55.4).is_empty());
         assert_eq!(tl.status_at("rect_mobile", 56.0), Status::Destroyed);
         assert_eq!(
             tl.frame_at(31.0, Some("EN")).comment,

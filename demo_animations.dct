@@ -1,0 +1,122 @@
+# ─────────────────────────────────────────────
+#  Démo Phase 2 : animations et références dynamiques
+#  Un angle θ qui suit un point en mouvement.
+#  didact demo_animations.dct
+# ─────────────────────────────────────────────
+
+[config]
+languages    : [FR, EN]
+default_lang : FR
+
+[figures]
+
+defstyle trait =
+    color  : #1E293B
+    stroke : 3px
+
+# --- L'angle ---
+
+deffigure origine =
+    type   : circle
+    center : (20%, 25%)
+    radius : 1%
+    fill   : #1E293B
+    style  : trait
+
+deffigure axe =
+    type  : line
+    from  : (20%, 25%)
+    to    : (85%, 25%)
+    arrow : end
+    style : trait
+
+deffigure point_p =
+    type   : circle
+    center : (60%, 25%)
+    radius : 1.6%
+    fill   : #2563EB
+    color  : #1E40AF
+    stroke : 2px
+    layer  : 2
+
+# Suit le point : se recalcule à chaque frame
+deffigure rayon =
+    type   : line
+    from   : center(origine)
+    to     : center(point_p)
+    color  : #2563EB
+    stroke : 3px
+
+# Va de 0 à l'angle du rayon
+deffigure arc_theta =
+    type       : arc
+    center     : center(origine)
+    radius     : 14%
+    from_angle : 0
+    to_angle   : angle(rayon)
+    arrow      : end
+    color      : purple
+    stroke     : 3px
+
+# Accroché à l'extérieur du milieu de l'arc
+deffigure marqueur =
+    type   : star
+    points : 5
+    pos    : offset(arc_theta, 4%)
+    size   : 2%
+    fill   : gold
+    color  : #A16207
+    stroke : 1px
+
+# --- Transformations ---
+
+deffigure carre =
+    type   : rect
+    pos    : (75%, 75%)
+    anchor : center
+    width  : 16%
+    height : 16%
+    fill   : #22C55E
+    style  : trait
+
+[timeline]
+
+0.000 => {
+    start   : [axe, origine fadein(0.5s)]
+    comment : ["Un axe et une origine", "An axis and an origin"]
+}
+
+1.000 => {
+    start   : [point_p grow(0.6s), rayon fadein(0.6s)]
+    comment : ["Un point P relié à l'origine", "A point P joined to the origin"]
+}
+
+2.000 => {
+    start   : [arc_theta fadein(0.5s), marqueur grow(0.5s)]
+    comment : ["L'angle θ suit le rayon", "The angle θ follows the ray"]
+}
+
+3.000 => {
+    anim    : [point_p move(to=(45%, 70%), 2s)]
+}
+
+5.500 => {
+    anim    : [point_p [move(to=(23%, 80%), 1.5s), move(to=(75%, 50%), 1.5s, ease=linear)]]
+    comment : ["Deux déplacements enchaînés", "Two chained moves"]
+}
+
+9.000 => {
+    start   : [carre fadein(0.5s)]
+    anim    : [carre [rotate(45, 1s), scale(1.4, 1s), color(to=red, 1s)]]
+    comment : ["Rotation, agrandissement, couleur", "Rotation, scaling, color"]
+}
+
+12.500 => {
+    end     : [rayon fadeout(1s), arc_theta fadeout(1s), marqueur shrink(1s)]
+    comment : ["Le rayon et l'arc disparaissent", "The ray and the arc disappear"]
+}
+
+14.000 => {
+    end     : [carre shrink(1s), point_p fadeout(1s), origine fadeout(1s), axe fadeout(1s)]
+    comment : ["Fin", "End"]
+}

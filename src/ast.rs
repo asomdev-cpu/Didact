@@ -138,7 +138,8 @@ pub enum TimelineAction {
 /// Un élément dans start (peut inclure audio)
 #[derive(Debug, Clone)]
 pub enum StartItem {
-    Figure(String),
+    /// fig, ou fig fadein(1s) (animation d'entrée)
+    Figure { name: String, anim: Option<AnimCall> },
     Audio { file: String, volume: Option<f64> },
 }
 
@@ -147,7 +148,8 @@ pub enum StartItem {
 pub struct EndItem {
     /// Nom de la figure, ou nom du fichier si `audio` est vrai
     pub name: String,
-    pub anim: Option<String>, // ex: fadeout(0.5s)
+    /// Animation de sortie, ex : fadeout(0.5s)
+    pub anim: Option<AnimCall>,
     /// `end : [audio musique.mp3]` → arrête une piste audio
     pub audio: bool,
 }
@@ -156,12 +158,17 @@ pub struct EndItem {
 #[derive(Debug, Clone)]
 pub struct AnimItem {
     pub figure: String,
-    pub call: AnimCall,
+    /// Une ou plusieurs animations, jouées l'une après l'autre
+    /// (`fig move(...)` → 1 ; `fig [move(...), color(...)]` → 2 enchaînées)
+    pub calls: Vec<AnimCall>,
 }
 
 /// Un appel d'animation : move(down, 2s)
 #[derive(Debug, Clone)]
 pub struct AnimCall {
     pub name: String,
+    /// Paramètres en texte : "to=(80%,50%)", "2s", "ease=linear"
     pub params: Vec<String>,
+    /// Ligne où l'appel est écrit
+    pub line: usize,
 }

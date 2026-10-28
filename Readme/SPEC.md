@@ -673,6 +673,36 @@ shrink(durée)
 
 Une figure apparaît et disparaît **instantanément** si aucune animation n'est précisée. Toutes les animations sont opt-in.
 
+### 11.6 Où écrire une animation
+
+```
+start : [fig fadein(1s)]                          # animation d'entrée
+end   : [fig fadeout(0.5s)]                       # animation de sortie : la figure reste
+                                                  # affichée jusqu'à la fin du fondu
+anim  : [fig move(to=(80%, 50%), 2s)]             # animation sur une figure affichée
+anim  : [fig [rotate(45, 1s), color(to=red, 1s)]] # enchaînées : l'une après l'autre
+anim  : [a fadein(1s), b move(to=center(a), 1s)]  # séparées par une virgule : en parallèle
+```
+
+### 11.7 Paramètres
+
+- **Durée** : `2s` ou `500ms` (ou `duration=2s`). Obligatoire.
+- **Easing** : `ease=smooth` (défaut : démarre et finit lentement), `ease=linear`, `ease=ease_in`, `ease=ease_out`.
+- Une animation terminée **garde son effet** : une figure déplacée reste à sa nouvelle position.
+
+| Animation | Effet |
+|---|---|
+| `fadein(d)` / `fadeout(d)` | opacité 0 → 1 / 1 → 0 |
+| `grow(d)` / `shrink(d)` | taille 0 → 1 / 1 → 0, autour du centre |
+| `move(to=pos, d)` | le **centre** de la figure va vers `pos` : `(x%, y%)` ou `center(fig)` |
+| `color(to=couleur, d)` | la couleur du **trait** (`color`) change ; `fill` ne change pas |
+| `scale(f, d)` | la taille va vers `f` × la taille d'origine (`scale(2)` deux fois = toujours 2) |
+| `rotate(angle, d)` | tourne **de** `angle` degrés autour du centre (positif = sens trigonométrique), s'additionne |
+
+Pas encore implémentées (ignorées avec un avertissement) : `slidein`, `slideout`, `write`, `draw`, `follow`, `transform`, `move(direction, vitesse)`.
+
+Après un nouveau `start`, les fondus et `grow`/`shrink` antérieurs ne comptent plus (la figure réapparaît normalement) ; les déplacements, rotations, tailles et couleurs sont conservés.
+
 ---
 
 ## 12. Références dynamiques
@@ -703,7 +733,7 @@ deffigure point =
 
 ### `offset(fig, distance)`
 
-Position décalée par rapport à une figure :
+Position décalée par rapport à une figure : pour un `arc`, à `distance` vers l'extérieur du milieu de l'arc (idéal pour une étiquette d'angle) ; pour les autres figures, en haut à droite de la figure, à `distance` du coin. `distance` en % du plus petit côté ou en px.
 
 ```
 deffigure label =
@@ -842,6 +872,20 @@ Choisies pour pouvoir dessiner ; à confirmer ou changer :
 - **Étoile** : rayon intérieur = 0,382 × rayon extérieur (étoile régulière).
 - **Couleurs** : noms (`red`, `blue`, `gold`, ...), `#RGB`, `#RRGGBB`, `#RRGGBBAA`, `none`.
 
+### Type `image` : importer un visuel externe
+
+Une figure `type : image` qui affiche un fichier PNG ou SVG :
+
+```
+deffigure schema =
+    type : image
+    file : schema.svg
+    pos  : (50%, 50%)
+    size : 40%
+```
+
+Permettrait d'utiliser des visuels produits par n'importe quel outil (Manim pour une image fixe, GeoGebra, Inkscape, ...) sans dépendance dans Didact. Le SVG serait dessiné avec `resvg` (même moteur que la scène, tiny-skia). À préciser : chemins relatifs au fichier `.dct`, `size` = largeur ou plus grand côté, embarquement web.
+
 ### Effets de bord du compilateur
 
 Quels avertissements (non bloquants) le compilateur produit-il ? Par exemple :
@@ -856,9 +900,9 @@ On a vu `%`, `px`, `s`, `ms`, `cm`, `deg`. Lesquelles sont obligatoirement suppo
 
 Peut-on aussi écrire `follow(path=..., duration=2s)` au lieu d'imposer une vitesse ?
 
-### Easing des animations
+### Easing par défaut (implémenté, à valider)
 
-Les animations sont-elles linéaires par défaut ? Peut-on choisir (`ease-in`, `ease-out`) ?
+Implémenté : `smooth` par défaut (démarre et finit lentement, comme 3Blue1Brown), au choix `linear`, `ease_in`, `ease_out` via `ease=...`. Les noms utilisent `_` car `-` n'est pas autorisé dans un identifiant.
 
 ### Coordonnées en pixels absolus
 
