@@ -27,7 +27,7 @@ Ce document garde la trace des décisions importantes prises pendant le dévelop
 | AST (structures) | ✅ Fonctionnel | `src/ast.rs` |
 | Parser | ✅ Fonctionnel | `src/parser.rs` |
 | Validateur | ✅ Fonctionnel (15 tests) | `src/validator.rs` |
-| Résolveur | 🔲 Pas commencé | - |
+| Résolveur | ✅ Fonctionnel (6 tests) | `src/resolver.rs` |
 | Runtime | 🔲 Pas commencé | - |
 | Renderer | 🔲 Pas commencé | - |
 | Output natif | 🔲 Pas commencé | - |
@@ -57,7 +57,7 @@ L'objectif est d'arriver à un `cargo run -- exemple.dct` qui ouvre une fenêtre
 
 1. ~~**Corriger le bug du parser** (defstyle/deffigure/defgroup)~~ ✅
 2. ~~**Validateur minimal** — vérifier les références de figures et de styles~~ ✅
-3. **Résolveur de styles** — aplatir l'héritage
+3. ~~**Résolveur de styles** — aplatir l'héritage~~ ✅
 4. **Runtime timeline simple** — start/end sans animations
 5. **Renderer minimal** — lignes, cercles, rectangles uniquement
 6. **Affichage fenêtre** — via `egui` ou `winit + wgpu`
@@ -400,6 +400,7 @@ Idées qui ont été discutées et rejetées explicitement.
 - Documentation restructurée en trois fichiers (SPEC, ARCHITECTURE, DECISIONS)
 - Clarification du modèle compilateur = renderer
 - Parser : correction de la reconnaissance de `defstyle`/`deffigure`/`defgroup`
+- Résolveur : styles et chaîne `extends` appliqués, surcharges, tri par `layer`, timeline triée
 - Numéros de ligne dans toutes les erreurs (lexer → AST → parser/validateur)
 - Validateur : noms uniques, pas de référence en avant, types et animations connus, timestamps uniques, nombre de traductions, `destroy` vérifié
 - Détails étendus sur tous les types de figures

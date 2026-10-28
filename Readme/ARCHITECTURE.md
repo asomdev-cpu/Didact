@@ -129,7 +129,7 @@ L'export n'est pas le mode normal d'utilisation. C'est une fonctionnalité opt-i
                      │ Document validé
                      ▼
               ┌─────────────┐
-              │  Résolveur  │  src/resolver.rs (à faire)
+              │  Résolveur  │  src/resolver.rs          
               │             │  Résout styles, refs, hérédité
               └─────────────┘
                      │ Document résolu
@@ -171,7 +171,7 @@ L'export n'est pas le mode normal d'utilisation. C'est une fonctionnalité opt-i
 - Vérifie l'ordre des sections
 - Produit des erreurs claires avec localisation
 
-**Résolveur (`src/resolver.rs`) — 🔲 à faire**
+**Résolveur (`src/resolver.rs`) — ✅ implémenté**
 - Applique les styles aux figures (par référence)
 - Résout l'héritage des styles (chaîne `extends`)
 - Calcule les valeurs effectives pour chaque propriété

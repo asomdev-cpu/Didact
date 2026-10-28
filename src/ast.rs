@@ -19,6 +19,8 @@ pub struct Config {
     pub background: String,
     pub languages: Vec<String>,
     pub default_lang: String,
+    /// Ligne de chaque propriété écrite dans [config] (ex: "default_lang" → 4)
+    pub lines: HashMap<String, usize>,
 }
 
 impl Default for Config {
@@ -28,6 +30,7 @@ impl Default for Config {
             background: "white".to_string(),
             languages: vec!["FR".to_string()],
             default_lang: "FR".to_string(),
+            lines: HashMap::new(),
         }
     }
 }
@@ -49,8 +52,12 @@ pub struct StyleDef {
     pub name: String,
     /// Position de la définition dans [figures] (compteur partagé avec les figures et groupes)
     pub index: usize,
+    /// Ligne du `defstyle`
+    pub line: usize,
     pub extends: Option<String>,
     pub properties: HashMap<String, PropValue>,
+    /// Ligne de chaque propriété (y compris "extends")
+    pub prop_lines: HashMap<String, usize>,
 }
 
 /// Une figure (objet visuel)
@@ -59,7 +66,11 @@ pub struct FigureDef {
     pub name: String,
     /// Position de la définition dans [figures] (compteur partagé avec les styles et groupes)
     pub index: usize,
+    /// Ligne du `deffigure` / `defgroup`
+    pub line: usize,
     pub properties: HashMap<String, PropValue>,
+    /// Ligne de chaque propriété
+    pub prop_lines: HashMap<String, usize>,
 }
 
 /// Une valeur de propriété
@@ -93,7 +104,16 @@ pub enum PropValue {
 #[derive(Debug, Clone)]
 pub struct TimelineEvent {
     pub timestamp: f64,   // en secondes.millisecondes
-    pub actions: Vec<TimelineAction>,
+    /// Ligne du timestamp
+    pub line: usize,
+    pub actions: Vec<LocatedAction>,
+}
+
+/// Une action timeline et la ligne où elle est écrite
+#[derive(Debug, Clone)]
+pub struct LocatedAction {
+    pub line: usize,
+    pub action: TimelineAction,
 }
 
 /// Une action dans un bloc timeline

@@ -2,6 +2,7 @@ mod lexer;
 mod ast;
 mod parser;
 mod validator;
+mod resolver;
 
 use std::env;
 use std::fs;
@@ -32,7 +33,7 @@ fn main() {
     let tokens = lexer::tokenize(&content);
     println!("--- Tokens ({} trouvés) ---", tokens.len());
     for tok in &tokens {
-        println!("  {:?}", tok);
+        println!("  ligne {:>3} : {:?}", tok.line, tok.token);
     }
 
     // Étape 2 : Parser
@@ -46,7 +47,22 @@ fn main() {
             // Étape 3 : Validateur
             println!("\n--- Validation ---");
             match validator::validate(&doc) {
-                Ok(()) => println!("✓ Validation réussie !"),
+                Ok(()) => {
+                    println!("✓ Validation réussie !");
+
+                    // Étape 4 : Résolveur
+                    println!("\n--- Résolution (figures dans l'ordre de dessin) ---");
+                    let resolved = resolver::resolve(&doc);
+                    for f in &resolved.figures {
+                        let mut keys: Vec<&String> = f.properties.keys().collect();
+                        keys.sort();
+                        let props: Vec<String> = keys
+                            .iter()
+                            .map(|k| format!("{}={}", k, resolver::fmt_value(&f.properties[*k])))
+                            .collect();
+                        println!("  {} [{}, layer {}] : {}", f.name, f.ftype, f.layer, props.join(", "));
+                    }
+                }
                 Err(errors) => {
                     eprintln!("✗ {} erreur(s) de validation :", errors.len());
                     for e in &errors {

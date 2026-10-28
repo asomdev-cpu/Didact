@@ -1,4 +1,4 @@
-use crate::lexer::Token;
+use crate::lexer::{Spanned, Token};
 use crate::ast::*;
 use std::collections::HashMap;
 
@@ -7,24 +7,31 @@ use std::collections::HashMap;
 // ─────────────────────────────────────────────
 
 pub struct Parser {
-    tokens: Vec<Token>,
+    tokens: Vec<Spanned>,
     pos: usize,
+    /// Ligne du dernier token consommé par advance()
+    last_line: usize,
 }
 
 impl Parser {
-    pub fn new(tokens: Vec<Token>) -> Self {
-        Parser { tokens, pos: 0 }
+    pub fn new(tokens: Vec<Spanned>) -> Self {
+        Parser { tokens, pos: 0, last_line: 1 }
     }
 
     /// Regarde le token courant sans avancer
     fn peek(&self) -> &Token {
-        &self.tokens[self.pos]
+        &self.tokens[self.pos].token
+    }
+
+    /// Ligne du token courant
+    fn line(&self) -> usize {
+        self.tokens[self.pos].line
     }
 
     /// Regarde le token suivant sans avancer
     fn peek_next(&self) -> &Token {
         if self.pos + 1 < self.tokens.len() {
-            &self.tokens[self.pos + 1]
+            &self.tokens[self.pos + 1].token
         } else {
             &Token::EOF
         }
@@ -32,7 +39,8 @@ impl Parser {
 
     /// Avance et retourne le token courant
     fn advance(&mut self) -> Token {
-        let tok = self.tokens[self.pos].clone();
+        let tok = self.tokens[self.pos].token.clone();
+        self.last_line = self.tokens[self.pos].line;
         if self.pos < self.tokens.len() - 1 {
             self.pos += 1;
         }
@@ -43,7 +51,7 @@ impl Parser {
     fn expect_ident(&mut self) -> Result<String, String> {
         match self.advance() {
             Token::Ident(s) => Ok(s),
-            tok => Err(format!("Attendu un identifiant, trouvé {:?} (pos {})", tok, self.pos)),
+            tok => Err(format!("ligne {} : attendu un identifiant, trouvé {:?}", self.last_line, tok)),
         }
     }
 
@@ -53,7 +61,7 @@ impl Parser {
         if std::mem::discriminant(&tok) == std::mem::discriminant(expected) {
             Ok(())
         } else {
-            Err(format!("Attendu {:?}, trouvé {:?} (pos {})", expected, tok, self.pos))
+            Err(format!("ligne {} : attendu {:?}, trouvé {:?}", self.last_line, expected, tok))
         }
     }
 
@@ -75,7 +83,7 @@ impl Parser {
 //  POINT D'ENTRÉE
 // ─────────────────────────────────────────────
 
-pub fn parse(tokens: Vec<Token>) -> Result<Document, String> {
+pub fn parse(tokens: Vec<Spanned>) -> Result<Document, String> {
     let mut p = Parser::new(tokens);
     p.parse_document()
 }
@@ -103,7 +111,7 @@ impl Parser {
                         }
                         "timeline" => timeline = self.parse_timeline_section()?,
                         unknown => {
-                            eprintln!("Attention : section inconnue '[{}]' ignorée", unknown);
+                            eprintln!("Attention (ligne {}) : section inconnue '[{}]' ignorée", self.last_line, unknown);
                         }
                     }
                 }
@@ -129,6 +137,7 @@ impl Parser {
             }
 
             if let Token::Ident(key) = self.peek().clone() {
+                config.lines.insert(key.clone(), self.line());
                 self.advance();
                 self.expect(&Token::Colon)?;
 
@@ -138,7 +147,7 @@ impl Parser {
                     "languages" => config.languages = self.parse_string_list()?,
                     "default_lang" => config.default_lang = self.expect_ident()?,
                     _ => {
-                        eprintln!("Attention : propriété config inconnue '{}' ignorée", key);
+                        eprintln!("Attention (ligne {}) : propriété config inconnue '{}' ignorée", self.last_line, key);
                         self.skip_value();
                     }
                 }
@@ -170,10 +179,10 @@ impl Parser {
                 match sep {
                     Token::Colon => Ok(WindowConfig::Ratio(a_u32, b_u32)),
                     Token::Comma => Ok(WindowConfig::Size(a_u32, b_u32)),
-                    _ => Err(format!("Séparateur inattendu dans window : {:?}", sep)),
+                    _ => Err(format!("ligne {} : séparateur inattendu dans window : {:?}", self.last_line, sep)),
                 }
             }
-            tok => Err(format!("Valeur window inattendue : {:?}", tok)),
+            tok => Err(format!("ligne {} : valeur window inattendue : {:?}", self.line(), tok)),
         }
     }
 
@@ -226,11 +235,13 @@ impl Parser {
     }
 
     fn parse_style(&mut self, index: usize) -> Result<StyleDef, String> {
+        let line = self.last_line; // ligne du mot-clé defstyle
         let name = self.expect_ident()?;
         self.expect(&Token::Equals)?;
 
         let mut extends = None;
         let mut properties = HashMap::new();
+        let mut prop_lines = HashMap::new();
 
         loop {
             if self.is_at_top_level() {
@@ -238,6 +249,7 @@ impl Parser {
             }
 
             if let Token::Ident(key) = self.peek().clone() {
+                prop_lines.insert(key.clone(), self.line());
                 self.advance();
                 self.expect(&Token::Colon)?;
 
@@ -251,14 +263,16 @@ impl Parser {
             }
         }
 
-        Ok(StyleDef { name, index, extends, properties })
+        Ok(StyleDef { name, index, line, extends, properties, prop_lines })
     }
 
     fn parse_figure(&mut self, index: usize) -> Result<FigureDef, String> {
+        let line = self.last_line; // ligne du mot-clé deffigure / defgroup
         let name = self.expect_ident()?;
         self.expect(&Token::Equals)?;
 
         let mut properties = HashMap::new();
+        let mut prop_lines = HashMap::new();
 
         loop {
             if self.is_at_top_level() {
@@ -266,6 +280,7 @@ impl Parser {
             }
 
             if let Token::Ident(key) = self.peek().clone() {
+                prop_lines.insert(key.clone(), self.line());
                 self.advance();
                 self.expect(&Token::Colon)?;
                 properties.insert(key, self.parse_prop_value()?);
@@ -274,7 +289,7 @@ impl Parser {
             }
         }
 
-        Ok(FigureDef { name, index, properties })
+        Ok(FigureDef { name, index, line, properties, prop_lines })
     }
 
     fn parse_prop_value(&mut self) -> Result<PropValue, String> {
@@ -414,9 +429,10 @@ impl Parser {
 
     fn parse_timeline_event(&mut self) -> Result<TimelineEvent, String> {
         // timestamp
+        let line = self.line();
         let timestamp = match self.advance() {
             Token::Number(n) => n,
-            tok => return Err(format!("Attendu un timestamp, trouvé {:?}", tok)),
+            tok => return Err(format!("ligne {} : attendu un timestamp, trouvé {:?}", line, tok)),
         };
 
         // =>
@@ -436,20 +452,23 @@ impl Parser {
                     break;
                 }
                 Token::Ident(key) => {
+                    let action_line = self.line();
                     self.advance();
                     self.expect(&Token::Colon)?;
 
-                    match key.as_str() {
-                        "start"   => actions.push(TimelineAction::Start(self.parse_start_list()?)),
-                        "end"     => actions.push(TimelineAction::End(self.parse_end_list()?)),
-                        "destroy" => actions.push(TimelineAction::Destroy(self.parse_ident_array()?)),
-                        "anim"    => actions.push(TimelineAction::Anim(self.parse_anim_list()?)),
-                        "comment" => actions.push(TimelineAction::Comment(self.parse_string_list()?)),
+                    let action = match key.as_str() {
+                        "start"   => TimelineAction::Start(self.parse_start_list()?),
+                        "end"     => TimelineAction::End(self.parse_end_list()?),
+                        "destroy" => TimelineAction::Destroy(self.parse_ident_array()?),
+                        "anim"    => TimelineAction::Anim(self.parse_anim_list()?),
+                        "comment" => TimelineAction::Comment(self.parse_string_list()?),
                         _ => {
-                            eprintln!("Attention : action timeline inconnue '{}' ignorée", key);
+                            eprintln!("Attention (ligne {}) : action timeline inconnue '{}' ignorée", action_line, key);
                             self.skip_bracket_content();
+                            continue;
                         }
-                    }
+                    };
+                    actions.push(LocatedAction { line: action_line, action });
                 }
                 _ => {
                     self.advance();
@@ -457,7 +476,7 @@ impl Parser {
             }
         }
 
-        Ok(TimelineEvent { timestamp, actions })
+        Ok(TimelineEvent { timestamp, line, actions })
     }
 
     /// Parse : [fig1, fig2, audio musique.mp3 volume=0.5]
@@ -641,7 +660,7 @@ impl Parser {
         match self.advance() {
             Token::Ident(s) => Ok(s),
             Token::StringLit(s) => Ok(s),
-            tok => Err(format!("Attendu ident ou string, trouvé {:?}", tok)),
+            tok => Err(format!("ligne {} : attendu ident ou string, trouvé {:?}", self.last_line, tok)),
         }
     }
 
@@ -649,7 +668,7 @@ impl Parser {
         match self.advance() {
             Token::Number(n) => Ok(n.to_string()),
             Token::Ident(s) => Ok(s),
-            tok => Err(format!("Attendu nombre ou ident, trouvé {:?}", tok)),
+            tok => Err(format!("ligne {} : attendu nombre ou ident, trouvé {:?}", self.last_line, tok)),
         }
     }
 

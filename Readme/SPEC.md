@@ -368,6 +368,8 @@ layer    : ordre d'affichage
 anchor   : point d'ancrage (ex: center)
 ```
 
+**`layer` :** un nombre. Les petites valeurs sont dessinées en premier (donc en dessous). Sans `layer`, la valeur est 0. À `layer` égal, l'ordre de définition dans le fichier est conservé.
+
 ### 8.2 Géométrie
 
 #### `line`
@@ -814,6 +816,10 @@ Une même figure peut-elle appartenir à plusieurs groupes simultanément ?
 ### Effacer un commentaire sans le remplacer
 
 Comment terminer un sous-titre sans en afficher un nouveau ? `comment : []` ? Une commande explicite ?
+
+### `width` : épaisseur du trait ou largeur ?
+
+`width` désigne l'épaisseur du trait (§8.1) mais aussi la largeur d'un `rect` (§8.2). Un style `width : 2px` appliqué à un `rect` change donc sa largeur, pas son trait. Renommer l'un des deux (ex : `stroke` pour le trait) ?
 
 ### Effets de bord du compilateur
 
