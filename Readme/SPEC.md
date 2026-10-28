@@ -118,6 +118,27 @@ Un fichier `.dct` (mode unique) contient trois sections marquées par des header
 [timeline]
 ```
 
+### 3.4 Sensibilité à la casse
+
+Les noms sont sensibles à la casse : `Ma_Ligne` et `ma_ligne` sont deux éléments distincts.
+
+### 3.5 Ordre de définition
+
+Un style, une figure ou un groupe ne peut référencer qu'un élément défini **plus haut** dans le fichier. Une référence vers un élément défini plus bas produit une erreur de compilation.
+
+```
+deffigure a =
+    type : line
+    from : center(b)     # ✗ erreur : b est défini plus bas
+
+deffigure b =
+    type   : circle
+    center : (50%, 50%)
+    radius : 10%
+```
+
+Conséquence : les références circulaires (A dépend de B qui dépend de A) sont impossibles par construction.
+
 ---
 
 ## 4. Section `[config]`
@@ -198,6 +219,8 @@ Format : `secondes.millisecondes`.
 | `1.500` | 1 seconde, 500 ms |
 | `61.500` | 61 secondes, 500 ms |
 
+**Unicité :** chaque timestamp n'apparaît qu'une fois. Deux blocs avec le même instant produisent une erreur de compilation : tout ce qui se passe à un instant donné est regroupé dans un seul bloc.
+
 ### 6.2 Structure d'un événement
 
 Un événement timeline regroupe **tout ce qui se passe au même instant** :
@@ -221,6 +244,28 @@ Un événement timeline regroupe **tout ce qui se passe au même instant** :
 | `destroy` | Supprime complètement, libère la mémoire |
 | `anim` | Déclenche une animation |
 | `comment` | Affiche un sous-titre multilingue |
+
+**Ordre d'exécution :** dans un bloc, les commandes s'exécutent toujours dans cet ordre, **quel que soit l'ordre d'écriture** :
+
+```
+destroy  →  end  →  start  →  anim  →  comment
+```
+
+Les deux blocs suivants sont donc équivalents :
+
+```
+1.000 => {
+    start : [rect_mobile]
+    anim  : [rect_mobile move(to=(80%, 50%), 2s)]
+}
+
+1.000 => {
+    anim  : [rect_mobile move(to=(80%, 50%), 2s)]
+    start : [rect_mobile]
+}
+```
+
+Conséquence : animer une figure détruite dans le même bloc produit une erreur de compilation (`destroy` passe avant `anim`).
 
 ### 6.4 `end` vs `destroy`
 
@@ -761,22 +806,6 @@ On utilise des noms (`red`, `blue`) et le hexadécimal (`#FF0000`) dans les exem
 ### Précision des timestamps
 
 On a décidé du format `XX.XXX` (secondes.millisecondes) mais la précision exacte au-delà du millième n'est pas définie. Arrondir ? Tolérer plus ?
-
-### Doublons de timestamps
-
-Peut-on avoir deux fois le même timestamp dans la timeline ? Probablement non, mais à acter formellement.
-
-### Ordre d'exécution dans un bloc timeline
-
-Quand plusieurs actions sont au même instant (`destroy`, `end`, `start`, `anim` ensemble dans le même bloc), dans quel ordre s'exécutent-elles ? Important pour éviter des bugs (ex: animer une figure qu'on vient de détruire).
-
-### Forward references
-
-Une figure peut-elle référencer une autre figure définie **après** elle dans le fichier ? Cas pratique : `deffigure A` qui référence `B`, et `B` défini plus bas.
-
-### Sensibilité à la casse
-
-`Ma_Ligne` et `ma_ligne` sont-ils différents ? Probablement oui, mais à acter.
 
 ### Une figure dans plusieurs groupes
 

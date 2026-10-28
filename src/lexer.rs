@@ -24,15 +24,33 @@ pub enum Token {
     EOF,
 }
 
-/// Transforme le texte brut en liste de tokens
-pub fn tokenize(input: &str) -> Vec<Token> {
+/// Un token accompagné du numéro de ligne (à partir de 1) où il commence.
+/// Permet d'afficher "ligne 12 : ..." dans les messages d'erreur.
+#[derive(Debug, Clone)]
+pub struct Spanned {
+    pub token: Token,
+    pub line: usize,
+}
+
+fn push(tokens: &mut Vec<Spanned>, line: usize, token: Token) {
+    tokens.push(Spanned { token, line });
+}
+
+/// Transforme le texte brut en liste de tokens (avec leur ligne)
+pub fn tokenize(input: &str) -> Vec<Spanned> {
     let mut tokens = Vec::new();
     let mut chars = input.chars().peekable();
+    let mut line = 1;
 
     while let Some(&c) = chars.peek() {
+        // Ligne où commence le token courant
+        let start = line;
         match c {
             // --- Espaces et sauts de ligne ignorés ---
             ' ' | '\t' | '\r' | '\n' => {
+                if c == '\n' {
+                    line += 1;
+                }
                 chars.next();
             }
 
@@ -41,6 +59,7 @@ pub fn tokenize(input: &str) -> Vec<Token> {
                 while let Some(&c) = chars.peek() {
                     chars.next();
                     if c == '\n' {
+                        line += 1;
                         break;
                     }
                 }
@@ -55,9 +74,12 @@ pub fn tokenize(input: &str) -> Vec<Token> {
                     if c == '"' {
                         break;
                     }
+                    if c == '\n' {
+                        line += 1;
+                    }
                     s.push(c);
                 }
-                tokens.push(Token::StringLit(s));
+                push(&mut tokens, start, Token::StringLit(s));
             }
 
             // --- Nombres (et pourcentages) ---
@@ -74,9 +96,9 @@ pub fn tokenize(input: &str) -> Vec<Token> {
                 // Si suivi de %, c'est un pourcentage
                 if chars.peek() == Some(&'%') {
                     chars.next();
-                    tokens.push(Token::Percentage(format!("{}%", num)));
+                    push(&mut tokens, start, Token::Percentage(format!("{}%", num)));
                 } else {
-                    tokens.push(Token::Number(num.parse().unwrap_or(0.0)));
+                    push(&mut tokens, start, Token::Number(num.parse().unwrap_or(0.0)));
                 }
             }
 
@@ -93,7 +115,7 @@ pub fn tokenize(input: &str) -> Vec<Token> {
                             break;
                         }
                     }
-                    tokens.push(Token::Number(num.parse().unwrap_or(0.0)));
+                    push(&mut tokens, start, Token::Number(num.parse().unwrap_or(0.0)));
                 } else {
                     // Juste un tiret seul, on l'ignore
                 }
@@ -104,22 +126,22 @@ pub fn tokenize(input: &str) -> Vec<Token> {
                 chars.next();
                 if chars.peek() == Some(&'>') {
                     chars.next();
-                    tokens.push(Token::Arrow);
+                    push(&mut tokens, start, Token::Arrow);
                 } else {
-                    tokens.push(Token::Equals);
+                    push(&mut tokens, start, Token::Equals);
                 }
             }
 
             // --- Symboles simples ---
-            ':' => { chars.next(); tokens.push(Token::Colon); }
-            '{' => { chars.next(); tokens.push(Token::LBrace); }
-            '}' => { chars.next(); tokens.push(Token::RBrace); }
-            '[' => { chars.next(); tokens.push(Token::LBracket); }
-            ']' => { chars.next(); tokens.push(Token::RBracket); }
-            '(' => { chars.next(); tokens.push(Token::LParen); }
-            ')' => { chars.next(); tokens.push(Token::RParen); }
-            ',' => { chars.next(); tokens.push(Token::Comma); }
-            '|' => { chars.next(); tokens.push(Token::Pipe); }
+            ':' => { chars.next(); push(&mut tokens, start, Token::Colon); }
+            '{' => { chars.next(); push(&mut tokens, start, Token::LBrace); }
+            '}' => { chars.next(); push(&mut tokens, start, Token::RBrace); }
+            '[' => { chars.next(); push(&mut tokens, start, Token::LBracket); }
+            ']' => { chars.next(); push(&mut tokens, start, Token::RBracket); }
+            '(' => { chars.next(); push(&mut tokens, start, Token::LParen); }
+            ')' => { chars.next(); push(&mut tokens, start, Token::RParen); }
+            ',' => { chars.next(); push(&mut tokens, start, Token::Comma); }
+            '|' => { chars.next(); push(&mut tokens, start, Token::Pipe); }
 
             // --- Identifiants ---
             // Peuvent contenir : lettres, chiffres, _, ., /, \, ^ (pour LaTeX)
@@ -144,7 +166,7 @@ pub fn tokenize(input: &str) -> Vec<Token> {
                         break;
                     }
                 }
-                tokens.push(Token::Ident(ident));
+                push(&mut tokens, start, Token::Ident(ident));
             }
 
             // --- Caractères inconnus ignorés ---
@@ -154,6 +176,6 @@ pub fn tokenize(input: &str) -> Vec<Token> {
         }
     }
 
-    tokens.push(Token::EOF);
+    tokens.push(Spanned { token: Token::EOF, line });
     tokens
-}
+}

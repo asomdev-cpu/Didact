@@ -25,8 +25,8 @@ Ce document garde la trace des décisions importantes prises pendant le dévelop
 |---|---|---|
 | Lexer | ✅ Fonctionnel | `src/lexer.rs` |
 | AST (structures) | ✅ Fonctionnel | `src/ast.rs` |
-| Parser | ⚠️ Fonctionnel avec bug | `src/parser.rs` |
-| Validateur | 🔲 Pas commencé | - |
+| Parser | ✅ Fonctionnel | `src/parser.rs` |
+| Validateur | ✅ Fonctionnel (15 tests) | `src/validator.rs` |
 | Résolveur | 🔲 Pas commencé | - |
 | Runtime | 🔲 Pas commencé | - |
 | Renderer | 🔲 Pas commencé | - |
@@ -44,6 +44,10 @@ Ce document garde la trace des décisions importantes prises pendant le dévelop
 
 ## 2. Bugs connus
 
+Aucun bug connu.
+
+- ~~Parser : `defstyle`/`deffigure`/`defgroup` non reconnus~~ — corrigé, `exemple.dct` se parse entièrement.
+
 
 ## 3. Roadmap par ordre de priorité
 
@@ -51,8 +55,8 @@ Ce document garde la trace des décisions importantes prises pendant le dévelop
 
 L'objectif est d'arriver à un `cargo run -- exemple.dct` qui ouvre une fenêtre et affiche **quelque chose** (même si imparfait).
 
-1. **Corriger le bug du parser** (defstyle/deffigure/defgroup)
-2. **Validateur minimal** — vérifier les références de figures et de styles
+1. ~~**Corriger le bug du parser** (defstyle/deffigure/defgroup)~~ ✅
+2. ~~**Validateur minimal** — vérifier les références de figures et de styles~~ ✅
 3. **Résolveur de styles** — aplatir l'héritage
 4. **Runtime timeline simple** — start/end sans animations
 5. **Renderer minimal** — lignes, cercles, rectangles uniquement
@@ -236,6 +240,45 @@ Cette section liste les choix importants qui ont été tranchés. Chaque décisi
 - Profiter des décennies de R&D sur LaTeX
 - Garder la syntaxe Didact propre pour 95% des cas, escape hatches pour le reste
 
+### Pas de références en avant
+
+**Décision :** Un élément ne peut référencer qu'un élément défini plus haut dans le fichier.
+
+**Raisonnement :**
+- Les références circulaires deviennent impossibles par construction : pas de détection de cycles à écrire
+- Le validateur peut tout vérifier en une seule passe, de haut en bas
+- Lecture naturelle : on comprend chaque définition avec ce qui précède
+
+### Timestamps uniques
+
+**Décision :** Deux blocs timeline ne peuvent pas avoir le même timestamp (erreur de compilation).
+
+**Raisonnement :**
+- Un instant = un bloc : tout ce qui se passe à ce moment est visible au même endroit
+- Pas de question d'ordre entre deux blocs simultanés
+- Un doublon écrit par erreur est détecté au lieu de passer inaperçu
+- Plusieurs figures démarrant ensemble se mettent simplement dans la même liste
+
+### Ordre fixe des commandes dans un bloc
+
+**Décision :** Dans un bloc timeline, les commandes s'exécutent toujours dans l'ordre `destroy` → `end` → `start` → `anim` → `comment`, indépendamment de l'ordre d'écriture.
+
+**Raisonnement :**
+- Un bloc décrit un instant, pas une suite d'étapes : l'ordre des lignes ne doit pas changer le résultat
+- Cohérent avec les propriétés d'une figure, dont l'ordre n'a pas d'importance non plus
+- Supprime une source d'erreurs (écrire `anim` avant `start` sur la même figure)
+- `start` avant `anim` : on peut faire apparaître et animer une figure dans le même bloc
+
+**Alternative rejetée :** exécution dans l'ordre d'écriture — oblige à faire attention à l'ordre des lignes dans chaque bloc.
+
+### Noms sensibles à la casse
+
+**Décision :** `Ma_Ligne` et `ma_ligne` sont deux noms distincts. Pas d'avertissement si deux noms ne diffèrent que par la casse.
+
+**Raisonnement :**
+- Convention de la plupart des langages (Rust, Python, C)
+- Comparaison de noms triviale à implémenter
+
 ### Licence MIT
 
 **Décision :** Le projet est sous licence MIT.
@@ -356,6 +399,9 @@ Idées qui ont été discutées et rejetées explicitement.
 - Mots-clés `defstyle`, `deffigure`, `defgroup` (renommage)
 - Documentation restructurée en trois fichiers (SPEC, ARCHITECTURE, DECISIONS)
 - Clarification du modèle compilateur = renderer
+- Parser : correction de la reconnaissance de `defstyle`/`deffigure`/`defgroup`
+- Numéros de ligne dans toutes les erreurs (lexer → AST → parser/validateur)
+- Validateur : noms uniques, pas de référence en avant, types et animations connus, timestamps uniques, nombre de traductions, `destroy` vérifié
 - Détails étendus sur tous les types de figures
 
 ### v0.1 (initiale)

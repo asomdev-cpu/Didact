@@ -123,7 +123,7 @@ L'export n'est pas le mode normal d'utilisation. C'est une fonctionnalité opt-i
                      │ Document (AST)
                      ▼
               ┌─────────────┐
-              │  Validateur │  src/validator.rs (à faire)
+              │  Validateur │  src/validator.rs
               │             │  Vérifie cohérence sémantique
               └─────────────┘
                      │ Document validé
@@ -155,15 +155,16 @@ L'export n'est pas le mode normal d'utilisation. C'est une fonctionnalité opt-i
 - Lit le texte caractère par caractère
 - Produit un `Vec<Token>`
 - Gère les identifiants, nombres, strings, symboles, pourcentages, commentaires
+- Garde le numéro de ligne de chaque token, propagé dans l'AST pour des messages d'erreur `ligne N : ...`
 
-**Parser (`src/parser.rs` + `src/ast.rs`) — ✅ implémenté (avec bug connu)**
+**Parser (`src/parser.rs` + `src/ast.rs`) — ✅ implémenté**
 - Recursive descent parser
 - Produit une struct `Document` contenant Config, Styles, Figures, Timeline
-- Bug à corriger : reconnaissance de `defstyle`/`deffigure`/`defgroup`
 
-**Validateur (`src/validator.rs`) — 🔲 à faire**
+**Validateur (`src/validator.rs`) — ✅ implémenté**
 - Vérifie l'unicité des noms
-- Détecte les cycles de références
+- Vérifie que chaque référence pointe vers un élément défini plus haut (pas de référence en avant, donc pas de cycle possible)
+- Vérifie l'unicité des timestamps
 - Vérifie que les types de figures sont valides
 - Vérifie la cohérence des langues (nombre de traductions)
 - Vérifie que `destroy` n'est pas appelé sur une figure encore référencée
@@ -179,6 +180,7 @@ L'export n'est pas le mode normal d'utilisation. C'est une fonctionnalité opt-i
 **Moteur d'exécution (`src/runtime.rs`) — 🔲 à faire**
 - Maintient l'état courant : quelles figures sont visibles, leurs positions, leurs animations en cours
 - À chaque frame, calcule le nouvel état en fonction du timestamp
+- Exécute les commandes d'un bloc dans l'ordre fixe `destroy` → `end` → `start` → `anim` → `comment`
 - Évalue les références dynamiques (`center()`, `angle()`, etc.)
 - Interpole les animations selon les courbes d'easing
 

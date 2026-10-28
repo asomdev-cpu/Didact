@@ -47,6 +47,8 @@ pub enum WindowConfig {
 #[derive(Debug, Clone)]
 pub struct StyleDef {
     pub name: String,
+    /// Position de la définition dans [figures] (compteur partagé avec les figures et groupes)
+    pub index: usize,
     pub extends: Option<String>,
     pub properties: HashMap<String, PropValue>,
 }
@@ -55,6 +57,8 @@ pub struct StyleDef {
 #[derive(Debug, Clone)]
 pub struct FigureDef {
     pub name: String,
+    /// Position de la définition dans [figures] (compteur partagé avec les styles et groupes)
+    pub index: usize,
     pub properties: HashMap<String, PropValue>,
 }
 
@@ -137,4 +141,4 @@ pub struct AnimItem {
 pub struct AnimCall {
     pub name: String,
     pub params: Vec<String>,
-}
+}

@@ -184,6 +184,9 @@ impl Parser {
     fn parse_figures_section(&mut self) -> Result<(Vec<StyleDef>, Vec<FigureDef>), String> {
         let mut styles = Vec::new();
         let mut figures = Vec::new();
+        // Ordre de définition, partagé entre styles, figures et groupes
+        // (sert au validateur pour interdire les références en avant)
+        let mut index = 0;
 
         loop {
             match self.peek().clone() {
@@ -191,15 +194,18 @@ impl Parser {
                 Token::Ident(kw) => match kw.as_str() {
                     "defstyle" => {
                         self.advance();
-                        styles.push(self.parse_style()?);
+                        styles.push(self.parse_style(index)?);
+                        index += 1;
                     }
                     "deffigure" => {
                         self.advance();
-                        figures.push(self.parse_figure()?);
+                        figures.push(self.parse_figure(index)?);
+                        index += 1;
                     }
                     "defgroup" => {
                         self.advance();
-                        let mut fig = self.parse_figure()?;
+                        let mut fig = self.parse_figure(index)?;
+                        index += 1;
                         fig.properties.insert(
                             "type".to_string(),
                             PropValue::Single("group".to_string()),
@@ -219,7 +225,7 @@ impl Parser {
         Ok((styles, figures))
     }
 
-    fn parse_style(&mut self) -> Result<StyleDef, String> {
+    fn parse_style(&mut self, index: usize) -> Result<StyleDef, String> {
         let name = self.expect_ident()?;
         self.expect(&Token::Equals)?;
 
@@ -245,10 +251,10 @@ impl Parser {
             }
         }
 
-        Ok(StyleDef { name, extends, properties })
+        Ok(StyleDef { name, index, extends, properties })
     }
 
-    fn parse_figure(&mut self) -> Result<FigureDef, String> {
+    fn parse_figure(&mut self, index: usize) -> Result<FigureDef, String> {
         let name = self.expect_ident()?;
         self.expect(&Token::Equals)?;
 
@@ -268,7 +274,7 @@ impl Parser {
             }
         }
 
-        Ok(FigureDef { name, properties })
+        Ok(FigureDef { name, index, properties })
     }
 
     fn parse_prop_value(&mut self) -> Result<PropValue, String> {
@@ -705,4 +711,4 @@ impl Parser {
             }
         }
     }
-}
+}

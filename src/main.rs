@@ -1,6 +1,7 @@
 mod lexer;
 mod ast;
 mod parser;
+mod validator;
 
 use std::env;
 use std::fs;
@@ -24,7 +25,7 @@ fn main() {
         }
     };
 
-    println!("=== Didact Parser v0.1 ===");
+    println!("=== Didact Parser v0.2 ===");
     println!("Fichier : {}\n", filename);
 
     // Étape 1 : Lexer
@@ -41,10 +42,23 @@ fn main() {
             println!("✓ Parsing réussi !\n");
             println!("--- Document parsé ---");
             println!("{:#?}", doc);
+
+            // Étape 3 : Validateur
+            println!("\n--- Validation ---");
+            match validator::validate(&doc) {
+                Ok(()) => println!("✓ Validation réussie !"),
+                Err(errors) => {
+                    eprintln!("✗ {} erreur(s) de validation :", errors.len());
+                    for e in &errors {
+                        eprintln!("  - {}", e);
+                    }
+                    std::process::exit(1);
+                }
+            }
         }
         Err(e) => {
             eprintln!("✗ Erreur de parsing : {}", e);
             std::process::exit(1);
         }
     }
-}
+}
