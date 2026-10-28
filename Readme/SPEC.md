@@ -36,7 +36,7 @@ Didact est un langage déclaratif pour décrire des animations éducatives. Un f
 
 ```
 [config]
-window : auto
+window : [16:9]
 
 [figures]
 
@@ -147,7 +147,7 @@ Conséquence : les références circulaires (A dépend de B qui dépend de A) so
 
 ```
 [config]
-window       : auto / [1920, 1080] / [16:9]
+window       : [16:9] / [1920, 1080] / auto
 background   : white
 languages    : [FR, NL, EN]
 default_lang : FR
@@ -156,10 +156,12 @@ default_lang : FR
 ### 4.2 La propriété `window`
 
 ```
-window : auto              # s'adapte au conteneur (par défaut)
+window : [16:9]            # ratio fixe, taille adaptative (par défaut)
 window : [1920, 1080]      # taille fixe en pixels
-window : [16:9]            # ratio fixe, taille adaptative
+window : auto              # s'adapte au conteneur, sans ratio fixe
 ```
+
+Avec un ratio fixe, la scène garde ses proportions et s'adapte en taille, avec des bandes si besoin (comme une vidéo). Tout le monde voit la même composition. Avec `auto`, la composition change selon l'écran du spectateur : à réserver aux cas où c'est voulu.
 
 ### 4.3 Langues
 
@@ -349,6 +351,17 @@ angle négatif  →  sens horaire
 ```
 
 Le sens est implicite dans le signe, pas besoin de paramètre `direction`.
+
+### 7.5 Positions vs tailles
+
+Deux règles différentes, pour que les formes ne se déforment jamais :
+
+| | Unité `%` | Exemple |
+|---|---|---|
+| **Positions** (placer un objet) | x en % de la largeur, y en % de la hauteur | `pos : (50%, 50%)` = centre |
+| **Tailles** (`radius`, `size`, `width`/`height` d'un rect) | % du **plus petit côté** de la scène | `width : 20%, height : 20%` = un vrai carré, sur tout écran |
+
+Conséquence : sur un écran 16:9, une même valeur en % de position ne fait pas la même longueur en x et en y. Une ligne de `(0%, 0%)` à `(10%, 10%)` ne fait donc **pas** 45°. Les positions en % servent à placer ; la **géométrie exacte** (angles, droites qui doivent se rejoindre) se fait dans un repère `axes`, dont l'échelle est **la même en x et en y par défaut**, ou avec les références dynamiques (`center()`, `angle()`, ...).
 
 ---
 
@@ -818,6 +831,16 @@ Une même figure peut-elle appartenir à plusieurs groupes simultanément ?
 ### Effacer un commentaire sans le remplacer
 
 Comment terminer un sous-titre sans en afficher un nouveau ? `comment : []` ? Une commande explicite ?
+
+### Règles de rendu provisoires (implémentées, à valider)
+
+Choisies pour pouvoir dessiner ; à confirmer ou changer :
+
+- **`pos` d'un rect** : coin bas-gauche par défaut ; `anchor : center` → centre.
+- **`px`** : pixels d'une scène de référence (taille de `window`, sinon 1080 px de haut), mis à l'échelle avec la fenêtre.
+- **Valeurs par défaut** : `color : black`, `stroke : 2px`, `fill : none`, `opacity : 1`, `layer : 0`.
+- **Étoile** : rayon intérieur = 0,382 × rayon extérieur (étoile régulière).
+- **Couleurs** : noms (`red`, `blue`, `gold`, ...), `#RGB`, `#RRGGBB`, `#RRGGBBAA`, `none`.
 
 ### Effets de bord du compilateur
 

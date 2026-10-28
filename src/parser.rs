@@ -327,17 +327,35 @@ impl Parser {
                 Ok(PropValue::Tuple(items))
             }
 
-            // Liste [a, b, c]
+            // Liste [a, b, c] ou liste de points [(20%, 80%), (50%, 20%)]
             Token::LBracket => {
                 self.advance();
                 let mut items = Vec::new();
                 loop {
                     match self.peek().clone() {
-                        Token::RBracket => { self.advance(); break; }
+                        Token::RBracket | Token::EOF => { self.advance(); break; }
                         Token::Comma => { self.advance(); }
                         Token::Ident(s) => { items.push(s); self.advance(); }
                         Token::StringLit(s) => { items.push(s); self.advance(); }
                         Token::Number(n) => { items.push(n.to_string()); self.advance(); }
+                        Token::Percentage(p) => { items.push(p); self.advance(); }
+                        // Un point (x, y) est gardé en un seul élément "(x,y)"
+                        Token::LParen => {
+                            self.advance();
+                            let mut point = String::from("(");
+                            loop {
+                                match self.peek().clone() {
+                                    Token::RParen | Token::EOF => { self.advance(); break; }
+                                    Token::Comma => { point.push(','); self.advance(); }
+                                    Token::Number(n) => { point.push_str(&n.to_string()); self.advance(); }
+                                    Token::Percentage(p) => { point.push_str(&p); self.advance(); }
+                                    Token::Ident(s) => { point.push_str(&s); self.advance(); }
+                                    _ => { self.advance(); }
+                                }
+                            }
+                            point.push(')');
+                            items.push(point);
+                        }
                         _ => { self.advance(); }
                     }
                 }
@@ -736,4 +754,24 @@ impl Parser {
             }
         }
     }
-}
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lexer::tokenize;
+
+    #[test]
+    fn liste_de_points() {
+        let doc = parse(tokenize(
+            "[figures]
+            deffigure t =
+                type   : polygon
+                points : [(20%, 80%), (50%, 20%), (80%, 80%)]",
+        ))
+        .unwrap();
+        match &doc.figures[0].properties["points"] {
+            PropValue::List(items) => assert_eq!(items, &["(20%,80%)", "(50%,20%)", "(80%,80%)"]),
+            other => panic!("attendu une liste, trouvé {:?}", other),
+        }
+    }
+}

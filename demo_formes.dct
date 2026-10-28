@@ -1,0 +1,138 @@
+# ─────────────────────────────────────────────
+#  Démo Phase 1 : toutes les formes dessinables
+#  didact demo_formes.dct              → fenêtre
+#  didact demo_formes.dct --png 5 a.png → image à t=5s
+# ─────────────────────────────────────────────
+
+[config]
+window       : [16:9]
+background   : white
+languages    : [FR, EN]
+default_lang : FR
+
+[figures]
+
+defstyle contour =
+    color  : #1E293B
+    stroke : 3px
+
+defstyle contour_epais =
+    extends : contour
+    stroke  : 6px
+
+# --- Formes de base ---
+
+deffigure carre =
+    type   : rect
+    pos    : (8%, 55%)
+    width  : 30%
+    height : 30%
+    fill   : #3B82F6
+    style  : contour
+
+deffigure disque =
+    type    : circle
+    center  : (45%, 70%)
+    radius  : 14%
+    fill    : orange
+    opacity : 0.85
+    style   : contour
+
+deffigure triangle =
+    type   : polygon
+    points : [(65%, 55%), (92%, 55%), (78.5%, 88%)]
+    fill   : #22C55E
+    style  : contour_epais
+
+# --- Traits et flèches ---
+
+deffigure axe_x =
+    type   : line
+    from   : (8%, 20%)
+    to     : (55%, 20%)
+    arrow  : end
+    style  : contour
+
+deffigure double =
+    type   : line
+    from   : (8%, 10%)
+    to     : (55%, 10%)
+    arrow  : both
+    color  : red
+    stroke : 2px
+
+deffigure angle_theta =
+    type       : arc
+    center     : (8%, 20%)
+    radius     : 20%
+    from_angle : 0
+    to_angle   : 50
+    arrow      : end
+    color      : purple
+    stroke     : 3px
+
+deffigure rayon =
+    type   : line
+    from   : (8%, 20%)
+    to     : (20.3%, 46%)
+    color  : purple
+    stroke : 2px
+
+# --- Étoile au premier plan (layer) ---
+
+deffigure etoile =
+    type   : star
+    points : 5
+    pos    : (78%, 25%)
+    size   : 12%
+    fill   : gold
+    color  : #A16207
+    stroke : 2px
+    layer  : 1
+
+# --- Fond coloré derrière l'étoile ---
+
+deffigure fond_etoile =
+    type    : circle
+    center  : (78%, 25%)
+    radius  : 16%
+    fill    : #FEF3C7
+    color   : none
+    layer   : -1
+
+[timeline]
+
+0.000 => {
+    start   : [carre, axe_x]
+    comment : ["Un rectangle et un axe", "A rectangle and an axis"]
+}
+
+1.500 => {
+    start   : [disque, triangle]
+    comment : ["Puis un disque et un triangle", "Then a disc and a triangle"]
+}
+
+3.000 => {
+    start   : [angle_theta, rayon, double]
+    comment : ["Un angle avec un arc fléché", "An angle with an arrowed arc"]
+}
+
+4.500 => {
+    start   : [etoile, fond_etoile]
+    comment : ["L'étoile est au premier plan (layer 1)", "The star is in front (layer 1)"]
+}
+
+7.000 => {
+    end     : [carre, double]
+    comment : ["Le rectangle et la double flèche disparaissent", "The rectangle and the double arrow disappear"]
+}
+
+9.000 => {
+    start   : [carre]
+    comment : ["Le rectangle revient", "The rectangle comes back"]
+}
+
+11.000 => {
+    destroy : [disque, triangle]
+    comment : ["Fin", "End"]
+}

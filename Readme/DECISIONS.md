@@ -29,8 +29,8 @@ Ce document garde la trace des décisions importantes prises pendant le dévelop
 | Validateur | ✅ Fonctionnel (15 tests) | `src/validator.rs` |
 | Résolveur | ✅ Fonctionnel (6 tests) | `src/resolver.rs` |
 | Runtime | ⚠️ Partiel : visibilité, commentaires, audio (pas d'animations) | `src/runtime/` |
-| Renderer | 🔲 Pas commencé | - |
-| Output natif | 🔲 Pas commencé | - |
+| Renderer | ⚠️ Partiel : line, circle, rect, polygon, arc, star | `src/renderer/` |
+| Output natif | ✅ Fenêtre + export PNG d'une frame | `src/output/window.rs` |
 | Output WASM | 🔲 Pas commencé | - |
 
 ### Métriques
@@ -61,8 +61,8 @@ L'objectif est d'arriver à un `cargo run -- exemple.dct` qui ouvre une fenêtre
 2. ~~**Validateur minimal** — vérifier les références de figures et de styles~~ ✅
 3. ~~**Résolveur de styles** — aplatir l'héritage~~ ✅
 4. ~~**Runtime timeline simple** — start/end sans animations~~ ✅
-5. **Renderer minimal** — lignes, cercles, rectangles uniquement
-6. **Affichage fenêtre** — via `egui` ou `winit + wgpu`
+5. ~~**Renderer minimal** — lignes, cercles, rectangles uniquement~~ ✅ (+ polygon, arc, star)
+6. ~~**Affichage fenêtre** — via `egui` ou `winit + wgpu`~~ ✅ (egui + tiny-skia)
 
 ### Phase 2 — Animations et temps réel
 
@@ -290,6 +290,35 @@ Cette section liste les choix importants qui ont été tranchés. Chaque décisi
 - Convention de la plupart des langages (Rust, Python, C)
 - Comparaison de noms triviale à implémenter
 
+### Rendu : tiny-skia pour la scène, egui pour la fenêtre
+
+**Décision :** La scène est dessinée par `tiny-skia` (dessin vectoriel sur processeur, dans une image). La fenêtre et les contrôles sont faits avec `eframe`/`egui`, qui affiche cette image.
+
+**Raisonnement :**
+- Qualité de dessin vectoriel (anticrénelage, courbes, transparence) adaptée à des animations de maths
+- Export PNG/MP4 trivial : on écrit les images, sans fenêtre ni capture d'écran
+- LaTeX naturel plus tard : LaTeX → SVG → `resvg`, qui dessine lui-même avec tiny-skia
+- Rendu identique sur toutes les plateformes, testable sans carte graphique
+- egui donne les contrôles (pause, barre de lecture) et la compilation WASM
+
+**Alternatives rejetées :**
+- egui seul : dessin pensé pour des interfaces, export vidéo maladroit
+- winit + wgpu : tout à coder (formes, texte, contrôles), beaucoup plus long à mettre au point ; à reconsidérer seulement si les performances du processeur deviennent un problème (le trait `RenderBackend` permet de changer de backend)
+
+### Positions en %, tailles en % du plus petit côté, `[16:9]` par défaut
+
+**Décision :**
+- Les positions restent en % (x de la largeur, y de la hauteur) : elles servent à **placer**.
+- Toutes les tailles (`radius`, `size`, `width`/`height` d'un rect) sont en % du **plus petit côté** de la scène.
+- La géométrie exacte se fait dans un repère `axes`, à échelle égale en x et en y par défaut.
+- `window` vaut `[16:9]` par défaut au lieu de `auto`.
+
+**Raisonnement :**
+- Avec des tailles en % de la largeur/hauteur, un « carré » devenait un rectangle en 16:9 et se déformait au redimensionnement : inacceptable pour un outil de maths
+- Les positions en % restent intuitives (« au centre », « aux deux tiers »)
+- Avec `auto`, chaque spectateur voit une composition différente et l'auteur ne voit pas ce que voient les autres ; un ratio fixe se comporte comme une vidéo
+- Les angles et les intersections ne doivent pas dépendre de coordonnées calculées à la main en %
+
 ### Licence MIT
 
 **Décision :** Le projet est sous licence MIT.
@@ -413,7 +442,10 @@ Idées qui ont été discutées et rejetées explicitement.
 - Parser : correction de la reconnaissance de `defstyle`/`deffigure`/`defgroup`
 - `width` → `stroke` pour l'épaisseur du trait (`width` réservé aux `rect`)
 - Runtime timeline : instantanés après chaque bloc, état à t par recherche dichotomique (avancer/reculer gratuit), commentaires dans la langue choisie, audio
-- CLI : `--lang XX`, `--debug` (tokens et AST seulement sur demande)
+- CLI : `--lang XX`, `--debug` (tokens et AST seulement sur demande), `--summary`, `--png <t> <fichier>`
+- Renderer tiny-skia + fenêtre egui (lecture/pause, barre de lecture, langue, sous-titres)
+- Lexer : couleurs hexadécimales `#FF0000` (avant : lues comme un commentaire)
+- Parser : listes de points `[(20%, 80%), ...]` (avant : les points étaient perdus)
 - Résolveur : styles et chaîne `extends` appliqués, surcharges, tri par `layer`, timeline triée
 - Numéros de ligne dans toutes les erreurs (lexer → AST → parser/validateur)
 - Validateur : noms uniques, pas de référence en avant, types et animations connus, timestamps uniques, nombre de traductions, `destroy` vérifié

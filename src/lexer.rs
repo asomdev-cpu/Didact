@@ -36,6 +36,25 @@ fn push(tokens: &mut Vec<Spanned>, line: usize, token: Token) {
     tokens.push(Spanned { token, line });
 }
 
+/// Vrai si `chars` (positionné sur un #) commence une couleur hexadécimale :
+/// 3, 6 ou 8 chiffres hexa, suivis d'un caractère qui ne prolonge pas un mot.
+/// Ex : `#FF0000` → couleur ; `# commentaire` ou `#titre` → commentaire.
+fn is_hex_color(chars: &mut std::iter::Peekable<std::str::Chars>) -> bool {
+    chars.next(); // le #
+    let mut n = 0;
+    while let Some(&c) = chars.peek() {
+        if c.is_ascii_hexdigit() {
+            n += 1;
+            chars.next();
+        } else if c.is_alphanumeric() || c == '_' {
+            return false; // ex: #fabrique → mot, donc commentaire
+        } else {
+            break;
+        }
+    }
+    matches!(n, 3 | 6 | 8)
+}
+
 /// Transforme le texte brut en liste de tokens (avec leur ligne)
 pub fn tokenize(input: &str) -> Vec<Spanned> {
     let mut tokens = Vec::new();
@@ -52,6 +71,23 @@ pub fn tokenize(input: &str) -> Vec<Spanned> {
                     line += 1;
                 }
                 chars.next();
+            }
+
+            // --- Couleur hexadécimale : #RGB, #RRGGBB ou #RRGGBBAA ---
+            // (sinon, # est un commentaire)
+            '#' if is_hex_color(&mut chars.clone()) => {
+                let mut color = String::new();
+                color.push(c);
+                chars.next();
+                while let Some(&h) = chars.peek() {
+                    if h.is_ascii_hexdigit() {
+                        color.push(h);
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                push(&mut tokens, start, Token::Ident(color));
             }
 
             // --- Commentaires : tout jusqu'à la fin de la ligne ---
@@ -178,4 +214,31 @@ pub fn tokenize(input: &str) -> Vec<Spanned> {
 
     tokens.push(Spanned { token: Token::EOF, line });
     tokens
-}
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tokens(src: &str) -> Vec<Token> {
+        tokenize(src).into_iter().map(|s| s.token).collect()
+    }
+
+    #[test]
+    fn couleur_hex_vs_commentaire() {
+        assert_eq!(
+            tokens("color : #FF0000 # rouge vif"),
+            [Token::Ident("color".into()), Token::Colon, Token::Ident("#FF0000".into()), Token::EOF]
+        );
+        assert_eq!(tokens("#fab"), [Token::Ident("#fab".into()), Token::EOF]);
+        // mot qui commence par des lettres hexa → commentaire
+        assert_eq!(tokens("#fabrique"), [Token::EOF]);
+        assert_eq!(tokens("# --- Styles ---"), [Token::EOF]);
+    }
+
+    #[test]
+    fn numeros_de_ligne() {
+        let t = tokenize("a\n# commentaire\n\nb");
+        assert_eq!(t[0].line, 1);
+        assert_eq!(t[1].line, 4);
+    }
+}

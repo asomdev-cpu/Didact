@@ -141,7 +141,7 @@ L'export n'est pas le mode normal d'utilisation. C'est une fonctionnalité opt-i
                      │ Frame courante
                      ▼
               ┌─────────────┐
-              │  Renderer   │  src/renderer/* (à faire)
+              │  Renderer   │  src/renderer/           
               │             │  Dessine la frame
               └─────────────┘
                      │
@@ -186,11 +186,16 @@ L'export n'est pas le mode normal d'utilisation. C'est une fonctionnalité opt-i
 - Évalue les références dynamiques (`center()`, `angle()`, etc.)
 - Interpole les animations selon les courbes d'easing
 
-**Renderer (`src/renderer/`) — 🔲 à faire**
-- Reçoit l'état courant du moteur
-- Dessine chaque figure visible
-- Délègue à LaTeX/Matplotlib pour les contenus complexes
-- Cible : un canvas Rust (winit + wgpu ou egui)
+**Renderer (`src/renderer/`) — ⚠️ partiel (line, circle, rect, polygon, arc, star)**
+- `geometry.rs` : figure → formes en pixels (chemins, remplissage, trait), indépendant de la bibliothèque de dessin
+- `skia.rs` : backend tiny-skia, dessine les formes dans une image en mémoire (sur processeur)
+- `mod.rs` : trait `RenderBackend` + `render_frame` (dessine une frame, liste les figures non dessinables)
+- Délègue à LaTeX/Matplotlib pour les contenus complexes (à faire)
+
+**Fenêtre (`src/output/window.rs`) — ✅ implémenté**
+- eframe/egui : affiche l'image produite par tiny-skia, au ratio de `window`, à la taille réelle en pixels
+- Contrôles : lecture/pause, retour au début, barre de lecture, temps, langue ; sous-titres par-dessus
+- Clavier : Espace (lecture/pause), ← / → (±1 s), Début
 
 ---
 
@@ -272,7 +277,7 @@ Produit un exécutable Windows/Mac/Linux. Quand on le lance :
 4. L'utilisateur peut pause, avancer, reculer
 5. Fermer la fenêtre quitte le programme
 
-**Bibliothèque cible :** `winit` (gestion fenêtre/événements) + `wgpu` (rendu GPU portable) ou `egui` (UI immédiate plus simple).
+**Bibliothèques :** `tiny-skia` (dessin vectoriel de la scène dans une image) + `eframe`/`egui` (fenêtre, contrôles). Voir DECISIONS.md.
 
 ### 6.2 Mode WebAssembly (web)
 
@@ -310,23 +315,24 @@ Ou via une balise custom (plus tard) :
 - Logique de rendu (calcul des formes à dessiner)
 
 **Spécifique à chaque cible :**
-- Mode natif : sortie sur Canvas Rust via `wgpu`
+- Mode natif : image tiny-skia affichée dans une fenêtre egui
 - Mode WASM : sortie sur Canvas HTML5 via `web-sys`
 
 L'abstraction se fait via un trait `RenderBackend` :
 
 ```rust
-trait RenderBackend {
-    fn draw_line(&mut self, from: Point, to: Point, style: &LineStyle);
-    fn draw_circle(&mut self, center: Point, radius: f32, style: &Style);
-    fn draw_text(&mut self, text: &str, pos: Point, style: &TextStyle);
-    // ...
+// src/renderer/mod.rs
+pub trait RenderBackend {
+    fn clear(&mut self, color: Rgba);
+    fn draw(&mut self, shape: &Shape); // chemin + remplissage + trait, en pixels
 }
 ```
 
-Deux implémentations :
-- `WgpuBackend` pour le natif
-- `CanvasBackend` pour le web
+Les figures sont converties en `Shape` par `renderer/geometry.rs`, indépendamment du backend.
+
+Implémentations :
+- `SkiaBackend` (tiny-skia) : natif, export PNG, et WASM (image copiée dans un canvas) ✅
+- un backend GPU (wgpu) seulement si les performances l'exigent un jour
 
 ---
 
@@ -434,14 +440,14 @@ Quand l'utilisateur lance `didact cours.dct`, voici ce qui se passe :
 6. resolver.rs aplatit les styles et résout les références
    └─ Document avec valeurs effectives
 
-7. main.rs crée une fenêtre via winit
+7. main.rs crée une fenêtre via eframe/egui
    └─ event loop démarre
 
 8. À chaque frame (60 fps) :
    a. runtime.rs calcule l'état courant à partir du timestamp
    b. runtime.rs évalue les références dynamiques
    c. renderer.rs convertit l'état en commandes de dessin
-   d. backend (wgpu) exécute les commandes
+   d. backend (tiny-skia) dessine dans une image, egui l'affiche
    e. Le frame est affiché
 
 9. Si l'utilisateur ferme la fenêtre :

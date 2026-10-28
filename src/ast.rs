@@ -26,7 +26,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
-            window: WindowConfig::Auto,
+            window: WindowConfig::Ratio(16, 9), // ratio fixe par défaut, comme une vidéo
             background: "white".to_string(),
             languages: vec!["FR".to_string()],
             default_lang: "FR".to_string(),

@@ -8,4 +8,7 @@ name = "didact"
 path = "src/main.rs"
 
 [dependencies]
-# aucune dépendance externe pour l'instant
+# Dessin vectoriel de la scène (formes, anticrénelage, export PNG)
+tiny-skia = "0.12"
+# Fenêtre + contrôles (pause, barre de lecture)
+eframe = "0.37"
