@@ -145,8 +145,11 @@ pub enum StartItem {
 /// Un élément dans end (peut inclure une animation de sortie)
 #[derive(Debug, Clone)]
 pub struct EndItem {
+    /// Nom de la figure, ou nom du fichier si `audio` est vrai
     pub name: String,
     pub anim: Option<String>, // ex: fadeout(0.5s)
+    /// `end : [audio musique.mp3]` → arrête une piste audio
+    pub audio: bool,
 }
 
 /// Une animation appliquée à une figure

@@ -526,13 +526,19 @@ impl Parser {
                 Token::Comma => { self.advance(); }
                 Token::Ident(name) => {
                     self.advance();
+                    // end : [audio musique.mp3]
+                    if name == "audio" {
+                        let file = self.parse_ident_or_string()?;
+                        items.push(EndItem { name: file, anim: None, audio: true });
+                        continue;
+                    }
                     // Optionnellement une animation de sortie
                     let anim = if let Token::Ident(_) = self.peek() {
                         Some(self.parse_anim_call_string()?)
                     } else {
                         None
                     };
-                    items.push(EndItem { name, anim });
+                    items.push(EndItem { name, anim, audio: false });
                 }
                 _ => { self.advance(); }
             }

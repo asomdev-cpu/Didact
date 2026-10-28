@@ -28,7 +28,7 @@ Ce document garde la trace des décisions importantes prises pendant le dévelop
 | Parser | ✅ Fonctionnel | `src/parser.rs` |
 | Validateur | ✅ Fonctionnel (15 tests) | `src/validator.rs` |
 | Résolveur | ✅ Fonctionnel (6 tests) | `src/resolver.rs` |
-| Runtime | 🔲 Pas commencé | - |
+| Runtime | ⚠️ Partiel : visibilité, commentaires, audio (pas d'animations) | `src/runtime/` |
 | Renderer | 🔲 Pas commencé | - |
 | Output natif | 🔲 Pas commencé | - |
 | Output WASM | 🔲 Pas commencé | - |
@@ -46,6 +46,8 @@ Ce document garde la trace des décisions importantes prises pendant le dévelop
 
 Aucun bug connu.
 
+- ~~`end : [audio fichier.mp3]` rejeté par le validateur~~ — corrigé.
+
 - ~~Parser : `defstyle`/`deffigure`/`defgroup` non reconnus~~ — corrigé, `exemple.dct` se parse entièrement.
 
 
@@ -58,7 +60,7 @@ L'objectif est d'arriver à un `cargo run -- exemple.dct` qui ouvre une fenêtre
 1. ~~**Corriger le bug du parser** (defstyle/deffigure/defgroup)~~ ✅
 2. ~~**Validateur minimal** — vérifier les références de figures et de styles~~ ✅
 3. ~~**Résolveur de styles** — aplatir l'héritage~~ ✅
-4. **Runtime timeline simple** — start/end sans animations
+4. ~~**Runtime timeline simple** — start/end sans animations~~ ✅
 5. **Renderer minimal** — lignes, cercles, rectangles uniquement
 6. **Affichage fenêtre** — via `egui` ou `winit + wgpu`
 
@@ -410,6 +412,8 @@ Idées qui ont été discutées et rejetées explicitement.
 - Clarification du modèle compilateur = renderer
 - Parser : correction de la reconnaissance de `defstyle`/`deffigure`/`defgroup`
 - `width` → `stroke` pour l'épaisseur du trait (`width` réservé aux `rect`)
+- Runtime timeline : instantanés après chaque bloc, état à t par recherche dichotomique (avancer/reculer gratuit), commentaires dans la langue choisie, audio
+- CLI : `--lang XX`, `--debug` (tokens et AST seulement sur demande)
 - Résolveur : styles et chaîne `extends` appliqués, surcharges, tri par `layer`, timeline triée
 - Numéros de ligne dans toutes les erreurs (lexer → AST → parser/validateur)
 - Validateur : noms uniques, pas de référence en avant, types et animations connus, timestamps uniques, nombre de traductions, `destroy` vérifié

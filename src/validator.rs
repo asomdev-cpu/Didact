@@ -411,6 +411,9 @@ impl Validator {
 
             // 2. end
             for (line, item) in end {
+                if item.audio {
+                    continue; // fichier audio, pas une figure
+                }
                 self.check_usable(line, t, &item.name, &destroyed);
                 if let Some(call) = &item.anim {
                     let (fname, _) = split_call(call);

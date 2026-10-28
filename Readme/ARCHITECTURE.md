@@ -135,7 +135,7 @@ L'export n'est pas le mode normal d'utilisation. C'est une fonctionnalité opt-i
                      │ Document résolu
                      ▼
               ┌─────────────┐
-              │   Moteur    │  src/runtime.rs (à faire)
+              │   Moteur    │  src/runtime/            
               │  d'exécution│  Calcule l'état à chaque frame
               └─────────────┘
                      │ Frame courante
@@ -177,7 +177,9 @@ L'export n'est pas le mode normal d'utilisation. C'est une fonctionnalité opt-i
 - Calcule les valeurs effectives pour chaque propriété
 - Trie les figures par `layer`
 
-**Moteur d'exécution (`src/runtime.rs`) — 🔲 à faire**
+**Moteur d'exécution (`src/runtime/`) — ⚠️ partiel (timeline sans animations)**
+- Au chargement, rejoue la timeline une fois et garde un instantané de l'état après chaque bloc
+- État à l'instant t = instantané du dernier bloc ≤ t (recherche dichotomique) : on peut avancer, reculer ou sauter librement
 - Maintient l'état courant : quelles figures sont visibles, leurs positions, leurs animations en cours
 - À chaque frame, calcule le nouvel état en fonction du timestamp
 - Exécute les commandes d'un bloc dans l'ordre fixe `destroy` → `end` → `start` → `anim` → `comment`
