@@ -74,7 +74,7 @@ pub struct FigureDef {
 }
 
 /// Une valeur de propriété
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PropValue {
     /// Valeur simple : "red", "auto", "24px"
     Single(String),

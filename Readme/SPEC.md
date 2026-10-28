@@ -475,6 +475,12 @@ deffigure mon_texte =
     align   : center / left / right
 ```
 
+- `pos` est le point d'ancrage : le texte est centré verticalement dessus, et aligné horizontalement selon `align` (défaut : `center`). `font` : taille en px (défaut 32px) ou en %.
+- Police : Latin Modern (celle de LaTeX), embarquée.
+- **Plusieurs lignes** : un vrai retour à la ligne dans la chaîne (pas de `\n`, pour que `$\nu$` reste la lettre ν).
+- **Maths en ligne** entre `$...$` : lettres en italique mathématique, grec et symboles (`\theta`, `\pi`, `\infty`, `\leq`, ...), exposants et indices (`x^2`, `u_{n+1}`), noms de fonctions droits (`\sin`, `\ln`, `\lim`, ...), `\text{...}`, espacement automatique autour de + − = ...
+- Limites actuelles : `\frac{a}{b}` s'écrit `a/b` sur la ligne, `\sqrt{x}` s'écrit `√x`, pas d'intégrale à bornes empilées (voir « LaTeX complet » dans §15).
+
 #### `equation`
 
 ```
@@ -486,7 +492,7 @@ deffigure mon_eq =
     color : black
 ```
 
-Le contenu de `expr` est du LaTeX.
+Le contenu de `expr` est du LaTeX, lu tel quel jusqu'à la fin de la ligne (pas de guillemets). Rendu actuel : celui des maths en ligne de `text` (mêmes limites).
 
 #### `latex`
 
@@ -523,14 +529,20 @@ deffigure ma_table =
 ```
 deffigure mes_axes =
     type   : axes
-    origin : (10%, 50%)
+    from   : (10%, 10%)       # coin bas-gauche de la boîte
+    to     : (90%, 90%)       # coin haut-droit de la boîte
     xrange : [-10, 10]
     yrange : [-5, 5]
-    xlabel : "x"
-    ylabel : "f(x)"
-    grid   : true / false
-    ticks  : true / false
+    xlabel : "$x$"
+    ylabel : "$f(x)$"
+    grid   : true / false     # défaut : false
+    ticks  : true / false     # défaut : true
+    equal  : true / false     # défaut : true
 ```
+
+- Le repère s'inscrit dans la boîte `from` / `to`. Avec `equal : true` (défaut), l'échelle est **la même en x et en y** et le repère est centré dans la boîte ; avec `equal : false`, il remplit la boîte (échelles différentes).
+- Les axes passent par 0 si 0 est dans l'intervalle, sinon par le bord. Graduations automatiques (pas de 1, 2 ou 5 × 10ⁿ, environ 8 graduations).
+- Position dans le repère : `pos : mes_axes(3, 4)`.
 
 #### `plot`
 
@@ -543,6 +555,10 @@ deffigure mon_plot =
     stroke: 2px
 ```
 
+- `expr` est lue telle quelle jusqu'à la fin de la ligne : `expr : x^2 + 2x - 1` (pas de guillemets).
+- Variable `x`, constantes `pi` et `e`, `+ - * / ^`, parenthèses, multiplication implicite (`2x`, `3(x+1)`, `2sin(x)`), fonctions `sin cos tan asin acos atan sinh cosh tanh exp ln log sqrt abs floor ceil`.
+- Tracée sur tout `xrange` du repère ; coupée hors de `yrange` et là où elle n'est pas définie. `samples` : nombre de points (défaut : un point tous les 2 pixels environ).
+
 #### `scatter`
 
 ```
@@ -554,6 +570,8 @@ deffigure mon_scatter =
     size   : 5px
 ```
 
+Les points sont en coordonnées du repère. `size` = rayon des points.
+
 #### `histogram`
 
 ```
@@ -564,6 +582,8 @@ deffigure mon_histo =
     axes  : mes_axes
     color : green
 ```
+
+Les données sont réparties en `bins` classes de même largeur entre le minimum et le maximum ; la hauteur d'une barre = nombre de valeurs. Couleur : `fill`, sinon `color`.
 
 ---
 
@@ -649,7 +669,7 @@ draw(durée)                    # se dessine progressivement (géométrie)
 ```
 move(to=position, durée)
 move(direction, vitesse)       # ex: move(down, 3cm/s)
-follow(path=fig, speed=v, rotate=tangent)
+follow(path=fig, durée, rotate=tangent)    # parcourt tout le contour de fig, à vitesse régulière
 rotate(angle, durée)
 ```
 
@@ -699,7 +719,11 @@ anim  : [a fadein(1s), b move(to=center(a), 1s)]  # séparées par une virgule :
 | `scale(f, d)` | la taille va vers `f` × la taille d'origine (`scale(2)` deux fois = toujours 2) |
 | `rotate(angle, d)` | tourne **de** `angle` degrés autour du centre (positif = sens trigonométrique), s'additionne |
 
-Pas encore implémentées (ignorées avec un avertissement) : `slidein`, `slideout`, `write`, `draw`, `follow`, `transform`, `move(direction, vitesse)`.
+| `follow(path=fig, d)` | le **centre** parcourt le contour de `fig` (courbe, ligne, arc, cercle, ...) du début à la fin, à vitesse régulière ; `rotate=tangent` : la figure s'oriente selon la tangente |
+
+Pas encore implémentées (ignorées avec un avertissement) : `slidein`, `slideout`, `write`, `draw`, `transform`, `move(direction, vitesse)`.
+
+Rotation fixe d'une figure : propriété `rotate : 30` (degrés) ou `rotate : auto_tangent(courbe)` (parallèle à la courbe, au point le plus proche).
 
 Après un nouveau `start`, les fondus et `grow`/`shrink` antérieurs ne comptent plus (la figure réapparaît normalement) ; les déplacements, rotations, tailles et couleurs sont conservés.
 
@@ -835,7 +859,6 @@ Sur les figures déjà définies, des propriétés supplémentaires pourraient �
 - `circle` : différencier `circle` et `ellipse` (radius_x, radius_y) ?
 - `star` : un ratio rayon intérieur / extérieur ?
 - `text` : `bold`, `italic`, `font_family` ?
-- `plot` : nombre de points d'échantillonnage (`samples`) ?
 - `scatter` : forme des marqueurs (cercle, carré, croix, ...) ?
 - `axes` : pas des graduations (`tick_step`) ?
 - `table` : style des bordures ?
@@ -896,9 +919,9 @@ Quels avertissements (non bloquants) le compilateur produit-il ? Par exemple :
 
 On a vu `%`, `px`, `s`, `ms`, `cm`, `deg`. Lesquelles sont obligatoirement supportées ? D'autres (`pt`, `em`, `rad`) ?
 
-### `follow` avec `duration` au lieu de `speed`
+### LaTeX complet
 
-Peut-on aussi écrire `follow(path=..., duration=2s)` au lieu d'imposer une vitesse ?
+Les maths en ligne couvrent les étiquettes et formules simples. Pour les fractions empilées, racines avec barre, intégrales et sommes à bornes, matrices, `align` (types `equation` et `latex`), il faut un vrai moteur. Piste étudiée : convertir le LaTeX en Typst (`mitex`) et le faire composer par `typst` (pur Rust, fonctionne en WebAssembly), puis dessiner le résultat avec le même moteur que la scène. À évaluer : poids de la dépendance, temps de compilation.
 
 ### Easing par défaut (implémenté, à valider)
 

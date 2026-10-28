@@ -11,11 +11,40 @@ pub struct Parser {
     pos: usize,
     /// Ligne du dernier token consommé par advance()
     last_line: usize,
+    /// Texte source, ligne par ligne (pour les propriétés lues telles quelles, comme `expr`)
+    source_lines: Vec<String>,
 }
+
+/// Propriétés dont la valeur est le reste de la ligne, tel quel
+/// (expressions et LaTeX : espaces, ^, \, ... conservés sans guillemets)
+const RAW_LINE_PROPS: &[&str] = &["expr"];
 
 impl Parser {
     pub fn new(tokens: Vec<Spanned>) -> Self {
-        Parser { tokens, pos: 0, last_line: 1 }
+        Parser { tokens, pos: 0, last_line: 1, source_lines: Vec::new() }
+    }
+
+    /// Si `key` est une propriété « reste de la ligne » et que le source est connu :
+    /// renvoie le texte après le `:` et saute les tokens de cette ligne.
+    fn raw_line_value(&mut self, key: &str, line: usize) -> Option<PropValue> {
+        if !RAW_LINE_PROPS.contains(&key) {
+            return None;
+        }
+        let text = self.source_lines.get(line.checked_sub(1)?)?;
+        let after = text.split_once(':')?.1;
+        // Commentaire en fin de ligne : " # ..."
+        let after = match after.find(" #") {
+            Some(i) => &after[..i],
+            None => after,
+        };
+        let mut value = after.trim().to_string();
+        if value.len() >= 2 && value.starts_with('"') && value.ends_with('"') {
+            value = value[1..value.len() - 1].to_string();
+        }
+        while self.line() == line && *self.peek() != Token::EOF {
+            self.advance();
+        }
+        Some(PropValue::Single(value))
     }
 
     /// Regarde le token courant sans avancer
@@ -85,6 +114,14 @@ impl Parser {
 
 pub fn parse(tokens: Vec<Spanned>) -> Result<Document, String> {
     let mut p = Parser::new(tokens);
+    p.parse_document()
+}
+
+/// Comme `parse`, avec le texte source : permet de lire `expr` tel quel
+/// (`expr : x^2 + 1` sans guillemets).
+pub fn parse_with_source(tokens: Vec<Spanned>, source: &str) -> Result<Document, String> {
+    let mut p = Parser::new(tokens);
+    p.source_lines = source.lines().map(|l| l.to_string()).collect();
     p.parse_document()
 }
 
@@ -249,12 +286,15 @@ impl Parser {
             }
 
             if let Token::Ident(key) = self.peek().clone() {
-                prop_lines.insert(key.clone(), self.line());
+                let line = self.line();
+                prop_lines.insert(key.clone(), line);
                 self.advance();
                 self.expect(&Token::Colon)?;
 
                 if key == "extends" {
                     extends = Some(self.expect_ident()?);
+                } else if let Some(v) = self.raw_line_value(&key, line) {
+                    properties.insert(key, v);
                 } else {
                     properties.insert(key, self.parse_prop_value()?);
                 }
@@ -280,10 +320,14 @@ impl Parser {
             }
 
             if let Token::Ident(key) = self.peek().clone() {
-                prop_lines.insert(key.clone(), self.line());
+                let line = self.line();
+                prop_lines.insert(key.clone(), line);
                 self.advance();
                 self.expect(&Token::Colon)?;
-                properties.insert(key, self.parse_prop_value()?);
+                match self.raw_line_value(&key, line) {
+                    Some(v) => properties.insert(key, v),
+                    None => properties.insert(key, self.parse_prop_value()?),
+                };
             } else {
                 self.advance();
             }
@@ -780,6 +824,19 @@ impl Parser {
 mod tests {
     use super::*;
     use crate::lexer::tokenize;
+
+    #[test]
+    fn expr_lue_telle_quelle() {
+        let src = "[figures]
+deffigure p =
+    type : plot
+    expr : x^2 + 2x - 1   # parabole
+    axes : a";
+        let doc = parse_with_source(tokenize(src), src).unwrap();
+        let f = &doc.figures[0];
+        assert_eq!(f.properties["expr"], PropValue::Single("x^2 + 2x - 1".into()));
+        assert_eq!(f.properties["axes"], PropValue::Single("a".into())); // la ligne suivante est intacte
+    }
 
     #[test]
     fn liste_de_points() {

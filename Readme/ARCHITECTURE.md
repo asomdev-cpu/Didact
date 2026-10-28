@@ -188,9 +188,11 @@ L'export n'est pas le mode normal d'utilisation. C'est une fonctionnalité opt-i
 - Évalue les références dynamiques (`center()`, `angle()`, `offset()`) — fait par le renderer : à chaque frame, toutes les figures sont calculées dans l'ordre de définition (formes → animations → géométrie publiée), ce qui suffit puisqu'il n'y a pas de référence en avant
 - Interpole les animations selon les courbes d'easing
 
-**Renderer (`src/renderer/`) — ⚠️ partiel (line, circle, rect, polygon, arc, star)**
+**Renderer (`src/renderer/`) — ✅ tous les types sauf `latex`, `table`, `raw.*` (LaTeX complet à venir)**
 - `geometry.rs` : figure → formes en pixels (chemins, remplissage, trait), indépendant de la bibliothèque de dessin
 - `skia.rs` : backend tiny-skia, dessine les formes dans une image en mémoire (sur processeur)
+- `text.rs` : texte et maths en ligne → contours des lettres (polices Latin Modern embarquées, `ttf-parser`)
+- `expr.rs` : évaluateur des expressions de `plot` (lu une fois, évalué pour chaque x)
 - `mod.rs` : trait `RenderBackend` + `render_frame` (dessine une frame, liste les figures non dessinables)
 - Délègue à LaTeX/Matplotlib pour les contenus complexes (à faire)
 

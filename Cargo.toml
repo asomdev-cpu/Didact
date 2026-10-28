@@ -12,3 +12,5 @@ path = "src/main.rs"
 tiny-skia = "0.12"
 # Fenêtre + contrôles (pause, barre de lecture)
 eframe = "0.37"
+# Lecture des polices (contours des lettres) pour le texte
+ttf-parser = "0.25"

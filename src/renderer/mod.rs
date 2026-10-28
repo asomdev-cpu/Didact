@@ -15,8 +15,10 @@
 //!
 //! Changer de bibliothèque de dessin = écrire un autre backend, sans toucher au reste.
 
+pub mod expr;
 pub mod geometry;
 pub mod skia;
+pub mod text;
 
 pub use geometry::{Rgba, Scene, Shape};
 
@@ -24,7 +26,7 @@ use crate::ast::PropValue;
 use crate::resolver::{fmt_value, ResolvedFigure};
 use crate::runtime::animation::AnimKind;
 use crate::runtime::timeline::{FigureState, Frame};
-use geometry::{Geom, PathCmd, Refs};
+use geometry::{AxesMap, Geom, PathCmd, Refs};
 use std::collections::HashMap;
 
 /// Ce qu'une bibliothèque de dessin doit savoir faire
@@ -110,7 +112,13 @@ fn build_figure(
     let base_center = bbox_center(&shapes);
 
     // ── Autres animations ──
-    let mut fx = AnimEffect { center: base_center, scale: 1.0, rotation: 0.0, opacity: 1.0 };
+    // Rotation fixe écrite sur la figure : rotate : 30
+    let base_rotation = match fig.properties.get("rotate") {
+        Some(PropValue::Number(n)) => *n as f32,
+        _ => 0.0,
+    };
+    let mut fx = AnimEffect { center: base_center, scale: 1.0, rotation: base_rotation, opacity: 1.0 };
+    let mut follow_rotation: Option<f32> = None;
     let mut size_factor: f32 = 1.0; // scale(...) : facteur cible absolu
     let mut appear: f32 = 1.0; // grow / shrink
     for a in &st.anims {
@@ -125,6 +133,15 @@ fn build_figure(
             }
             AnimKind::Scale(f) => size_factor += (*f as f32 - size_factor) * e,
             AnimKind::Rotate(deg) => fx.rotation += *deg as f32 * e,
+            AnimKind::Follow { path, tangent } => {
+                let outline = &geometry::resolve_geom(path, refs)?.outline;
+                let (point, dir) = point_along(outline, e as f64)
+                    .ok_or_else(|| format!("follow : la figure '{}' n'a pas de contour à suivre", path))?;
+                fx.center = point;
+                if *tangent {
+                    follow_rotation = Some(direction_angle(dir));
+                }
+            }
             AnimKind::FadeIn if since_start => fx.opacity = e,
             AnimKind::FadeOut if since_start => fx.opacity = 1.0 - e,
             AnimKind::Grow if since_start => appear = e,
@@ -136,6 +153,18 @@ fn build_figure(
         }
     }
     fx.scale = size_factor * appear;
+
+    // Orientation selon une tangente : follow(..., rotate=tangent) ou rotate : auto_tangent(courbe)
+    if let Some(r) = follow_rotation {
+        fx.rotation = r;
+    } else if let Some(PropValue::Single(v)) = fig.properties.get("rotate") {
+        if let Some(name) = v.strip_prefix("auto_tangent(").and_then(|r| r.strip_suffix(')')) {
+            let outline = &geometry::resolve_geom(name.trim(), refs)?.outline;
+            if let Some(dir) = tangent_near(outline, fx.center) {
+                fx.rotation = direction_angle(dir);
+            }
+        }
+    }
 
     // ── Application : rotation et taille autour du centre de base, puis déplacement ──
     let (rad_cos, rad_sin) = {
@@ -184,7 +213,16 @@ fn build_figure(
         }
     }
 
-    let geom = figure_geom(fig, &shapes, &fx);
+    // Repère : la conversion suit les déplacements et la taille (pas la rotation)
+    let axes = if fig.ftype == "axes" {
+        let m = geometry::axes_map(fig, scene, refs)?;
+        let (ox, oy) = map(m.ox, m.oy);
+        Some(AxesMap { ox, oy, ux: m.ux * fx.scale, uy: m.uy * fx.scale, ..m })
+    } else {
+        None
+    };
+
+    let geom = figure_geom(fig, &shapes, &fx, axes);
     Ok((shapes, geom, warnings))
 }
 
@@ -215,7 +253,7 @@ fn animated_color(st: &FigureState, t: f64) -> Result<Option<String>, String> {
 }
 
 /// Géométrie publiée pour les références : centre, angle, boîte, point d'étiquette
-fn figure_geom(fig: &ResolvedFigure, shapes: &[Shape], fx: &AnimEffect) -> Geom {
+fn figure_geom(fig: &ResolvedFigure, shapes: &[Shape], fx: &AnimEffect, axes: Option<AxesMap>) -> Geom {
     let bbox = bbox(shapes);
 
     // Angle : direction pour une line (from → to), rotation sinon
@@ -245,7 +283,84 @@ fn figure_geom(fig: &ResolvedFigure, shapes: &[Shape], fx: &AnimEffect) -> Geom 
         _ => None,
     };
 
-    Geom { center: fx.center, angle, bbox, label }
+    Geom { center: fx.center, angle, bbox, label, axes, outline: outline(shapes) }
+}
+
+/// Contour de la première forme, en points (les courbes sont découpées en segments)
+fn outline(shapes: &[Shape]) -> Vec<(f32, f32)> {
+    let mut pts: Vec<(f32, f32)> = Vec::new();
+    let Some(shape) = shapes.first() else { return pts };
+    let mut start = (0.0, 0.0);
+    for cmd in &shape.path {
+        match *cmd {
+            PathCmd::MoveTo(x, y) => {
+                start = (x, y);
+                pts.push((x, y));
+            }
+            PathCmd::LineTo(x, y) => pts.push((x, y)),
+            PathCmd::CubicTo(x1, y1, x2, y2, x, y) => {
+                let p0 = *pts.last().unwrap_or(&(x, y));
+                for i in 1..=12 {
+                    let t = i as f32 / 12.0;
+                    let u = 1.0 - t;
+                    pts.push((
+                        u * u * u * p0.0 + 3.0 * u * u * t * x1 + 3.0 * u * t * t * x2 + t * t * t * x,
+                        u * u * u * p0.1 + 3.0 * u * u * t * y1 + 3.0 * u * t * t * y2 + t * t * t * y,
+                    ));
+                }
+            }
+            PathCmd::Close => pts.push(start),
+        }
+    }
+    pts
+}
+
+/// Point situé à la fraction `e` (0 → 1) de la longueur d'un contour, et direction à cet endroit
+fn point_along(pts: &[(f32, f32)], e: f64) -> Option<((f32, f32), (f32, f32))> {
+    if pts.len() < 2 {
+        return None;
+    }
+    let seg_len = |i: usize| {
+        let (a, b) = (pts[i], pts[i + 1]);
+        ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt()
+    };
+    let total: f32 = (0..pts.len() - 1).map(seg_len).sum();
+    let mut target = total * (e.clamp(0.0, 1.0) as f32);
+    for i in 0..pts.len() - 1 {
+        let l = seg_len(i);
+        if l > 0.0 && (target <= l || i == pts.len() - 2) {
+            let t = (target / l).min(1.0);
+            let (a, b) = (pts[i], pts[i + 1]);
+            return Some(((a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t), (b.0 - a.0, b.1 - a.1)));
+        }
+        target -= l;
+    }
+    None
+}
+
+/// Direction du contour au point le plus proche de `p`
+fn tangent_near(pts: &[(f32, f32)], p: (f32, f32)) -> Option<(f32, f32)> {
+    let mut best: Option<(f32, (f32, f32))> = None;
+    for w in pts.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+        let l2 = dx * dx + dy * dy;
+        if l2 == 0.0 {
+            continue;
+        }
+        let t = (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / l2).clamp(0.0, 1.0);
+        let (qx, qy) = (a.0 + dx * t, a.1 + dy * t);
+        let d = (qx - p.0).powi(2) + (qy - p.1).powi(2);
+        if best.map_or(true, |(bd, _)| d < bd) {
+            best = Some((d, (dx, dy)));
+        }
+    }
+    best.map(|(_, dir)| dir)
+}
+
+/// Direction en pixels → angle en degrés, sens trigonométrique (y pixel vers le bas)
+fn direction_angle((dx, dy): (f32, f32)) -> f32 {
+    (-dy).atan2(dx).to_degrees()
 }
 
 /// Boîte englobante des points de contrôle : (x min, y min, x max, y max)

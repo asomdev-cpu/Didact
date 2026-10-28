@@ -1,0 +1,128 @@
+# ─────────────────────────────────────────────
+#  Démo Phase 3 : texte, maths, repères et graphes
+#  didact demo_graphes.dct
+# ─────────────────────────────────────────────
+
+[config]
+languages    : [FR, EN]
+default_lang : FR
+
+[figures]
+
+deffigure titre =
+    type    : text
+    content : "Fonctions et approximation"
+    pos     : (50%, 93%)
+    font    : 48px
+
+# --- Repère avec graduations et grille ---
+
+deffigure repere =
+    type   : axes
+    from   : (4%, 8%)
+    to     : (62%, 86%)
+    xrange : [-4, 4]
+    yrange : [-2, 3]
+    grid   : true
+    ticks  : true
+    xlabel : "$x$"
+    ylabel : "$y$"
+
+deffigure courbe_sin =
+    type   : plot
+    expr   : sin(x)
+    axes   : repere
+    color  : blue
+    stroke : 3px
+
+# Taylor à l'ordre 3 : x - x^3/6
+deffigure taylor =
+    type   : plot
+    expr   : x - x^3/6
+    axes   : repere
+    color  : red
+    stroke : 3px
+
+deffigure legende_sin =
+    type    : text
+    content : "$\sin(x)$"
+    pos     : repere(2.6, 1.0)
+    color   : blue
+
+deffigure legende_taylor =
+    type    : text
+    content : "$x - \frac{x^3}{6}$"
+    pos     : repere(-2.3, 2.4)
+    color   : red
+
+# Un point qui glisse sur la courbe
+deffigure point =
+    type   : circle
+    center : repere(-4, 0)
+    radius : 1.2%
+    fill   : blue
+    color  : white
+    stroke : 2px
+    layer  : 2
+
+# --- Points et histogramme ---
+
+deffigure repere_stats =
+    type   : axes
+    from   : (67%, 45%)
+    to     : (97%, 85%)
+    xrange : [0, 10]
+    yrange : [0, 6]
+    ticks  : true
+
+deffigure mesures =
+    type   : histogram
+    data   : [1, 2, 2, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 5, 6, 6, 6, 7, 7, 8, 9]
+    bins   : 8
+    axes   : repere_stats
+    fill   : #93C5FD
+
+deffigure nuage =
+    type   : scatter
+    points : [(1, 1), (2, 1.8), (3, 3.1), (4, 3.9), (5, 5.2), (6, 4.6)]
+    axes   : repere_stats
+    color  : #B91C1C
+    size   : 7px
+
+deffigure formule =
+    type  : equation
+    expr  : \sigma^2 = \frac{1}{n} \sum (x_i - \mu)^2
+    pos   : (82%, 28%)
+    size  : 40px
+
+[timeline]
+
+0.000 => {
+    start   : [titre fadein(0.8s), repere fadein(0.8s)]
+    comment : ["Un repère gradué", "A graded coordinate system"]
+}
+
+1.000 => {
+    start   : [courbe_sin fadein(1s), legende_sin fadein(1s)]
+    comment : ["La fonction sinus", "The sine function"]
+}
+
+2.500 => {
+    start   : [taylor fadein(1s), legende_taylor fadein(1s)]
+    comment : ["Son approximation de Taylor à l'ordre 3", "Its third-order Taylor approximation"]
+}
+
+4.000 => {
+    start   : [point grow(0.4s)]
+    anim    : [point follow(path=courbe_sin, 6s)]
+    comment : ["Proche de 0, les deux courbes se confondent", "Near 0, both curves coincide"]
+}
+
+7.000 => {
+    start   : [repere_stats fadein(0.6s), mesures grow(0.8s), nuage fadein(1s)]
+}
+
+9.000 => {
+    start   : [formule fadein(1s)]
+    comment : ["Un histogramme, un nuage de points, une formule", "A histogram, a scatter plot, a formula"]
+}

@@ -29,7 +29,7 @@ Ce document garde la trace des décisions importantes prises pendant le dévelop
 | Validateur | ✅ Fonctionnel (15 tests) | `src/validator.rs` |
 | Résolveur | ✅ Fonctionnel (6 tests) | `src/resolver.rs` |
 | Runtime | ✅ Visibilité, commentaires, audio, animations, easing | `src/runtime/` |
-| Renderer | ⚠️ Partiel : line, circle, rect, polygon, arc, star | `src/renderer/` |
+| Renderer | ✅ line, circle, rect, polygon, arc, star, text, equation (LaTeX partiel), axes, plot, scatter, histogram | `src/renderer/` |
 | Output natif | ✅ Fenêtre + export PNG d'une frame | `src/output/window.rs` |
 | Output WASM | 🔲 Pas commencé | - |
 
@@ -73,10 +73,10 @@ L'objectif est d'arriver à un `cargo run -- exemple.dct` qui ouvre une fenêtre
 
 ### Phase 3 — Maths et graphes
 
-11. **Intégration LaTeX** — KaTeX en mode WASM, tectonic en natif
-12. **Type `axes`** — système de coordonnées mathématique
-13. **Type `plot`** — courbes de fonctions
-14. **Type `scatter` et `histogram`**
+11. ⚠️ **Intégration LaTeX** — maths en ligne faites (sous-ensemble) ; moteur complet à choisir (piste : mitex + typst)
+12. ~~**Type `axes`** — système de coordonnées mathématique~~ ✅
+13. ~~**Type `plot`** — courbes de fonctions~~ ✅
+14. ~~**Type `scatter` et `histogram`**~~ ✅ (+ texte, follow, auto_tangent : exemple.dct est jouable)
 
 ### Phase 4 — Embarquabilité
 
@@ -319,6 +319,41 @@ Cette section liste les choix importants qui ont été tranchés. Chaque décisi
 - Avec `auto`, chaque spectateur voit une composition différente et l'auteur ne voit pas ce que voient les autres ; un ratio fixe se comporte comme une vidéo
 - Les angles et les intersections ne doivent pas dépendre de coordonnées calculées à la main en %
 
+### Repère `axes` défini par une boîte `from` / `to`
+
+**Décision :** Un repère est placé par sa boîte à l'écran (`from` = coin bas-gauche, `to` = coin haut-droit) au lieu d'un `origin`. Avec l'échelle égale (défaut), il est centré dans la boîte.
+
+**Raisonnement :**
+- On contrôle directement l'espace occupé à l'écran, comme pour les autres éléments de mise en page
+- Fonctionne même quand 0 n'est pas dans les intervalles
+- L'échelle égale reste garantie ; `equal : false` remplit la boîte
+
+### `follow` : une durée, pas de vitesse
+
+**Décision :** `follow(path=fig, 10s)` parcourt tout le contour en 10 s, à vitesse régulière. Plus de `speed=1cm/s`.
+
+**Raisonnement :**
+- Le plus simple à écrire et à calculer
+- Les « cm » n'ont pas de sens sur un écran qui change de taille
+- Cohérent avec toutes les autres animations, qui prennent une durée
+
+### Texte : police Latin Modern embarquée, lettres en vecteurs
+
+**Décision :** Le texte est dessiné à partir des contours des lettres (Latin Modern Roman et Latin Modern Math, polices de LaTeX, licence GUST libre), embarquées dans le programme.
+
+**Raisonnement :**
+- Aspect LaTeX, cohérent avec les formules
+- Le texte s'anime comme une forme (move, rotate, scale) et reste net à toute taille
+- Rien à installer, rendu identique partout
+
+### `expr` lue jusqu'à la fin de la ligne
+
+**Décision :** La valeur de `expr` est le texte brut après `:` jusqu'à la fin de la ligne (sans guillemets).
+
+**Raisonnement :**
+- Les formules contiennent des espaces, `^`, `\`, `{}` que le lexer découpait (`x^2 + 1` perdait `+ 1`)
+- Garde la syntaxe de la spec (`expr : sin(x)`, `expr : \int_0^\infty ...`)
+
 ### Licence MIT
 
 **Décision :** Le projet est sous licence MIT.
@@ -443,6 +478,10 @@ Idées qui ont été discutées et rejetées explicitement.
 - `width` → `stroke` pour l'épaisseur du trait (`width` réservé aux `rect`)
 - Runtime timeline : instantanés après chaque bloc, état à t par recherche dichotomique (avancer/reculer gratuit), commentaires dans la langue choisie, audio
 - CLI : `--lang XX`, `--debug` (tokens et AST seulement sur demande), `--summary`, `--png <t> <fichier>`
+- Texte (Latin Modern embarqué), maths en ligne `$...$`, type `equation` (LaTeX partiel)
+- `axes` (boîte from/to, échelle égale, graduations, grille), `plot` (évaluateur d'expressions), `scatter`, `histogram`, `repère(x, y)`
+- `follow(path=fig, durée, rotate=tangent)`, propriété `rotate` (angle ou `auto_tangent(courbe)`)
+- `exemple.dct` adapté (from/to, follow avec durée) et jouable en entier
 - Animations : entrée (`start`), sortie (`end`, la figure reste affichée pendant le fondu), `anim`, enchaînements ; fadein, fadeout, grow, shrink, move, color, scale, rotate ; easing
 - Références dynamiques : `center()`, `angle()`, `offset()` recalculées à chaque frame, dans l'ordre de définition
 - Renderer tiny-skia + fenêtre egui (lecture/pause, barre de lecture, langue, sous-titres)

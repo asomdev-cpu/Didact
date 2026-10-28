@@ -66,6 +66,9 @@ pub enum AnimKind {
     Scale(f64),
     /// Tourne de cet angle en degrés (positif = sens trigonométrique)
     Rotate(f64),
+    /// Le centre parcourt le contour d'une figure (de son début à sa fin, à vitesse régulière) ;
+    /// `tangent` : la figure s'oriente selon la tangente
+    Follow { path: String, tangent: bool },
     /// Prévue par la spec mais pas encore implémentée (ignorée, avec un avertissement)
     Unsupported(String),
 }
@@ -100,7 +103,7 @@ impl Anim {
 }
 
 /// Animations de la spec pas encore implémentées
-const NOT_YET: &[&str] = &["slidein", "slideout", "write", "draw", "follow", "transform"];
+const NOT_YET: &[&str] = &["slidein", "slideout", "write", "draw", "transform"];
 
 /// Lit un appel d'animation. Renvoie (ce qu'elle fait, durée, easing).
 pub fn parse_call(call: &AnimCall) -> Result<(AnimKind, f64, Ease), String> {
@@ -148,6 +151,18 @@ pub fn parse_call(call: &AnimCall) -> Result<(AnimKind, f64, Ease), String> {
             None => return Err("color attend une couleur : color(to=red, durée)".to_string()),
         },
         "scale" => AnimKind::Scale(parse_number(positional.first(), "scale attend un facteur : scale(2, durée)")?),
+        "follow" => {
+            if named_value("speed").is_some() {
+                return Err("follow : utiliser une durée, ex : follow(path=courbe, 5s)".to_string());
+            }
+            let path = named_value("path").ok_or("follow attend un chemin : follow(path=figure, durée)")?;
+            let tangent = match named_value("rotate").as_deref() {
+                None | Some("none") => false,
+                Some("tangent") => true,
+                Some(other) => return Err(format!("follow : rotate={} invalide (tangent ou none)", other)),
+            };
+            AnimKind::Follow { path, tangent }
+        }
         "rotate" => AnimKind::Rotate(parse_number(
             positional.first(),
             "rotate attend un angle en degrés : rotate(90, durée)",
@@ -206,9 +221,11 @@ mod tests {
         assert!(parse_call(&call("move", &["2s"])).unwrap_err().contains("destination"));
         assert!(parse_call(&call("fadein", &["1s", "ease=rapide"])).is_err());
         assert_eq!(
-            parse_call(&call("follow", &["path=c", "speed=1"])).unwrap().0,
-            AnimKind::Unsupported("follow".into())
+            parse_call(&call("follow", &["path=c", "10s", "rotate=tangent"])).unwrap().0,
+            AnimKind::Follow { path: "c".into(), tangent: true }
         );
+        assert!(parse_call(&call("follow", &["path=c", "speed=1cm/s"])).unwrap_err().contains("durée"));
+        assert_eq!(parse_call(&call("draw", &["1s"])).unwrap().0, AnimKind::Unsupported("draw".into()));
     }
 
     #[test]

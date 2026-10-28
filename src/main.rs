@@ -73,7 +73,7 @@ fn main() {
     }
 
     // ── Étape 2 : Parser ──
-    let doc = parser::parse(tokens).unwrap_or_else(|e| fail(&format!("✗ Erreur de parsing : {}", e)));
+    let doc = parser::parse_with_source(tokens, &content).unwrap_or_else(|e| fail(&format!("✗ Erreur de parsing : {}", e)));
     if debug {
         println!("--- Document parsé ---\n{:#?}\n", doc);
     }

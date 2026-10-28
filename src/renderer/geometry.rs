@@ -74,6 +74,29 @@ pub struct Geom {
     /// Point d'accroche d'une étiquette et direction vers l'extérieur
     /// (milieu d'un arc) ; None → coin haut-droit de la boîte
     pub label: Option<((f32, f32), (f32, f32))>,
+    /// Pour une figure `axes` : conversion coordonnées du repère → pixels
+    pub axes: Option<AxesMap>,
+    /// Contour de la figure en points (pixels), pour follow et auto_tangent
+    pub outline: Vec<(f32, f32)>,
+}
+
+/// Conversion entre les coordonnées d'un repère `axes` et les pixels
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AxesMap {
+    /// Position en pixels du point (0, 0) du repère (peut être hors de la boîte)
+    pub ox: f32,
+    pub oy: f32,
+    /// Pixels par unité, en x et en y (égaux sauf `equal : false`)
+    pub ux: f32,
+    pub uy: f32,
+    pub xrange: (f64, f64),
+    pub yrange: (f64, f64),
+}
+
+impl AxesMap {
+    pub fn to_px(&self, x: f64, y: f64) -> (f32, f32) {
+        (self.ox + x as f32 * self.ux, self.oy - y as f32 * self.uy)
+    }
 }
 
 /// Géométries des figures déjà calculées, par nom
@@ -160,6 +183,12 @@ pub fn figure_shapes(f: &ResolvedFigure, scene: &Scene, refs: &Refs) -> Result<V
         "polygon" => polygon(f, scene, &look),
         "arc" => arc(f, scene, refs, &look),
         "star" => star(f, scene, refs, &look),
+        "text" => text(f, scene, refs, &look),
+        "equation" => equation(f, scene, refs, &look),
+        "axes" => axes(f, scene, refs, &look),
+        "plot" => plot(f, scene, refs, &look),
+        "scatter" => scatter(f, scene, refs, &look),
+        "histogram" => histogram(f, scene, refs, &look),
         other => Err(format!("type '{}' pas encore dessiné", other)),
     }
 }
@@ -319,6 +348,343 @@ fn star(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<V
     Ok(vec![Shape { path, fill: look.fill, stroke: look.color.map(|c| (c, look.stroke)) }])
 }
 
+/// Taille de police par défaut (px de la scène de référence)
+const DEFAULT_FONT_PX: f32 = 32.0;
+
+fn text(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<Vec<Shape>, String> {
+    let content = match require(f, "content")? {
+        PropValue::Single(s) | PropValue::Block(s) => s.clone(),
+        v => fmt_value(v),
+    };
+    let (x, y) = point(require(f, "pos")?, scene, refs)?;
+    let size = match f.properties.get("font") {
+        Some(v) => length(v, scene, scene.min_side())?,
+        None => DEFAULT_FONT_PX * scene.px_scale,
+    };
+    let align = match f.properties.get("align").map(fmt_value).as_deref() {
+        None | Some("center") => super::text::Align::Center,
+        Some("left") => super::text::Align::Left,
+        Some("right") => super::text::Align::Right,
+        Some(other) => return Err(format!("align '{}' invalide (left / center / right)", other)),
+    };
+    let color = look.color.unwrap_or(Rgba::BLACK);
+    super::text::text_shapes(&content, x, y, size, align, color)
+}
+
+/// equation : rendue avec les maths en ligne (sous-ensemble de LaTeX) en attendant le vrai moteur
+fn equation(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<Vec<Shape>, String> {
+    let expr = match require(f, "expr")? {
+        PropValue::Single(s) | PropValue::Block(s) => s.clone(),
+        v => fmt_value(v),
+    };
+    let (x, y) = point(require(f, "pos")?, scene, refs)?;
+    let size = match f.properties.get("size").or(f.properties.get("font")) {
+        Some(v) => length(v, scene, scene.min_side())?,
+        None => DEFAULT_FONT_PX * 1.25 * scene.px_scale,
+    };
+    let color = look.color.unwrap_or(Rgba::BLACK);
+    super::text::text_shapes(&format!("${}$", expr), x, y, size, super::text::Align::Center, color)
+}
+
+// ─────────────────────────────────────────────
+//  REPÈRES ET GRAPHES
+// ─────────────────────────────────────────────
+
+/// Intervalle [a, b] écrit comme une liste
+fn range(f: &ResolvedFigure, key: &str) -> Result<(f64, f64), String> {
+    match require(f, key)? {
+        PropValue::List(items) if items.len() == 2 => {
+            let a: f64 = items[0].parse().map_err(|_| format!("{} : nombre invalide '{}'", key, items[0]))?;
+            let b: f64 = items[1].parse().map_err(|_| format!("{} : nombre invalide '{}'", key, items[1]))?;
+            if b <= a {
+                return Err(format!("{} : [{}, {}] doit aller du plus petit au plus grand", key, a, b));
+            }
+            Ok((a, b))
+        }
+        v => Err(format!("{} doit être [min, max], trouvé '{}'", key, fmt_value(v))),
+    }
+}
+
+fn flag(f: &ResolvedFigure, key: &str, default: bool) -> Result<bool, String> {
+    match f.properties.get(key).map(fmt_value).as_deref() {
+        None => Ok(default),
+        Some("true") => Ok(true),
+        Some("false") => Ok(false),
+        Some(other) => Err(format!("{} doit être true ou false, trouvé '{}'", key, other)),
+    }
+}
+
+/// Repère : la boîte from/to à l'écran, les intervalles xrange/yrange.
+/// Échelle égale en x et en y par défaut : le repère est centré dans la boîte.
+pub fn axes_map(f: &ResolvedFigure, scene: &Scene, refs: &Refs) -> Result<AxesMap, String> {
+    let (x1, y1) = point(require(f, "from")?, scene, refs)?;
+    let (x2, y2) = point(require(f, "to")?, scene, refs)?;
+    let xrange = range(f, "xrange")?;
+    let yrange = range(f, "yrange")?;
+    let (left, right) = (x1.min(x2), x1.max(x2));
+    let (top, bottom) = (y1.min(y2), y1.max(y2));
+    let (box_w, box_h) = (right - left, bottom - top);
+    let (span_x, span_y) = ((xrange.1 - xrange.0) as f32, (yrange.1 - yrange.0) as f32);
+
+    let (mut ux, mut uy) = (box_w / span_x, box_h / span_y);
+    if flag(f, "equal", true)? {
+        let u = ux.min(uy);
+        ux = u;
+        uy = u;
+    }
+    // Zone réellement utilisée, centrée dans la boîte
+    let (w, h) = (span_x * ux, span_y * uy);
+    let area_left = left + (box_w - w) / 2.0;
+    let area_bottom = bottom - (box_h - h) / 2.0;
+    Ok(AxesMap {
+        ox: area_left - xrange.0 as f32 * ux,
+        oy: area_bottom + yrange.0 as f32 * uy,
+        ux,
+        uy,
+        xrange,
+        yrange,
+    })
+}
+
+/// Pas de graduation « joli » (1, 2 ou 5 × 10^k) pour environ 8 graduations
+fn nice_step(span: f64) -> f64 {
+    let raw = span / 8.0;
+    let mag = 10f64.powf(raw.log10().floor());
+    let norm = raw / mag;
+    let nice = if norm < 1.5 { 1.0 } else if norm < 3.5 { 2.0 } else if norm < 7.5 { 5.0 } else { 10.0 };
+    nice * mag
+}
+
+/// Valeurs des graduations dans [a, b]
+fn ticks_in(a: f64, b: f64) -> Vec<f64> {
+    let step = nice_step(b - a);
+    let mut v = (a / step).ceil() * step;
+    let mut out = Vec::new();
+    while v <= b + step * 1e-9 {
+        out.push(if v.abs() < step * 1e-9 { 0.0 } else { v });
+        v += step;
+    }
+    out
+}
+
+/// 2.0 → "2", 0.5 → "0.5", -1.25 → "−1.25"
+fn fmt_number(v: f64) -> String {
+    let s = format!("{:.4}", v);
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    s.replace('-', "−")
+}
+
+fn axes(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<Vec<Shape>, String> {
+    let m = axes_map(f, scene, refs)?;
+    let color = look.color.unwrap_or(Rgba::BLACK);
+    let (xa, xb) = m.xrange;
+    let (ya, yb) = m.yrange;
+    // Les axes passent par 0 si 0 est dans l'intervalle, sinon par le bord
+    let x0 = 0f64.clamp(xa, xb);
+    let y0 = 0f64.clamp(ya, yb);
+    let font = 22.0 * scene.px_scale;
+    let tick = 6.0 * scene.px_scale;
+    let mut shapes = Vec::new();
+
+    // Grille
+    if flag(f, "grid", false)? {
+        let grid = Rgba { r: 0.85, g: 0.87, b: 0.9, a: color.a };
+        let mut path = Vec::new();
+        for x in ticks_in(xa, xb) {
+            let (a, b) = (m.to_px(x, ya), m.to_px(x, yb));
+            path.extend([PathCmd::MoveTo(a.0, a.1), PathCmd::LineTo(b.0, b.1)]);
+        }
+        for y in ticks_in(ya, yb) {
+            let (a, b) = (m.to_px(xa, y), m.to_px(xb, y));
+            path.extend([PathCmd::MoveTo(a.0, a.1), PathCmd::LineTo(b.0, b.1)]);
+        }
+        shapes.push(Shape { path, fill: None, stroke: Some((grid, 1.0 * scene.px_scale)) });
+    }
+
+    // Axes fléchés
+    let head = arrow_length(look.stroke, scene);
+    for (from, to) in [(m.to_px(xa, y0), m.to_px(xb, y0)), (m.to_px(x0, ya), m.to_px(x0, yb))] {
+        let (dx, dy) = unit(to.0 - from.0, to.1 - from.1);
+        shapes.push(Shape {
+            path: vec![PathCmd::MoveTo(from.0, from.1), PathCmd::LineTo(to.0 - dx * head * 0.8, to.1 - dy * head * 0.8)],
+            fill: None,
+            stroke: Some((color, look.stroke)),
+        });
+        shapes.push(arrow_head(to.0, to.1, dx, dy, head, color));
+    }
+
+    // Graduations et nombres (sauf au croisement des axes)
+    if flag(f, "ticks", true)? {
+        let mut path = Vec::new();
+        for x in ticks_in(xa, xb) {
+            if x == x0 || x == xb {
+                continue;
+            }
+            let (px, py) = m.to_px(x, y0);
+            path.extend([PathCmd::MoveTo(px, py - tick), PathCmd::LineTo(px, py + tick)]);
+            shapes.extend(super::text::text_shapes(&fmt_number(x), px, py + tick + font * 0.8, font, super::text::Align::Center, color)?);
+        }
+        for y in ticks_in(ya, yb) {
+            if y == y0 || y == yb {
+                continue;
+            }
+            let (px, py) = m.to_px(x0, y);
+            path.extend([PathCmd::MoveTo(px - tick, py), PathCmd::LineTo(px + tick, py)]);
+            shapes.extend(super::text::text_shapes(&fmt_number(y), px - tick - font * 0.4, py, font, super::text::Align::Right, color)?);
+        }
+        shapes.push(Shape { path, fill: None, stroke: Some((color, look.stroke * 0.75)) });
+    }
+
+    // Noms des axes
+    let label = |key: &str| f.properties.get(key).map(fmt_value).filter(|s| !s.is_empty());
+    if let Some(xl) = label("xlabel") {
+        let (px, py) = m.to_px(xb, y0);
+        shapes.extend(super::text::text_shapes(&xl, px, py + font * 1.4, font * 1.2, super::text::Align::Right, color)?);
+    }
+    if let Some(yl) = label("ylabel") {
+        let (px, py) = m.to_px(x0, yb);
+        shapes.extend(super::text::text_shapes(&yl, px + font * 0.6, py + font * 0.5, font * 1.2, super::text::Align::Left, color)?);
+    }
+    Ok(shapes)
+}
+
+/// Repère référencé par `axes : nom`
+fn axes_of<'a>(f: &ResolvedFigure, refs: &'a Refs) -> Result<&'a AxesMap, String> {
+    let name = fmt_value(require(f, "axes")?);
+    geom(&name, refs)?
+        .axes
+        .as_ref()
+        .ok_or_else(|| format!("'{}' n'est pas un repère axes", name))
+}
+
+fn plot(f: &ResolvedFigure, _scene: &Scene, refs: &Refs, look: &Look) -> Result<Vec<Shape>, String> {
+    let m = axes_of(f, refs)?;
+    let src = fmt_value(require(f, "expr")?);
+    let e = super::expr::parse(&src)?;
+    let (xa, xb) = m.xrange;
+    let (ya, yb) = m.yrange;
+    let samples = match f.properties.get("samples") {
+        Some(PropValue::Number(n)) if *n >= 2.0 => *n as usize,
+        Some(v) => return Err(format!("samples doit être un entier ≥ 2, trouvé '{}'", fmt_value(v))),
+        // Par défaut : un point tous les 2 pixels environ
+        None => (((xb - xa) as f32 * m.ux / 2.0) as usize).clamp(100, 2000),
+    };
+
+    // Échantillonnage, en coupant la courbe hors de yrange et là où elle n'est pas définie
+    let mut path = Vec::new();
+    let mut prev: Option<(f64, f64)> = None;
+    for i in 0..=samples {
+        let x = xa + (xb - xa) * i as f64 / samples as f64;
+        let y = e.eval(x);
+        let cur = if y.is_finite() { Some((x, y)) } else { None };
+        if let (Some(a), Some(b)) = (prev, cur) {
+            if let Some((p, q)) = clip_y(a, b, ya, yb) {
+                let (p, q) = (m.to_px(p.0, p.1), m.to_px(q.0, q.1));
+                let continues = matches!(path.last(), Some(PathCmd::LineTo(x, y)) | Some(PathCmd::MoveTo(x, y)) if (*x - p.0).abs() < 0.01 && (*y - p.1).abs() < 0.01);
+                if !continues {
+                    path.push(PathCmd::MoveTo(p.0, p.1));
+                }
+                path.push(PathCmd::LineTo(q.0, q.1));
+            }
+        }
+        prev = cur;
+    }
+    Ok(vec![Shape { path, fill: None, stroke: look.color.map(|c| (c, look.stroke)) }])
+}
+
+/// Partie du segment [a, b] comprise entre y = lo et y = hi (None si entièrement dehors)
+fn clip_y(a: (f64, f64), b: (f64, f64), lo: f64, hi: f64) -> Option<((f64, f64), (f64, f64))> {
+    let (mut t0, mut t1) = (0.0f64, 1.0f64);
+    let dy = b.1 - a.1;
+    for (p, q) in [(-dy, a.1 - lo), (dy, hi - a.1)] {
+        if p == 0.0 {
+            if q < 0.0 {
+                return None;
+            }
+        } else {
+            let r = q / p;
+            if p < 0.0 { t0 = t0.max(r) } else { t1 = t1.min(r) }
+        }
+    }
+    if t0 > t1 {
+        return None;
+    }
+    let at = |t: f64| (a.0 + (b.0 - a.0) * t, a.1 + dy * t);
+    Some((at(t0), at(t1)))
+}
+
+fn scatter(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<Vec<Shape>, String> {
+    let m = axes_of(f, refs)?;
+    let items = match require(f, "points")? {
+        PropValue::List(items) => items,
+        v => return Err(format!("points doit être une liste de points, trouvé '{}'", fmt_value(v))),
+    };
+    let r = match f.properties.get("size") {
+        Some(v) => length(v, scene, scene.min_side())?,
+        None => 6.0 * scene.px_scale,
+    };
+    let fill = look.fill.or(look.color);
+    let mut shapes = Vec::new();
+    for item in items {
+        let inside = item.trim().trim_start_matches('(').trim_end_matches(')');
+        let parts: Vec<f64> = inside.split(',').map(|v| v.trim().parse::<f64>()).collect::<Result<_, _>>()
+            .map_err(|_| format!("point invalide '{}', attendu (x, y) en coordonnées du repère", item))?;
+        if parts.len() != 2 {
+            return Err(format!("point invalide '{}', attendu (x, y)", item));
+        }
+        let (px, py) = m.to_px(parts[0], parts[1]);
+        shapes.push(Shape { path: circle_path(px, py, r), fill, stroke: None });
+    }
+    Ok(shapes)
+}
+
+fn histogram(f: &ResolvedFigure, _scene: &Scene, refs: &Refs, look: &Look) -> Result<Vec<Shape>, String> {
+    let m = axes_of(f, refs)?;
+    let data: Vec<f64> = match require(f, "data")? {
+        PropValue::List(items) => items.iter().map(|v| v.parse::<f64>()).collect::<Result<_, _>>()
+            .map_err(|_| "data doit être une liste de nombres".to_string())?,
+        v => return Err(format!("data doit être une liste de nombres, trouvé '{}'", fmt_value(v))),
+    };
+    if data.is_empty() {
+        return Ok(Vec::new());
+    }
+    let bins = match f.properties.get("bins") {
+        Some(PropValue::Number(n)) if *n >= 1.0 => *n as usize,
+        Some(v) => return Err(format!("bins doit être un entier ≥ 1, trouvé '{}'", fmt_value(v))),
+        None => 10,
+    };
+    let lo = data.iter().cloned().fold(f64::MAX, f64::min);
+    let hi = data.iter().cloned().fold(f64::MIN, f64::max);
+    let width = if hi > lo { (hi - lo) / bins as f64 } else { 1.0 };
+    let mut counts = vec![0usize; bins];
+    for v in &data {
+        let i = (((v - lo) / width) as usize).min(bins - 1);
+        counts[i] += 1;
+    }
+    let fill = look.fill.or(look.color.map(|c| Rgba { a: c.a * 0.8, ..c }));
+    let edge = Rgba { a: 1.0, ..Rgba::WHITE };
+    Ok(counts
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| **c > 0)
+        .map(|(i, c)| {
+            let x0 = lo + i as f64 * width;
+            let (a, b) = (m.to_px(x0, 0.0), m.to_px(x0 + width, *c as f64));
+            Shape {
+                path: vec![
+                    PathCmd::MoveTo(a.0, a.1),
+                    PathCmd::LineTo(b.0, a.1),
+                    PathCmd::LineTo(b.0, b.1),
+                    PathCmd::LineTo(a.0, b.1),
+                    PathCmd::Close,
+                ],
+                fill,
+                stroke: Some((edge, 1.0)),
+            }
+        })
+        .collect())
+}
+
 // ─────────────────────────────────────────────
 //  FLÈCHES ET CERCLES
 // ─────────────────────────────────────────────
@@ -402,6 +768,11 @@ pub fn resolve_point(s: &str, scene: &Scene, refs: &Refs) -> Result<(f32, f32), 
     }
 }
 
+/// Géométrie d'une figure référencée (pour le renderer : follow, auto_tangent)
+pub fn resolve_geom<'a>(name: &str, refs: &'a Refs) -> Result<&'a Geom, String> {
+    geom(name, refs)
+}
+
 /// Récupère la géométrie d'une figure référencée
 fn geom<'a>(name: &str, refs: &'a Refs) -> Result<&'a Geom, String> {
     refs.get(name)
@@ -424,9 +795,16 @@ fn ref_point(s: &str, scene: &Scene, refs: &Refs) -> Result<(f32, f32), String> 
             })
         }
         ("center" | "offset", _) => Err(format!("'{}' : nombre d'arguments invalide", s)),
-        ("auto_tangent", _) => Err(format!("'{}' : pas encore supporté (nécessite plot, Phase 3)", s)),
         // mes_axes(3, 4) : position dans un repère
-        _ => Err(format!("'{}' : repère axes pas encore supporté (Phase 3)", s)),
+        (name, [x, y]) => {
+            let m = geom(name, refs)?
+                .axes
+                .ok_or_else(|| format!("'{}' : '{}' n'est pas un repère axes", s, name))?;
+            let x: f64 = x.parse().map_err(|_| format!("'{}' : x invalide", s))?;
+            let y: f64 = y.parse().map_err(|_| format!("'{}' : y invalide", s))?;
+            Ok(m.to_px(x, y))
+        }
+        _ => Err(format!("position invalide '{}'", s)),
     }
 }
 

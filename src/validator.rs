@@ -262,6 +262,14 @@ impl Validator {
             keys.sort_by_key(|k| line_of(k));
 
             for key in keys {
+                // Formule d'un plot : on vérifie qu'elle se lit
+                if key == "expr" && ftype == "plot" {
+                    if let PropValue::Single(src) = &f.properties[key] {
+                        if let Err(e) = crate::renderer::expr::parse(src) {
+                            self.error(line_of(key), format!("'{}' : {}", f.name, e));
+                        }
+                    }
+                }
                 if FREE_TEXT_PROPS.contains(&key.as_str()) {
                     continue;
                 }
@@ -872,6 +880,25 @@ mod tests {
             0.000 => { anim : [a move(to=center(fantome), 1s)] }",
             "'fantome' n'est pas défini",
         );
+    }
+
+    #[test]
+    fn formule_de_plot_invalide() {
+        let src = "[figures]
+deffigure a =
+    type   : axes
+    from   : (10%, 10%)
+    to     : (90%, 90%)
+    xrange : [0, 10]
+    yrange : [-1, 1]
+deffigure c =
+    type : plot
+    expr : sin x + y
+    axes : a
+[timeline]";
+        let doc = parser::parse_with_source(lexer::tokenize(src), src).unwrap();
+        let errs = validate(&doc).unwrap_err();
+        assert!(errs.iter().any(|e| e.starts_with("ligne 10 : 'c' : sin attend des parenthèses")), "{:?}", errs);
     }
 
     #[test]
