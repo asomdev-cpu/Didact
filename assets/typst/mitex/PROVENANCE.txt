@@ -1,0 +1,5 @@
+Définitions Typst de MiTeX (https://github.com/mitex-rs/mitex), version 0.2.6,
+fichiers packages/mitex/specs/*, non modifiés.
+Licence : Apache-2.0 (voir LICENSE).
+
+Utilisées par Didact pour interpréter le LaTeX converti en Typst par la crate `mitex`.

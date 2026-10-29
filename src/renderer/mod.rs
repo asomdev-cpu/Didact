@@ -19,6 +19,7 @@ pub mod expr;
 pub mod geometry;
 pub mod skia;
 pub mod text;
+pub mod typeset;
 
 pub use geometry::{Rgba, Scene, Shape};
 

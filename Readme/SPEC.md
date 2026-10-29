@@ -478,8 +478,7 @@ deffigure mon_texte =
 - `pos` est le point d'ancrage : le texte est centré verticalement dessus, et aligné horizontalement selon `align` (défaut : `center`). `font` : taille en px (défaut 32px) ou en %.
 - Police : Latin Modern (celle de LaTeX), embarquée.
 - **Plusieurs lignes** : un vrai retour à la ligne dans la chaîne (pas de `\n`, pour que `$\nu$` reste la lettre ν).
-- **Maths en ligne** entre `$...$` : lettres en italique mathématique, grec et symboles (`\theta`, `\pi`, `\infty`, `\leq`, ...), exposants et indices (`x^2`, `u_{n+1}`), noms de fonctions droits (`\sin`, `\ln`, `\lim`, ...), `\text{...}`, espacement automatique autour de + − = ...
-- Limites actuelles : `\frac{a}{b}` s'écrit `a/b` sur la ligne, `\sqrt{x}` s'écrit `√x`, pas d'intégrale à bornes empilées (voir « LaTeX complet » dans §15).
+- **Maths en ligne** entre `$...$` : du vrai LaTeX (fractions, racines, sommes, matrices, ...), composé dans la ligne de texte.
 
 #### `equation`
 
@@ -492,7 +491,7 @@ deffigure mon_eq =
     color : black
 ```
 
-Le contenu de `expr` est du LaTeX, lu tel quel jusqu'à la fin de la ligne (pas de guillemets). Rendu actuel : celui des maths en ligne de `text` (mêmes limites).
+Le contenu de `expr` est du LaTeX en mode mathématique, lu tel quel jusqu'à la fin de la ligne (pas de guillemets), affiché en formule centrée (bornes d'intégrales et de sommes au-dessus et en dessous). `size` : taille (défaut 40px).
 
 #### `latex`
 
@@ -507,7 +506,7 @@ deffigure mon_latex =
         \end{align}
 ```
 
-Le caractère `|` introduit un bloc multilignes.
+Le caractère `|` introduit un bloc multilignes : les lignes suivantes plus indentées que la propriété, retours à la ligne conservés. Le contenu est du LaTeX en mode texte (environnements `aligned`, `align`, `cases`, paragraphes...). `font` : taille.
 
 #### `table`
 
@@ -521,6 +520,8 @@ deffigure ma_table =
         1 | e  | e
         2 | e² | 2e²
 ```
+
+Une ligne du bloc = une ligne du tableau, cases séparées par `|`. Les cases et l'en-tête acceptent les maths `$...$` (dans `header`, mettre la case entre guillemets : `["$x$", "$f(x)$"]`). `font` : taille.
 
 ### 8.4 Graphes
 
@@ -834,6 +835,8 @@ deffigure mon_bloc =
         \end{equation}
 ```
 
+Interprété comme le type `latex` (LaTeX en mode texte).
+
 ### 14.2 `raw.matplotlib`
 
 ```
@@ -918,10 +921,6 @@ Quels avertissements (non bloquants) le compilateur produit-il ? Par exemple :
 ### Unités acceptées
 
 On a vu `%`, `px`, `s`, `ms`, `cm`, `deg`. Lesquelles sont obligatoirement supportées ? D'autres (`pt`, `em`, `rad`) ?
-
-### LaTeX complet
-
-Les maths en ligne couvrent les étiquettes et formules simples. Pour les fractions empilées, racines avec barre, intégrales et sommes à bornes, matrices, `align` (types `equation` et `latex`), il faut un vrai moteur. Piste étudiée : convertir le LaTeX en Typst (`mitex`) et le faire composer par `typst` (pur Rust, fonctionne en WebAssembly), puis dessiner le résultat avec le même moteur que la scène. À évaluer : poids de la dépendance, temps de compilation.
 
 ### Easing par défaut (implémenté, à valider)
 

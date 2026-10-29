@@ -262,6 +262,12 @@ impl Validator {
             keys.sort_by_key(|k| line_of(k));
 
             for key in keys {
+                // Texte et LaTeX : on vérifie qu'ils se composent (et le cache est prêt pour le rendu)
+                if let Some(content) = typeset_content(ftype, key, f) {
+                    if let Err(e) = crate::renderer::typeset::check(&content) {
+                        self.error(line_of(key), format!("'{}' : {}", f.name, e));
+                    }
+                }
                 // Formule d'un plot : on vérifie qu'elle se lit
                 if key == "expr" && ftype == "plot" {
                     if let PropValue::Single(src) = &f.properties[key] {
@@ -513,6 +519,34 @@ impl Validator {
         }
     }
 
+}
+
+/// Contenu à composer pour une propriété de texte/LaTeX, si `key` en est une
+fn typeset_content(ftype: &str, key: &str, f: &FigureDef) -> Option<crate::renderer::typeset::Content> {
+    use crate::renderer::typeset::Content;
+    let text = |v: &PropValue| match v {
+        PropValue::Single(s) | PropValue::Block(s) => s.clone(),
+        other => crate::resolver::fmt_value(other),
+    };
+    let v = f.properties.get(key)?;
+    match (ftype, key) {
+        ("text", "content") => Some(Content::Text(text(v))),
+        ("equation", "expr") => Some(Content::Math(text(v))),
+        ("latex", "content") | ("raw.latex", "code") => Some(Content::Latex(text(v))),
+        ("table", "rows") => {
+            let header = match f.properties.get("header") {
+                Some(PropValue::List(items)) => items.clone(),
+                _ => Vec::new(),
+            };
+            let rows = text(v)
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .map(|l| l.split('|').map(|c| c.trim().to_string()).collect())
+                .collect();
+            Some(Content::Table { header, rows })
+        }
+        _ => None,
+    }
 }
 
 /// Cherche `key` dans un style et ses ancêtres (`extends`).
@@ -899,6 +933,19 @@ deffigure c =
         let doc = parser::parse_with_source(lexer::tokenize(src), src).unwrap();
         let errs = validate(&doc).unwrap_err();
         assert!(errs.iter().any(|e| e.starts_with("ligne 10 : 'c' : sin attend des parenthèses")), "{:?}", errs);
+    }
+
+    #[test]
+    fn latex_invalide() {
+        let src = "[figures]
+deffigure eq =
+    type : equation
+    pos  : (50%, 50%)
+    expr : \\frac{1}{2} + \\pasunecommande{x}
+[timeline]";
+        let doc = parser::parse_with_source(lexer::tokenize(src), src).unwrap();
+        let errs = validate(&doc).unwrap_err();
+        assert!(errs.iter().any(|e| e.starts_with("ligne 5 : 'eq' : LaTeX")), "{:?}", errs);
     }
 
     #[test]

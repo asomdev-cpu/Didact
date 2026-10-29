@@ -29,7 +29,7 @@ Ce document garde la trace des décisions importantes prises pendant le dévelop
 | Validateur | ✅ Fonctionnel (15 tests) | `src/validator.rs` |
 | Résolveur | ✅ Fonctionnel (6 tests) | `src/resolver.rs` |
 | Runtime | ✅ Visibilité, commentaires, audio, animations, easing | `src/runtime/` |
-| Renderer | ✅ line, circle, rect, polygon, arc, star, text, equation (LaTeX partiel), axes, plot, scatter, histogram | `src/renderer/` |
+| Renderer | ✅ tous les types de la spec sauf `raw.matplotlib` | `src/renderer/` |
 | Output natif | ✅ Fenêtre + export PNG d'une frame | `src/output/window.rs` |
 | Output WASM | 🔲 Pas commencé | - |
 
@@ -73,7 +73,7 @@ L'objectif est d'arriver à un `cargo run -- exemple.dct` qui ouvre une fenêtre
 
 ### Phase 3 — Maths et graphes
 
-11. ⚠️ **Intégration LaTeX** — maths en ligne faites (sous-ensemble) ; moteur complet à choisir (piste : mitex + typst)
+11. ~~**Intégration LaTeX**~~ ✅ (LaTeX → Typst via MiTeX, composé par Typst ; text, equation, latex, table, raw.latex)
 12. ~~**Type `axes`** — système de coordonnées mathématique~~ ✅
 13. ~~**Type `plot`** — courbes de fonctions~~ ✅
 14. ~~**Type `scatter` et `histogram`**~~ ✅ (+ texte, follow, auto_tangent : exemple.dct est jouable)
@@ -337,14 +337,22 @@ Cette section liste les choix importants qui ont été tranchés. Chaque décisi
 - Les « cm » n'ont pas de sens sur un écran qui change de taille
 - Cohérent avec toutes les autres animations, qui prennent une durée
 
-### Texte : police Latin Modern embarquée, lettres en vecteurs
+### Texte et LaTeX : MiTeX + Typst, police Latin Modern, lettres en vecteurs
 
-**Décision :** Le texte est dessiné à partir des contours des lettres (Latin Modern Roman et Latin Modern Math, polices de LaTeX, licence GUST libre), embarquées dans le programme.
+**Décision :** Tout le texte et le LaTeX passent par la même chaîne : LaTeX → Typst (crate `mitex`) → composé par Typst (crate `typst`, polices Latin Modern embarquées) → SVG → contours vectoriels dessinés comme les autres formes. Résultats mis en cache.
 
 **Raisonnement :**
-- Aspect LaTeX, cohérent avec les formules
+- Qualité LaTeX réelle : fractions empilées, racines, bornes d'intégrales, matrices, `aligned`, tableaux, crénage du texte
+- Pur Rust, rien à installer (pas de distribution LaTeX), fonctionne en WebAssembly (Typst tourne dans le navigateur)
 - Le texte s'anime comme une forme (move, rotate, scale) et reste net à toute taille
-- Rien à installer, rendu identique partout
+- Licences compatibles : Typst et MiTeX Apache-2.0, polices GUST
+
+**Coût accepté :** binaire plus lourd (≈ +40 Mo) et première compilation plus longue (quelques minutes). Composition : 4 à 20 ms par texte, une seule fois grâce au cache.
+
+**Alternatives rejetées :**
+- Maths en ligne codées à la main : impossible d'atteindre la qualité LaTeX (fractions, bornes, matrices)
+- LaTeX installé (pdflatex, tectonic) : dépendance externe lourde, pas de WebAssembly
+- KaTeX : JavaScript, ne marche pas en natif
 
 ### `expr` lue jusqu'à la fin de la ligne
 
@@ -478,7 +486,8 @@ Idées qui ont été discutées et rejetées explicitement.
 - `width` → `stroke` pour l'épaisseur du trait (`width` réservé aux `rect`)
 - Runtime timeline : instantanés après chaque bloc, état à t par recherche dichotomique (avancer/reculer gratuit), commentaires dans la langue choisie, audio
 - CLI : `--lang XX`, `--debug` (tokens et AST seulement sur demande), `--summary`, `--png <t> <fichier>`
-- Texte (Latin Modern embarqué), maths en ligne `$...$`, type `equation` (LaTeX partiel)
+- LaTeX complet via MiTeX + Typst : `text` avec `$...$`, `equation`, `latex`, `raw.latex`, `table` ; erreurs LaTeX signalées avec le numéro de ligne
+- Blocs `|` multilignes lus depuis le source (retours à la ligne et `|` conservés)
 - `axes` (boîte from/to, échelle égale, graduations, grille), `plot` (évaluateur d'expressions), `scatter`, `histogram`, `repère(x, y)`
 - `follow(path=fig, durée, rotate=tangent)`, propriété `rotate` (angle ou `auto_tangent(courbe)`)
 - `exemple.dct` adapté (from/to, follow avec durée) et jouable en entier

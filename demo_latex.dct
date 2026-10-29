@@ -1,0 +1,81 @@
+# ─────────────────────────────────────────────
+#  Démo fin de Phase 3 : LaTeX complet
+#  didact demo_latex.dct
+# ─────────────────────────────────────────────
+
+[config]
+languages    : [FR, EN]
+default_lang : FR
+
+[figures]
+
+deffigure titre =
+    type    : text
+    content : "L'intégrale de Gauss"
+    pos     : (50%, 92%)
+    font    : 56px
+
+# Formule seule : le LaTeX est lu jusqu'à la fin de la ligne
+deffigure gauss =
+    type  : equation
+    expr  : \int_{-\infty}^{+\infty} e^{-x^2} \, dx = \sqrt{\pi}
+    pos   : (50%, 72%)
+    size  : 54px
+    color : #1E3A8A
+
+# Bloc LaTeX sur plusieurs lignes (mode texte)
+deffigure calcul =
+    type    : latex
+    pos     : (27%, 38%)
+    font    : 36px
+    content : |
+        \begin{aligned}
+        I^2 &= \int_{\mathbb{R}^2} e^{-(x^2+y^2)} \, dx \, dy \\
+            &= \int_0^{2\pi} \int_0^{\infty} e^{-r^2} r \, dr \, d\theta \\
+            &= 2\pi \cdot \frac{1}{2} = \pi
+        \end{aligned}
+
+# Tableau : cases séparées par |, maths entre $...$
+deffigure valeurs =
+    type   : table
+    pos    : (75%, 38%)
+    font   : 32px
+    header : ["$x$", "$e^{-x^2}$"]
+    rows   : |
+        $0$ | $1$
+        $\frac{1}{2}$ | $0.779$
+        $1$ | $\frac{1}{e} \approx 0.368$
+        $2$ | $0.018$
+
+# Étiquette avec une vraie fraction et une matrice
+deffigure note =
+    type    : text
+    content : "Variance : $\sigma^2 = \frac{1}{n}\sum_{i=1}^{n}(x_i-\mu)^2$, rotation : $\begin{pmatrix} \cos\theta & -\sin\theta \\ \sin\theta & \cos\theta \end{pmatrix}$"
+    pos     : (50%, 17%)
+    font    : 28px
+    color   : #374151
+
+[timeline]
+
+0.000 => {
+    start   : [titre fadein(0.8s)]
+    comment : ["L'intégrale de Gauss", "The Gaussian integral"]
+}
+
+1.000 => {
+    start   : [gauss fadein(1s)]
+}
+
+2.500 => {
+    start   : [calcul fadein(1s)]
+    comment : ["On passe en coordonnées polaires", "Switching to polar coordinates"]
+}
+
+4.000 => {
+    start   : [valeurs fadein(1s)]
+}
+
+5.500 => {
+    start   : [note fadein(1s)]
+    anim    : [gauss scale(1.1, 0.6s)]
+}

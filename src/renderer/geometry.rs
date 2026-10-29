@@ -185,6 +185,8 @@ pub fn figure_shapes(f: &ResolvedFigure, scene: &Scene, refs: &Refs) -> Result<V
         "star" => star(f, scene, refs, &look),
         "text" => text(f, scene, refs, &look),
         "equation" => equation(f, scene, refs, &look),
+        "latex" | "raw.latex" => latex(f, scene, refs, &look),
+        "table" => table(f, scene, refs, &look),
         "axes" => axes(f, scene, refs, &look),
         "plot" => plot(f, scene, refs, &look),
         "scatter" => scatter(f, scene, refs, &look),
@@ -371,19 +373,59 @@ fn text(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<V
     super::text::text_shapes(&content, x, y, size, align, color)
 }
 
-/// equation : rendue avec les maths en ligne (sous-ensemble de LaTeX) en attendant le vrai moteur
-fn equation(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<Vec<Shape>, String> {
-    let expr = match require(f, "expr")? {
+/// Texte brut d'une propriété (chaîne, bloc `|`, ou valeur simple)
+fn raw_text(v: &PropValue) -> String {
+    match v {
         PropValue::Single(s) | PropValue::Block(s) => s.clone(),
         v => fmt_value(v),
-    };
+    }
+}
+
+/// Taille de composition : `size`, sinon `font`, sinon la valeur par défaut × `factor`
+fn font_size(f: &ResolvedFigure, scene: &Scene, factor: f32) -> Result<f32, String> {
+    match f.properties.get("size").or(f.properties.get("font")) {
+        Some(v) => length(v, scene, scene.min_side()),
+        None => Ok(DEFAULT_FONT_PX * factor * scene.px_scale),
+    }
+}
+
+/// equation : une formule LaTeX (mode mathématique)
+fn equation(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<Vec<Shape>, String> {
+    let tex = raw_text(require(f, "expr")?);
     let (x, y) = point(require(f, "pos")?, scene, refs)?;
-    let size = match f.properties.get("size").or(f.properties.get("font")) {
-        Some(v) => length(v, scene, scene.min_side())?,
-        None => DEFAULT_FONT_PX * 1.25 * scene.px_scale,
-    };
+    let size = font_size(f, scene, 1.25)?;
     let color = look.color.unwrap_or(Rgba::BLACK);
-    super::text::text_shapes(&format!("${}$", expr), x, y, size, super::text::Align::Center, color)
+    let content = super::typeset::Content::Math(tex);
+    super::typeset::shapes(&content, x, y, size, super::typeset::Align::Center, color)
+}
+
+/// latex / raw.latex : du LaTeX en mode texte (`\begin{align}`, paragraphes, ...)
+fn latex(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<Vec<Shape>, String> {
+    let key = if f.ftype == "raw.latex" { "code" } else { "content" };
+    let tex = raw_text(require(f, key)?);
+    let (x, y) = point(require(f, "pos")?, scene, refs)?;
+    let size = font_size(f, scene, 1.0)?;
+    let color = look.color.unwrap_or(Rgba::BLACK);
+    super::typeset::shapes(&super::typeset::Content::Latex(tex), x, y, size, super::typeset::Align::Center, color)
+}
+
+/// table : en-tête (liste) + lignes (bloc, cases séparées par |)
+fn table(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<Vec<Shape>, String> {
+    let header = match f.properties.get("header") {
+        Some(PropValue::List(items)) => items.clone(),
+        Some(v) => return Err(format!("header doit être une liste, trouvé '{}'", fmt_value(v))),
+        None => Vec::new(),
+    };
+    let rows: Vec<Vec<String>> = raw_text(require(f, "rows")?)
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.split('|').map(|c| c.trim().to_string()).collect())
+        .collect();
+    let (x, y) = point(require(f, "pos")?, scene, refs)?;
+    let size = font_size(f, scene, 1.0)?;
+    let color = look.color.unwrap_or(Rgba::BLACK);
+    let content = super::typeset::Content::Table { header, rows };
+    super::typeset::shapes(&content, x, y, size, super::typeset::Align::Center, color)
 }
 
 // ─────────────────────────────────────────────

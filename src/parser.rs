@@ -24,6 +24,41 @@ impl Parser {
         Parser { tokens, pos: 0, last_line: 1, source_lines: Vec::new() }
     }
 
+    /// Bloc multilignes `key : |` : les lignes suivantes plus indentées que `key`,
+    /// avec retours à la ligne et `|` conservés, indentation commune retirée.
+    fn raw_block_value(&mut self, line: usize) -> Option<PropValue> {
+        if *self.peek() != Token::Pipe || self.source_lines.is_empty() {
+            return None;
+        }
+        let indent = |l: &str| l.len() - l.trim_start().len();
+        let key_indent = indent(self.source_lines.get(line - 1)?);
+        let mut block: Vec<&str> = Vec::new();
+        let mut last = line;
+        for (i, l) in self.source_lines.iter().enumerate().skip(line) {
+            if !l.trim().is_empty() && indent(l) <= key_indent {
+                break;
+            }
+            block.push(l);
+            last = i + 1;
+        }
+        while block.last().is_some_and(|l| l.trim().is_empty()) {
+            block.pop();
+        }
+        let common = block.iter().filter(|l| !l.trim().is_empty()).map(|l| indent(l)).min().unwrap_or(0);
+        let text: String = block
+            .iter()
+            .map(|l| if l.len() >= common { &l[common..] } else { "" })
+            .collect::<Vec<&str>>()
+            .join("\n")
+            .trim_end()
+            .to_string();
+        // On saute les tokens du bloc (le lexer a pu les découper n'importe comment)
+        while self.line() <= last && *self.peek() != Token::EOF {
+            self.advance();
+        }
+        Some(PropValue::Block(text))
+    }
+
     /// Si `key` est une propriété « reste de la ligne » et que le source est connu :
     /// renvoie le texte après le `:` et saute les tokens de cette ligne.
     fn raw_line_value(&mut self, key: &str, line: usize) -> Option<PropValue> {
@@ -293,6 +328,8 @@ impl Parser {
 
                 if key == "extends" {
                     extends = Some(self.expect_ident()?);
+                } else if let Some(v) = self.raw_block_value(line) {
+                    properties.insert(key, v);
                 } else if let Some(v) = self.raw_line_value(&key, line) {
                     properties.insert(key, v);
                 } else {
@@ -324,10 +361,14 @@ impl Parser {
                 prop_lines.insert(key.clone(), line);
                 self.advance();
                 self.expect(&Token::Colon)?;
-                match self.raw_line_value(&key, line) {
-                    Some(v) => properties.insert(key, v),
-                    None => properties.insert(key, self.parse_prop_value()?),
+                let value = match self.raw_block_value(line) {
+                    Some(v) => v,
+                    None => match self.raw_line_value(&key, line) {
+                        Some(v) => v,
+                        None => self.parse_prop_value()?,
+                    },
                 };
+                properties.insert(key, value);
             } else {
                 self.advance();
             }
@@ -836,6 +877,25 @@ deffigure p =
         let f = &doc.figures[0];
         assert_eq!(f.properties["expr"], PropValue::Single("x^2 + 2x - 1".into()));
         assert_eq!(f.properties["axes"], PropValue::Single("a".into())); // la ligne suivante est intacte
+    }
+
+    #[test]
+    fn bloc_multiligne() {
+        let src = "[figures]
+deffigure t =
+    type   : table
+    rows   : |
+        0 | 1  | 0
+        1 | e  | e
+
+    header : [x, f(x)]
+deffigure u =
+    type : text";
+        let doc = parse_with_source(tokenize(src), src).unwrap();
+        let f = &doc.figures[0];
+        assert_eq!(f.properties["rows"], PropValue::Block("0 | 1  | 0\n1 | e  | e".into()));
+        assert!(f.properties.contains_key("header"));
+        assert_eq!(doc.figures.len(), 2);
     }
 
     #[test]

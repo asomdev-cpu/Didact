@@ -12,5 +12,10 @@ path = "src/main.rs"
 tiny-skia = "0.12"
 # Fenêtre + contrôles (pause, barre de lecture)
 eframe = "0.37"
-# Lecture des polices (contours des lettres) pour le texte
-ttf-parser = "0.25"
+# Composition du texte et du LaTeX : LaTeX → Typst (mitex), composé par Typst, exporté en SVG
+typst = "0.15"
+typst-layout = "0.15"
+typst-svg = "0.15"
+mitex = "0.2"
+# Lecture du SVG produit par Typst (contours des lettres et traits)
+usvg = "0.49"
