@@ -8,7 +8,7 @@
 //! - multiplication implicite : `2x`, `3(x+1)`, `2sin(x)`, `(x+1)(x-1)` ;
 //! - fonctions : sin cos tan asin acos atan sinh cosh tanh exp ln log sqrt abs floor ceil.
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum Expr {
     Num(f64),
     X,

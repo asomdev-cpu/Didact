@@ -1,11 +1,4 @@
-mod lexer;
-mod ast;
-mod parser;
-mod validator;
-mod resolver;
-mod runtime;
-mod renderer;
-mod output;
+use didact::{lexer, output, parser, renderer, resolver, runtime, validator};
 
 use std::env;
 use std::fs;

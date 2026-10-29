@@ -92,15 +92,6 @@ impl Parser {
         self.tokens[self.pos].line
     }
 
-    /// Regarde le token suivant sans avancer
-    fn peek_next(&self) -> &Token {
-        if self.pos + 1 < self.tokens.len() {
-            &self.tokens[self.pos + 1].token
-        } else {
-            &Token::EOF
-        }
-    }
-
     /// Avance et retourne le token courant
     fn advance(&mut self) -> Token {
         let tok = self.tokens[self.pos].token.clone();

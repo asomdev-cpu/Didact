@@ -3,6 +3,14 @@ name = "didact"
 version = "0.1.0"
 edition = "2021"
 
+# Bibliothèque : tout le moteur (parser → rendu). Utilisée par le programme natif
+# et compilée en WebAssembly pour le web (cdylib).
+[lib]
+name = "didact"
+path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+# Programme natif : fenêtre, export PNG, résumé
 [[bin]]
 name = "didact"
 path = "src/main.rs"
@@ -10,12 +18,16 @@ path = "src/main.rs"
 [dependencies]
 # Dessin vectoriel de la scène (formes, anticrénelage, export PNG)
 tiny-skia = "0.12"
-# Fenêtre + contrôles (pause, barre de lecture)
-eframe = "0.37"
 # Composition du texte et du LaTeX : LaTeX → Typst (mitex), composé par Typst, exporté en SVG
 typst = "0.15"
 typst-layout = "0.15"
 typst-svg = "0.15"
 mitex = "0.2"
 # Lecture du SVG produit par Typst (contours des lettres et traits)
-usvg = "0.49"
+usvg = { version = "0.49", default-features = false }
+# Interface JavaScript (WebAssembly) ; sans effet en natif
+wasm-bindgen = "=0.2.129"
+
+# Natif seulement : fenêtre + contrôles (pause, barre de lecture)
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+eframe = "0.37"

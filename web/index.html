@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Didact — démo web</title>
+  <script type="module" src="didact.js"></script>
+  <style>
+    body { margin: 0; padding: 24px 16px; background: #f4f4f5; color: #18181b; font-family: system-ui, sans-serif; }
+    main { max-width: 960px; margin: 0 auto; }
+    h1 { font-size: 26px; margin: 0 0 4px; }
+    p { color: #52525b; line-height: 1.5; }
+    didact-player { margin: 16px 0 32px; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 12px rgba(0,0,0,.12); }
+    code { background: #e4e4e7; padding: 1px 5px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Didact dans une page web</h1>
+  <p>Chaque lecteur ci-dessous est une balise <code>&lt;didact-player&gt;</code> : le fichier <code>.dct</code> (quelques ko de texte) est rendu directement dans le navigateur.</p>
+
+  <h2>Les séries de Taylor</h2>
+  <didact-player src="../taylor_sinus.dct" lang="FR"></didact-player>
+
+  <h2>Un fichier écrit directement dans la page</h2>
+  <didact-player autoplay="false">
+    <script type="text/didact">
+[config]
+languages    : [FR, EN]
+default_lang : FR
+
+[figures]
+
+deffigure titre =
+    type    : text
+    content : "Le théorème de Pythagore : $a^2 + b^2 = c^2$"
+    pos     : (50%, 88%)
+    font    : 44px
+
+deffigure triangle =
+    type   : polygon
+    points : [(30%, 25%), (62%, 25%), (30%, 70%)]
+    fill   : #DBEAFE
+    color  : #1E3A8A
+    stroke : 3px
+
+deffigure a =
+    type    : text
+    content : "$a$"
+    pos     : (27%, 47%)
+    font    : 40px
+
+deffigure b =
+    type    : text
+    content : "$b$"
+    pos     : (46%, 20%)
+    font    : 40px
+
+deffigure c =
+    type    : text
+    content : "$c$"
+    pos     : (48.5%, 50%)
+    font    : 40px
+    color   : #DC2626
+
+[timeline]
+
+0.000 => {
+    start   : [titre fadein(1s)]
+    comment : ["Un triangle rectangle", "A right triangle"]
+}
+
+1.000 => {
+    start   : [triangle grow(1s)]
+}
+
+2.200 => {
+    start   : [a fadein(0.5s), b fadein(0.5s), c fadein(0.5s)]
+    comment : ["c est l'hypoténuse", "c is the hypotenuse"]
+}
+    </script>
+  </didact-player>
+</main>
+</body>
+</html>

@@ -31,7 +31,7 @@ Ce document garde la trace des décisions importantes prises pendant le dévelop
 | Runtime | ✅ Visibilité, commentaires, audio, animations, easing | `src/runtime/` |
 | Renderer | ✅ tous les types de la spec sauf `raw.matplotlib` | `src/renderer/` |
 | Output natif | ✅ Fenêtre + export PNG d'une frame | `src/output/window.rs` |
-| Output WASM | 🔲 Pas commencé | - |
+| Output WASM | ✅ Lecteur `<didact-player>` fonctionnel dans le navigateur | `src/web.rs`, `web/` |
 
 ### Métriques
 
@@ -80,9 +80,9 @@ L'objectif est d'arriver à un `cargo run -- exemple.dct` qui ouvre une fenêtre
 
 ### Phase 4 — Embarquabilité
 
-15. **Compilation WebAssembly**
-16. **API JavaScript pour l'embarquement**
-17. **Documentation web**
+15. ~~**Compilation WebAssembly**~~ ✅ (`web/build.ps1`, nécessite rustup)
+16. ~~**API JavaScript pour l'embarquement**~~ ✅ (`Player` + balise `<didact-player>`)
+17. ~~**Documentation web**~~ ✅ (`Readme/WEB.md`, `web/index.html`)
 
 ### Phase 5 — Audio et multilingue
 
@@ -362,6 +362,18 @@ Cette section liste les choix importants qui ont été tranchés. Chaque décisi
 - Les formules contiennent des espaces, `^`, `\`, `{}` que le lexer découpait (`x^2 + 1` perdait `+ 1`)
 - Garde la syntaxe de la spec (`expr : sin(x)`, `expr : \int_0^\infty ...`)
 
+### Web : balise `<didact-player>`, rendu en pixels dans un canvas
+
+**Décision :**
+- Le projet est une bibliothèque (`src/lib.rs`) utilisée par le programme natif et compilée en WebAssembly ; la fenêtre (eframe) n'existe qu'en natif.
+- Côté web, le même backend tiny-skia dessine l'image ; JavaScript la copie dans un `<canvas>`. Pas de second backend « Canvas HTML5 ».
+- Intégration par une balise `<didact-player src="cours.dct">` (le nom doit contenir un tiret : règle des éléments HTML personnalisés, `<didact>` n'est pas possible).
+
+**Raisonnement :**
+- Rendu identique au pixel près entre desktop, export PNG et web
+- Un seul code de dessin à maintenir
+- Une balise suffit à intégrer une animation, sans écrire de JavaScript
+
 ### Licence MIT
 
 **Décision :** Le projet est sous licence MIT.
@@ -486,6 +498,7 @@ Idées qui ont été discutées et rejetées explicitement.
 - `width` → `stroke` pour l'épaisseur du trait (`width` réservé aux `rect`)
 - Runtime timeline : instantanés après chaque bloc, état à t par recherche dichotomique (avancer/reculer gratuit), commentaires dans la langue choisie, audio
 - CLI : `--lang XX`, `--debug` (tokens et AST seulement sur demande), `--summary`, `--png <t> <fichier>`
+- Phase 4 : bibliothèque + programme ; module `web` (wasm-bindgen : `Player`) ; lecteur `web/didact.js` (`<didact-player>`, contrôles, sous-titres, langues, erreurs) ; `web/build.ps1` ; guide `Readme/WEB.md`
 - LaTeX complet via MiTeX + Typst : `text` avec `$...$`, `equation`, `latex`, `raw.latex`, `table` ; erreurs LaTeX signalées avec le numéro de ligne
 - Blocs `|` multilignes lus depuis le source (retours à la ligne et `|` conservés)
 - `axes` (boîte from/to, échelle égale, graduations, grille), `plot` (évaluateur d'expressions), `scatter`, `histogram`, `repère(x, y)`

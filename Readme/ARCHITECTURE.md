@@ -286,28 +286,20 @@ Produit un exécutable Windows/Mac/Linux. Quand on le lance :
 
 ### 6.2 Mode WebAssembly (web)
 
-```bash
-cargo build --target wasm32-unknown-unknown --release
+```
+.\web\build.ps1     # cargo build --lib --target wasm32-unknown-unknown + wasm-bindgen
 ```
 
-Produit un fichier `.wasm` qui peut être chargé dans n'importe quelle page web :
+Produit `web/pkg/didact_bg.wasm` (le moteur) et `web/pkg/didact.js` (le lien avec JavaScript). Le lecteur `web/didact.js` définit la balise :
 
 ```html
-<script type="module">
-    import init from './didact.js';
-    init().then(didact => {
-        didact.load('cours.dct');
-        didact.attach(document.getElementById('didact-viewer'));
-    });
-</script>
-<div id="didact-viewer"></div>
+<script type="module" src="didact.js"></script>
+<didact-player src="cours.dct" lang="FR"></didact-player>
 ```
 
-Ou via une balise custom (plus tard) :
-
-```html
-<didact src="cours.dct" lang="FR" />
-```
+- `src/web.rs` expose `Player` (wasm-bindgen) : charger un source, durée, langues, `render(t, w, h)` → pixels RGBA, sous-titre, avertissements.
+- `web/didact.js` : boucle `requestAnimationFrame`, canvas à la taille réelle (densité d'écran ≤ 2), ne redessine pas en pause, contrôles et sous-titres en HTML.
+- Guide complet : `Readme/WEB.md`.
 
 ### 6.3 Code partagé entre les deux cibles
 
@@ -321,7 +313,7 @@ Ou via une balise custom (plus tard) :
 
 **Spécifique à chaque cible :**
 - Mode natif : image tiny-skia affichée dans une fenêtre egui
-- Mode WASM : sortie sur Canvas HTML5 via `web-sys`
+- Mode WASM : image tiny-skia copiée dans un `<canvas>` par `web/didact.js`
 
 L'abstraction se fait via un trait `RenderBackend` :
 

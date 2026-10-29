@@ -1,0 +1,251 @@
+# ─────────────────────────────────────────────
+#  Approcher sin(x) par des polynômes (séries de Taylor)
+#  Mini-leçon d'environ 40 secondes
+#  didact taylor_sinus.dct            → fenêtre
+#  didact taylor_sinus.dct --lang EN  → commentaires en anglais
+# ─────────────────────────────────────────────
+
+[config]
+window       : [16:9]
+background   : white
+languages    : [FR, EN]
+default_lang : FR
+
+[figures]
+
+# --- Styles ---
+
+defstyle courbe =
+    stroke : 4px
+
+defstyle formule =
+    size : 40px
+
+# --- Titre ---
+
+deffigure titre =
+    type    : text
+    content : "Approcher $\sin(x)$ par des polynômes"
+    pos     : (50%, 55%)
+    font    : 72px
+
+deffigure sous_titre =
+    type    : text
+    content : "Les séries de Taylor"
+    pos     : (50%, 42%)
+    font    : 44px
+    color   : #6B7280
+
+# --- Repère ---
+
+deffigure repere =
+    type   : axes
+    from   : (2%, 9%)
+    to     : (66%, 93%)
+    xrange : [-6.5, 6.5]
+    yrange : [-3, 3]
+    grid   : true
+    ticks  : true
+    xlabel : "$x$"
+    color  : #374151
+
+# --- La fonction à approcher ---
+
+deffigure sinus =
+    type  : plot
+    expr  : sin(x)
+    axes  : repere
+    color : #2563EB
+    style : courbe
+    layer : 1
+
+deffigure nom_sinus =
+    type    : text
+    content : "$\sin(x)$"
+    pos     : repere(4.4, 1.4)
+    font    : 36px
+    color   : #2563EB
+
+# --- Les polynômes de Taylor (en 0) ---
+
+deffigure t1 =
+    type  : plot
+    expr  : x
+    axes  : repere
+    color : #DC2626
+    style : courbe
+    layer : 2
+
+deffigure t3 =
+    type  : plot
+    expr  : x - x^3/6
+    axes  : repere
+    color : #EA580C
+    style : courbe
+    layer : 2
+
+deffigure t5 =
+    type  : plot
+    expr  : x - x^3/6 + x^5/120
+    axes  : repere
+    color : #16A34A
+    style : courbe
+    layer : 2
+
+deffigure t7 =
+    type  : plot
+    expr  : x - x^3/6 + x^5/120 - x^7/5040
+    axes  : repere
+    color : #9333EA
+    style : courbe
+    layer : 2
+
+# --- Panneau de droite : les formules ---
+
+deffigure idee =
+    type    : text
+    content : "Idée : remplacer $\sin$ par
+un polynôme qui lui ressemble
+autour de $x = 0$"
+    pos     : (83.5%, 74%)
+    font    : 34px
+
+deffigure eq_t1 =
+    type  : equation
+    expr  : T_1(x) = x
+    pos   : (83.5%, 50%)
+    style : formule
+    color : #DC2626
+
+deffigure eq_t3 =
+    type  : equation
+    expr  : T_3(x) = x - \frac{x^3}{3!}
+    pos   : (83.5%, 50%)
+    style : formule
+    color : #EA580C
+
+deffigure eq_t5 =
+    type  : equation
+    expr  : T_5(x) = x - \frac{x^3}{3!} + \frac{x^5}{5!}
+    pos   : (83.5%, 50%)
+    style : formule
+    color : #16A34A
+
+deffigure eq_t7 =
+    type  : equation
+    expr  : T_7(x) = x - \frac{x^3}{3!} + \frac{x^5}{5!} - \frac{x^7}{7!}
+    pos   : (83.5%, 50%)
+    size  : 34px
+    color : #9333EA
+
+deffigure remarque =
+    type    : text
+    content : "Chaque terme ajouté
+étend la zone où l'approximation
+est bonne"
+    pos     : (83.5%, 28%)
+    font    : 30px
+    color   : #4B5563
+
+# --- Conclusion ---
+
+deffigure serie =
+    type  : equation
+    expr  : \sin(x) = \sum_{n=0}^{\infty} \frac{(-1)^n}{(2n+1)!} \, x^{2n+1}
+    pos   : (83.5%, 50%)
+    size  : 40px
+    color : #1E3A8A
+
+deffigure cadre =
+    type   : rect
+    pos    : (83.5%, 50%)
+    anchor : center
+    width  : 52%
+    height : 16%
+    color  : #1E3A8A
+    stroke : 3px
+
+# --- Un point qui parcourt la courbe ---
+
+deffigure point =
+    type   : circle
+    center : repere(-6.5, 0)
+    radius : 1.1%
+    fill   : #2563EB
+    color  : white
+    stroke : 2px
+    layer  : 3
+
+[timeline]
+
+# Titre
+0.000 => {
+    start   : [titre fadein(1s), sous_titre fadein(1.5s)]
+}
+
+3.000 => {
+    end     : [titre fadeout(0.8s), sous_titre fadeout(0.8s)]
+}
+
+# Le repère et la fonction
+4.000 => {
+    start   : [repere fadein(1s)]
+    comment : ["Voici la fonction sinus.", "Here is the sine function."]
+}
+
+5.000 => {
+    start   : [sinus fadein(1.5s), nom_sinus fadein(1.5s), point grow(0.5s)]
+    anim    : [point follow(path=sinus, 4s, ease=linear)]
+}
+
+7.000 => {
+    start   : [idee fadein(1s)]
+    comment : ["Peut-on la remplacer par un polynôme, plus simple à calculer ?", "Can we replace it with a polynomial, which is easier to compute?"]
+}
+
+9.500 => {
+    end     : [point fadeout(0.5s)]
+}
+
+# Ordre 1
+11.000 => {
+    end     : [idee fadeout(0.8s)]
+    start   : [t1 fadein(1s), eq_t1 fadein(1s)]
+    comment : ["Ordre 1 : près de 0, sin(x) ressemble à la droite y = x.", "Order 1: near 0, sin(x) looks like the line y = x."]
+}
+
+# Ordre 3
+16.000 => {
+    end     : [t1 fadeout(1s), eq_t1 fadeout(0.6s)]
+    start   : [t3 fadein(1s), eq_t3 fadein(1s)]
+    comment : ["Ordre 3 : on corrige avec un terme en x³.", "Order 3: we correct with an x³ term."]
+}
+
+# Ordre 5
+21.000 => {
+    end     : [t3 fadeout(1s), eq_t3 fadeout(0.6s)]
+    start   : [t5 fadein(1s), eq_t5 fadein(1s), remarque fadein(1s)]
+    comment : ["Ordre 5 : l'approximation tient encore plus loin.", "Order 5: the approximation holds even further."]
+}
+
+# Ordre 7
+26.000 => {
+    end     : [t5 fadeout(1s), eq_t5 fadeout(0.6s)]
+    start   : [t7 fadein(1s), eq_t7 fadein(1s)]
+    comment : ["Ordre 7 : la courbe violette colle à sinus sur presque tout l'écran.", "Order 7: the purple curve hugs the sine almost everywhere on screen."]
+}
+
+# Conclusion
+32.000 => {
+    end     : [t7 fadeout(1s), eq_t7 fadeout(0.6s), remarque fadeout(0.6s)]
+    start   : [serie fadein(1.2s), cadre grow(0.8s)]
+    comment : ["En continuant à l'infini, on obtient exactement sin(x) : c'est sa série de Taylor.", "Going on forever gives exactly sin(x): this is its Taylor series."]
+}
+
+34.000 => {
+    anim    : [serie [scale(1.12, 0.6s), scale(1, 0.6s)]]
+}
+
+40.000 => {
+    end     : [serie fadeout(1s), cadre fadeout(1s), sinus fadeout(1s), nom_sinus fadeout(1s), repere fadeout(1s)]
+}
