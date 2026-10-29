@@ -1,0 +1,554 @@
+# ═════════════════════════════════════════════════════════════
+#  DÉMO COMPLÈTE — tout ce que Didact sait faire, en ~70 secondes
+#
+#  didact demo_complete.dct              → fenêtre
+#  didact demo_complete.dct --lang EN    → sous-titres en anglais
+#  web : <didact-player src="demo_complete.dct">
+#
+#  1. Formes et styles          (0 → 10 s)
+#  2. Animations                (11 → 22 s)
+#  3. Références dynamiques     (22 → 34 s)
+#  4. Repères et graphes        (34 → 50 s)
+#  5. Texte et LaTeX            (50 → 63 s)
+#  6. Fin : destroy             (64 → 69 s)
+# ═════════════════════════════════════════════════════════════
+
+[config]
+window       : [16:9]
+background   : white
+languages    : [FR, EN]
+default_lang : FR
+
+[figures]
+
+# ─── Styles (avec héritage) ──────────────────────────────────
+
+defstyle contour =
+    color  : #1E293B
+    stroke : 3px
+
+defstyle contour_epais =
+    extends : contour
+    stroke  : 6px
+
+defstyle titre_chapitre =
+    font  : 44px
+    color : #111827
+
+# ═════════════════════════════════════════════════════════════
+#  1. FORMES ET STYLES
+# ═════════════════════════════════════════════════════════════
+
+deffigure t1 =
+    type    : text
+    content : "1 · Formes et styles"
+    pos     : (50%, 93%)
+    style   : titre_chapitre
+
+deffigure f_rect =
+    type   : rect
+    pos    : (6%, 50%)
+    width  : 24%
+    height : 24%
+    fill   : #3B82F6
+    style  : contour
+
+deffigure f_cercle =
+    type    : circle
+    center  : (38%, 63%)
+    radius  : 12%
+    fill    : orange
+    opacity : 0.85
+    style   : contour
+
+deffigure f_poly =
+    type   : polygon
+    points : [(55%, 50%), (75%, 50%), (65%, 78%)]
+    fill   : #22C55E
+    style  : contour_epais
+
+# Halo dessous (layer -1), étoile dessus (layer 1)
+deffigure f_halo =
+    type   : circle
+    center : (88%, 63%)
+    radius : 12%
+    fill   : #FEF3C7
+    color  : none
+    layer  : -1
+
+deffigure f_etoile =
+    type   : star
+    points : 5
+    pos    : (88%, 63%)
+    size   : 9%
+    fill   : gold
+    color  : #A16207
+    stroke : 2px
+    layer  : 1
+
+deffigure f_fleche =
+    type  : line
+    from  : (6%, 30%)
+    to    : (42%, 30%)
+    arrow : end
+    style : contour
+
+deffigure f_double =
+    type   : line
+    from   : (6%, 18%)
+    to     : (42%, 18%)
+    arrow  : both
+    color  : red
+    stroke : 2px
+
+deffigure f_arc =
+    type       : arc
+    center     : (58%, 18%)
+    radius     : 13%
+    from_angle : 0
+    to_angle   : 135
+    arrow      : end
+    color      : purple
+    stroke     : 3px
+
+# Rotation fixe : rotate : 30 (degrés, sens trigonométrique)
+deffigure f_tourne =
+    type   : rect
+    pos    : (86%, 25%)
+    anchor : center
+    width  : 12%
+    height : 12%
+    fill   : #F472B6
+    color  : none
+    rotate : 30
+
+# ═════════════════════════════════════════════════════════════
+#  2. ANIMATIONS
+# ═════════════════════════════════════════════════════════════
+
+deffigure t2 =
+    type    : text
+    content : "2 · Animations"
+    pos     : (50%, 93%)
+    style   : titre_chapitre
+
+deffigure a_carre =
+    type   : rect
+    pos    : (20%, 58%)
+    anchor : center
+    width  : 16%
+    height : 16%
+    fill   : #3B82F6
+    style  : contour
+
+deffigure a_rond =
+    type   : circle
+    center : (50%, 58%)
+    radius : 8%
+    fill   : #F59E0B
+    style  : contour
+
+deffigure a_texte =
+    type    : text
+    content : "Bonjour !"
+    pos     : (80%, 58%)
+    font    : 64px
+
+deffigure a_piste =
+    type   : line
+    from   : (10%, 24%)
+    to     : (90%, 24%)
+    color  : #CBD5E1
+    stroke : 4px
+
+deffigure a_bille =
+    type   : circle
+    center : (10%, 24%)
+    radius : 2.2%
+    fill   : #DC2626
+    color  : none
+    layer  : 1
+
+# ═════════════════════════════════════════════════════════════
+#  3. RÉFÉRENCES DYNAMIQUES
+# ═════════════════════════════════════════════════════════════
+
+deffigure t3 =
+    type    : text
+    content : "3 · Références dynamiques"
+    pos     : (50%, 93%)
+    style   : titre_chapitre
+
+deffigure r_origine =
+    type   : circle
+    center : (30%, 28%)
+    radius : 1%
+    fill   : #1E293B
+    style  : contour
+
+deffigure r_axe =
+    type  : line
+    from  : (30%, 28%)
+    to    : (85%, 28%)
+    arrow : end
+    style : contour
+
+deffigure r_point =
+    type   : circle
+    center : (65%, 28%)
+    radius : 1.6%
+    fill   : #2563EB
+    color  : white
+    stroke : 2px
+    layer  : 2
+
+# from / to recalculés à chaque image
+deffigure r_rayon =
+    type   : line
+    from   : center(r_origine)
+    to     : center(r_point)
+    color  : #2563EB
+    stroke : 3px
+
+# L'arc va de 0 à l'angle du rayon
+deffigure r_arc =
+    type       : arc
+    center     : center(r_origine)
+    radius     : 14%
+    from_angle : 0
+    to_angle   : angle(r_rayon)
+    arrow      : end
+    color      : purple
+    stroke     : 3px
+
+# L'étiquette reste collée à l'extérieur de l'arc
+deffigure r_label =
+    type    : text
+    content : "$\theta$"
+    pos     : offset(r_arc, 4%)
+    font    : 44px
+    color   : purple
+
+# ═════════════════════════════════════════════════════════════
+#  4. REPÈRES ET GRAPHES
+# ═════════════════════════════════════════════════════════════
+
+deffigure t4 =
+    type    : text
+    content : "4 · Repères et graphes"
+    pos     : (50%, 93%)
+    style   : titre_chapitre
+
+# Le repère s'inscrit dans la boîte from / to, même échelle en x et y
+deffigure g_repere =
+    type   : axes
+    from   : (3%, 8%)
+    to     : (63%, 86%)
+    xrange : [-4, 4]
+    yrange : [-1.5, 2.5]
+    grid   : true
+    ticks  : true
+    xlabel : "$x$"
+    ylabel : "$y$"
+    color  : #374151
+
+deffigure g_sin =
+    type   : plot
+    expr   : sin(x)
+    axes   : g_repere
+    color  : #2563EB
+    stroke : 3px
+
+deffigure g_parab =
+    type   : plot
+    expr   : x^2/4 - 1
+    axes   : g_repere
+    color  : #16A34A
+    stroke : 3px
+
+deffigure g_nom_sin =
+    type    : text
+    content : "$\sin(x)$"
+    pos     : g_repere(2.4, 1.2)
+    font    : 32px
+    color   : #2563EB
+
+deffigure g_nom_parab =
+    type    : text
+    content : "$\frac{x^2}{4} - 1$"
+    pos     : g_repere(-3.1, 1.8)
+    font    : 32px
+    color   : #16A34A
+
+# Placé avec les coordonnées du repère : (1, f(1)) sur la parabole
+deffigure g_point =
+    type   : circle
+    center : g_repere(1, -0.75)
+    radius : 1%
+    fill   : #16A34A
+    color  : white
+    stroke : 2px
+    layer  : 2
+
+# Suit la courbe sinus et s'oriente selon sa tangente
+deffigure g_wagon =
+    type   : rect
+    pos    : (50%, 50%)
+    anchor : center
+    width  : 4.5%
+    height : 2.6%
+    fill   : #F59E0B
+    color  : #92400E
+    stroke : 1px
+    layer  : 3
+
+deffigure g_stats =
+    type   : axes
+    from   : (67%, 46%)
+    to     : (97%, 86%)
+    xrange : [0, 10]
+    yrange : [0, 6]
+    ticks  : true
+    color  : #374151
+
+deffigure g_histo =
+    type : histogram
+    data : [1, 2, 2, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 5, 6, 6, 6, 7, 7, 8, 9]
+    bins : 8
+    axes : g_stats
+    fill : #93C5FD
+
+deffigure g_nuage =
+    type   : scatter
+    points : [(1, 1.1), (2, 1.9), (3, 3.2), (4, 3.8), (5, 5.3), (6, 4.5), (7, 2.4), (8, 1.6)]
+    axes   : g_stats
+    color  : #B91C1C
+    size   : 6px
+
+# ═════════════════════════════════════════════════════════════
+#  5. TEXTE ET LaTeX
+# ═════════════════════════════════════════════════════════════
+
+deffigure t5 =
+    type    : text
+    content : "5 · Texte et LaTeX"
+    pos     : (50%, 93%)
+    style   : titre_chapitre
+
+# Plusieurs lignes : un vrai retour à la ligne dans la chaîne
+deffigure l_texte =
+    type    : text
+    content : "Du texte sur plusieurs lignes,
+avec des maths en ligne : $\frac{a}{b}$, $\sqrt{2}$, $e^{i\pi} + 1 = 0$"
+    pos     : (50%, 78%)
+    font    : 34px
+
+# Formule seule : LaTeX lu jusqu'à la fin de la ligne
+deffigure l_integrale =
+    type  : equation
+    expr  : \int_0^1 x^n \, dx = \frac{1}{n+1}
+    pos   : (27%, 52%)
+    size  : 46px
+    color : #1E3A8A
+
+deffigure l_matrice =
+    type  : equation
+    expr  : A = \begin{pmatrix} 1 & 2 \\ 3 & 4 \end{pmatrix}, \quad \det A = -2
+    pos   : (27%, 24%)
+    size  : 38px
+
+# Bloc LaTeX sur plusieurs lignes
+deffigure l_bloc =
+    type    : latex
+    pos     : (72%, 52%)
+    font    : 46px
+    content : |
+        \begin{aligned}
+        (a+b)^2 &= a^2 + 2ab + b^2 \\
+        (a-b)^2 &= a^2 - 2ab + b^2
+        \end{aligned}
+
+# Tableau : cases séparées par |, maths entre $...$
+deffigure l_table =
+    type   : table
+    pos    : (72%, 22%)
+    font   : 38px
+    header : ["$n$", "$n!$", "$2^n$"]
+    rows   : |
+        $1$ | $1$   | $2$
+        $2$ | $2$   | $4$
+        $3$ | $6$   | $8$
+        $4$ | $24$  | $16$
+
+# ═════════════════════════════════════════════════════════════
+#  6. FIN
+# ═════════════════════════════════════════════════════════════
+
+deffigure fin =
+    type    : text
+    content : "Fin de la démo"
+    pos     : (50%, 55%)
+    font    : 72px
+
+deffigure fin_sous =
+    type    : text
+    content : "Tout ce que vous avez vu tient dans un fichier texte de quelques ko."
+    pos     : (50%, 42%)
+    font    : 32px
+    color   : #6B7280
+
+[timeline]
+
+# ─── 1. Formes et styles ─────────────────────────────────────
+
+0.000 => {
+    start   : [t1 fadein(0.6s), f_rect fadein(0.8s), f_fleche fadein(0.8s)]
+    comment : ["Rectangle, ligne fléchée… avec des styles réutilisables.", "Rectangle, arrowed line… with reusable styles."]
+}
+
+1.500 => {
+    start   : [f_cercle grow(0.8s), f_poly fadein(0.8s)]
+    comment : ["Cercle transparent (opacity), polygone avec un style hérité (extends).", "Transparent circle (opacity), polygon with an inherited style (extends)."]
+}
+
+3.500 => {
+    start   : [f_halo fadein(0.6s), f_etoile grow(0.8s)]
+    comment : ["layer : l'étoile est dessinée au-dessus de son halo.", "layer: the star is drawn on top of its halo."]
+}
+
+5.500 => {
+    start   : [f_double fadein(0.6s), f_arc fadein(0.6s), f_tourne fadein(0.6s)]
+    comment : ["Double flèche, arc fléché, carré tourné de 30° (rotate).", "Double arrow, arrowed arc, square rotated by 30° (rotate)."]
+}
+
+9.500 => {
+    end : [t1 fadeout(0.6s), f_rect fadeout(0.6s), f_cercle fadeout(0.6s), f_poly fadeout(0.6s), f_halo fadeout(0.6s), f_etoile fadeout(0.6s), f_fleche fadeout(0.6s), f_double fadeout(0.6s), f_arc fadeout(0.6s), f_tourne fadeout(0.6s)]
+}
+
+# ─── 2. Animations ───────────────────────────────────────────
+
+10.500 => {
+    start   : [t2 fadein(0.6s), a_carre fadein(1s), a_rond grow(1s), a_texte fadein(1s)]
+    comment : ["Animations d'entrée : fadein, grow.", "Entrance animations: fadein, grow."]
+}
+
+12.000 => {
+    anim    : [a_carre [rotate(90, 1s), scale(1.3, 0.8s), color(to=#DC2626, 0.8s)]]
+    comment : ["Animations enchaînées : rotation, puis taille, puis couleur.", "Chained animations: rotation, then size, then color."]
+}
+
+13.000 => {
+    start   : [a_piste fadein(0.5s), a_bille grow(0.4s)]
+    anim    : [a_bille move(to=(90%, 24%), 3s)]
+}
+
+15.000 => {
+    comment : ["move : la bille démarre et s'arrête en douceur (ease=smooth, par défaut).", "move: the ball starts and stops smoothly (ease=smooth, the default)."]
+}
+
+16.500 => {
+    anim    : [a_bille move(to=(10%, 24%), 2s, ease=linear), a_rond [scale(1.6, 0.6s, ease=ease_out), scale(1, 0.6s, ease=ease_in)], a_texte [move(to=(80%, 78%), 1s), rotate(-15, 0.5s)]]
+    comment : ["Retour à vitesse constante (ease=linear) ; plusieurs animations en parallèle.", "Back at constant speed (ease=linear); several animations in parallel."]
+}
+
+19.500 => {
+    end     : [a_carre shrink(1s), a_rond fadeout(1s), a_texte fadeout(1s)]
+    comment : ["Animations de sortie : shrink, fadeout.", "Exit animations: shrink, fadeout."]
+}
+
+21.000 => {
+    end : [t2 fadeout(0.6s), a_piste fadeout(0.6s), a_bille shrink(0.6s)]
+}
+
+# ─── 3. Références dynamiques ────────────────────────────────
+
+22.000 => {
+    start   : [t3 fadein(0.6s), r_origine fadein(0.5s), r_axe fadein(0.5s), r_point grow(0.5s)]
+    comment : ["Une figure peut dépendre d'une autre : center(), angle(), offset().", "A figure can depend on another: center(), angle(), offset()."]
+}
+
+23.500 => {
+    start : [r_rayon fadein(0.6s), r_arc fadein(0.6s), r_label fadein(0.6s)]
+}
+
+25.000 => {
+    anim    : [r_point [move(to=(50%, 75%), 2.5s), move(to=(18%, 62%), 2s), move(to=(75%, 48%), 2s)]]
+    comment : ["Le rayon, l'arc et l'étiquette θ suivent le point, image après image.", "The ray, the arc and the θ label follow the point, frame after frame."]
+}
+
+32.500 => {
+    end : [t3 fadeout(0.6s), r_origine fadeout(0.6s), r_axe fadeout(0.6s), r_point fadeout(0.6s), r_rayon fadeout(0.6s), r_arc fadeout(0.6s), r_label fadeout(0.6s)]
+}
+
+# ─── 4. Repères et graphes ───────────────────────────────────
+
+33.500 => {
+    start   : [t4 fadein(0.6s), g_repere fadein(1s)]
+    comment : ["Un repère gradué avec grille, à la même échelle en x et en y.", "A graded coordinate system with a grid, same scale in x and y."]
+}
+
+34.500 => {
+    start : [g_sin fadein(1s), g_nom_sin fadein(1s)]
+}
+
+36.000 => {
+    start   : [g_parab fadein(1s), g_nom_parab fadein(1s), g_point grow(0.5s)]
+    comment : ["Des formules quelconques ; g_repere(1, -0.75) place un point dans le repère.", "Any formula; g_repere(1, -0.75) places a point in the coordinate system."]
+}
+
+38.000 => {
+    start   : [g_wagon grow(0.4s)]
+    anim    : [g_wagon follow(path=g_sin, 6s, rotate=tangent, ease=linear)]
+    comment : ["follow : le rectangle parcourt la courbe en suivant sa tangente.", "follow: the rectangle travels along the curve, following its tangent."]
+}
+
+44.000 => {
+    start   : [g_stats fadein(0.8s), g_histo grow(0.8s), g_nuage fadein(1s)]
+    comment : ["Histogramme et nuage de points.", "Histogram and scatter plot."]
+}
+
+48.500 => {
+    end : [t4 fadeout(0.6s), g_repere fadeout(0.6s), g_sin fadeout(0.6s), g_parab fadeout(0.6s), g_nom_sin fadeout(0.6s), g_nom_parab fadeout(0.6s), g_point fadeout(0.6s), g_wagon fadeout(0.6s), g_stats fadeout(0.6s), g_histo fadeout(0.6s), g_nuage fadeout(0.6s)]
+}
+
+# ─── 5. Texte et LaTeX ───────────────────────────────────────
+
+49.500 => {
+    start   : [t5 fadein(0.6s), l_texte fadein(1s)]
+    comment : ["Du texte avec du vrai LaTeX en ligne.", "Text with real inline LaTeX."]
+}
+
+51.500 => {
+    start   : [l_integrale fadein(1s)]
+    comment : ["equation : une formule centrée, bornes et fractions comprises.", "equation: a centered formula, with limits and fractions."]
+}
+
+53.500 => {
+    start   : [l_bloc fadein(1s)]
+    comment : ["latex : un bloc sur plusieurs lignes, ici aligné sur le signe =.", "latex: a multi-line block, here aligned on the = sign."]
+}
+
+55.500 => {
+    start   : [l_table fadein(1s), l_matrice fadein(1s)]
+    comment : ["Un tableau et une matrice.", "A table and a matrix."]
+}
+
+57.500 => {
+    anim : [l_integrale [scale(1.15, 0.4s), scale(1, 0.4s)]]
+}
+
+61.000 => {
+    end : [t5 fadeout(0.8s), l_texte fadeout(0.8s), l_integrale fadeout(0.8s), l_matrice fadeout(0.8s), l_bloc fadeout(0.8s), l_table fadeout(0.8s)]
+}
+
+# ─── 6. Fin : destroy libère toutes les figures devenues inutiles ───
+
+63.000 => {
+    destroy : [f_rect, f_cercle, f_poly, f_halo, f_etoile, f_fleche, f_double, f_arc, f_tourne, t1, a_carre, a_rond, a_texte, a_piste, a_bille, t2, r_origine, r_axe, r_point, r_rayon, r_arc, r_label, t3, g_repere, g_sin, g_parab, g_nom_sin, g_nom_parab, g_point, g_wagon, g_stats, g_histo, g_nuage, t4, l_texte, l_integrale, l_matrice, l_bloc, l_table, t5]
+    start   : [fin fadein(1s), fin_sous fadein(1.5s)]
+    comment : ["destroy libère la mémoire des figures dont on n'a plus besoin.", "destroy frees the memory of figures that are no longer needed."]
+}
+
+68.000 => {
+    end : [fin fadeout(1s), fin_sous fadeout(1s)]
+}

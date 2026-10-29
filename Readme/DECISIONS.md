@@ -104,6 +104,23 @@ L'objectif est d'arriver à un `cargo run -- exemple.dct` qui ouvre une fenêtre
 
 ---
 
+### Améliorations prévues
+
+Améliorations techniques, sans impact sur le langage, à faire quand le besoin se présente.
+
+#### Réduire la taille du moteur web
+
+**Constat :** `web/pkg/didact_bg.wasm` pèse 37 Mo (essentiellement le compositeur LaTeX Typst). Sans importance en local, lourd pour la première visite d'un site.
+
+**Pistes :**
+1. **Compiler pour la taille** : régler le profil `release` de Cargo (`opt-level = "z"`, `lto = true`, `codegen-units = 1`). Estimation non mesurée : environ 15–20 Mo.
+2. **Passer `wasm-opt`** (outil d'optimisation WebAssembly de Binaryen) en dernière étape de `web/build.ps1` (`wasm-opt -Oz`).
+3. **Compression par le serveur** (gzip ou brotli) : le fichier tombe généralement au tiers ou moins pendant le transfert. Automatique chez la plupart des hébergeurs.
+
+**Quand :** avant de mettre Didact en ligne.
+
+---
+
 ## 4. Décisions de design
 
 Cette section liste les choix importants qui ont été tranchés. Chaque décision a un **raisonnement** documenté. Si l'on veut revenir dessus, il faut d'abord comprendre pourquoi elle a été prise.
