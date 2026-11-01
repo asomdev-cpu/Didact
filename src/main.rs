@@ -10,6 +10,15 @@ Sans option : ouvre une fenêtre et joue l'animation.
 Options :
   --png <t> <image.png>   enregistre l'image à l'instant t (en secondes), sans fenêtre
   --summary               affiche les figures et la timeline dans la console, sans fenêtre
+  --export mp4            exporte la vidéo (nécessite ffmpeg)
+      -o <fichier>          fichier de sortie (défaut : <nom>.mp4, ou <nom>_<LANG>.mp4 avec --lang)
+      --fps <n>             images par seconde (défaut : 30)
+      --height <px>         hauteur de la vidéo, ex : 720 (défaut : 1080)
+      --no-subtitles        sans les commentaires incrustés
+      --ffmpeg <chemin>     chemin de ffmpeg s'il n'est pas dans le PATH
+  --export html           page web autonome (un seul fichier, s'ouvre sans serveur)
+      -o <fichier>          fichier de sortie (défaut : <nom>.html)
+      --engine <dossier>    dossier du moteur compilé (défaut : web/pkg)
   --lang <XX>             langue des commentaires (ex: --lang EN), sinon default_lang
   --debug                 affiche aussi les tokens et l'AST complets";
 
@@ -21,6 +30,13 @@ fn main() {
     let mut debug = false;
     let mut summary = false;
     let mut png: Option<(f64, String)> = None;
+    let mut export: Option<String> = None;
+    let mut out: Option<String> = None;
+    let mut fps: u32 = 30;
+    let mut height: Option<u32> = None;
+    let mut subtitles = true;
+    let mut ffmpeg = String::from("ffmpeg");
+    let mut engine: Option<String> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -42,6 +58,40 @@ fn main() {
                     .unwrap_or_else(|| fail("--png attend un nom de fichier, ex: --png 2.5 image.png"));
                 png = Some((t, path));
                 i += 2;
+            }
+            "--export" => {
+                i += 1;
+                export = Some(args.get(i).cloned().unwrap_or_else(|| fail("--export attend un format : mp4")));
+            }
+            "-o" | "--output" => {
+                i += 1;
+                out = Some(args.get(i).cloned().unwrap_or_else(|| fail("-o attend un nom de fichier")));
+            }
+            "--fps" => {
+                i += 1;
+                fps = args
+                    .get(i)
+                    .and_then(|s| s.parse::<u32>().ok())
+                    .filter(|&f| (1..=120).contains(&f))
+                    .unwrap_or_else(|| fail("--fps attend un nombre entre 1 et 120"));
+            }
+            "--height" => {
+                i += 1;
+                height = Some(
+                    args.get(i)
+                        .and_then(|s| s.parse::<u32>().ok())
+                        .filter(|&h| (16..=4320).contains(&h))
+                        .unwrap_or_else(|| fail("--height attend une hauteur en pixels, ex : 720")),
+                );
+            }
+            "--no-subtitles" => subtitles = false,
+            "--ffmpeg" => {
+                i += 1;
+                ffmpeg = args.get(i).cloned().unwrap_or_else(|| fail("--ffmpeg attend un chemin"));
+            }
+            "--engine" => {
+                i += 1;
+                engine = Some(args.get(i).cloned().unwrap_or_else(|| fail("--engine attend un dossier")));
             }
             other if other.starts_with("--") => fail(&format!("Option inconnue '{}'\n\n{}", other, USAGE)),
             other => filename = Some(other.to_string()),
@@ -89,6 +139,41 @@ fn main() {
     // ── Sortie ──
     if summary {
         print_summary(&resolved, &timeline, lang.as_deref());
+    } else if let Some(format) = export {
+        let source = std::path::Path::new(&filename);
+        match format.as_str() {
+            "mp4" => {
+                let output = out
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| output::video::default_output(source, lang.as_deref(), "mp4"));
+                let base_dir = source.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+                let opts = output::video::VideoOptions { output, fps, height, lang, subtitles, ffmpeg, base_dir };
+                export_mp4(&resolved, &timeline, &opts);
+            }
+            "html" => {
+                let output = out
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| output::video::default_output(source, None, "html"));
+                let (w, h) = renderer::Scene::default_size(&resolved.config);
+                let opts = output::html::HtmlOptions {
+                    output,
+                    title: source.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(),
+                    lang,
+                    engine: engine.map(std::path::PathBuf::from),
+                    ratio: w as f64 / h as f64,
+                };
+                match output::html::export(&content, &opts) {
+                    Ok(r) => println!(
+                        "✓ Page autonome enregistrée dans {} ({:.1} Mo, moteur : {})",
+                        opts.output.display(),
+                        r.size as f64 / 1_000_000.0,
+                        r.engine_dir.display()
+                    ),
+                    Err(e) => fail(&format!("✗ Export HTML : {}", e)),
+                }
+            }
+            other => fail(&format!("format d'export inconnu '{}' (mp4, html)", other)),
+        }
     } else if let Some((t, path)) = png {
         export_png(&resolved, &timeline, t, &path, lang.as_deref());
     } else {
@@ -113,6 +198,47 @@ fn export_png(resolved: &resolver::ResolvedDocument, timeline: &runtime::Timelin
     }
     backend.save_png(path).unwrap_or_else(|e| fail(&format!("✗ Écriture de '{}' impossible : {}", path, e)));
     println!("✓ Image t={:.3}s enregistrée dans {} ({}×{})", t, path, w, h);
+}
+
+/// Exporte la vidéo MP4, avec une barre de progression dans la console
+fn export_mp4(resolved: &resolver::ResolvedDocument, timeline: &runtime::Timeline, opts: &output::video::VideoOptions) {
+    use std::io::Write;
+    let start = std::time::Instant::now();
+    let mut last_percent = u32::MAX;
+    let result = output::video::export(timeline, &resolved.config, opts, |done, total| {
+        let percent = done * 100 / total.max(1);
+        if percent != last_percent {
+            last_percent = percent;
+            let bar = "█".repeat((percent / 5) as usize) + &"░".repeat(20 - (percent / 5) as usize);
+            print!("\r  {} {:>3}%  image {}/{}", bar, percent, done, total);
+            let _ = std::io::stdout().flush();
+        }
+    });
+    println!();
+    match result {
+        Ok(r) => {
+            for w in &r.warnings {
+                eprintln!("Attention : {}", w);
+            }
+            let audio = match r.audio_tracks {
+                0 => String::new(),
+                1 => ", 1 piste audio".to_string(),
+                n => format!(", {} pistes audio", n),
+            };
+            println!(
+                "✓ Vidéo enregistrée dans {} ({}×{}, {:.1}s, {} images à {} fps{}) en {:.1}s",
+                opts.output.display(),
+                r.width,
+                r.height,
+                r.duration,
+                r.frames,
+                opts.fps,
+                audio,
+                start.elapsed().as_secs_f64()
+            );
+        }
+        Err(e) => fail(&format!("✗ Export MP4 : {}", e)),
+    }
 }
 
 /// Résumé texte : figures résolues et état après chaque bloc de la timeline

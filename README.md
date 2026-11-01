@@ -77,7 +77,15 @@ cargo build
 cargo run -- exemple.dct
 ```
 
-Le parser affichera l'AST du fichier. Le renderer n'est pas encore implémenté (voir DECISIONS.md pour la roadmap).
+Exports :
+
+```bash
+cargo run --release -- cours.dct --export mp4            # vidéo (nécessite ffmpeg)
+cargo run --release -- cours.dct --export mp4 --lang EN  # sous-titres anglais → cours_EN.mp4
+cargo run --release -- cours.dct --export html           # page autonome (nécessite web/pkg, voir Readme/WEB.md)
+```
+
+Toutes les options : `cargo run -- --help`.
 
 ---
 

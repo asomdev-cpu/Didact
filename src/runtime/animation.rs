@@ -47,6 +47,37 @@ impl Ease {
     }
 }
 
+/// Direction pour slidein / slideout / move(direction, distance, durée)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Dir {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+impl Dir {
+    fn parse(s: &str) -> Option<Dir> {
+        match s {
+            "left" => Some(Dir::Left),
+            "right" => Some(Dir::Right),
+            "up" | "top" => Some(Dir::Up),
+            "down" | "bottom" => Some(Dir::Down),
+            _ => None,
+        }
+    }
+
+    /// Vecteur unité en pixels (y pixel vers le bas)
+    pub fn unit(self) -> (f32, f32) {
+        match self {
+            Dir::Left => (-1.0, 0.0),
+            Dir::Right => (1.0, 0.0),
+            Dir::Up => (0.0, -1.0),
+            Dir::Down => (0.0, 1.0),
+        }
+    }
+}
+
 /// Ce que fait une animation
 #[derive(Debug, Clone, PartialEq)]
 pub enum AnimKind {
@@ -58,8 +89,20 @@ pub enum AnimKind {
     Grow,
     /// Taille 1 → 0
     Shrink,
+    /// Arrive depuis `from` (glissé court + fondu)
+    SlideIn { from: Dir },
+    /// Part vers `to` (glissé court + fondu)
+    SlideOut { to: Dir },
+    /// Se dessine progressivement (contour tracé, puis remplissage)
+    Draw,
+    /// S'écrit progressivement, morceau par morceau (texte, équations)
+    Write,
     /// Le centre de la figure va vers `to` (position en texte : "(80%,50%)" ou "center(b)")
     Move { to: String },
+    /// Se déplace de `distance` % (de la largeur pour left/right, de la hauteur pour up/down)
+    MoveBy { dir: Dir, distance: f64 },
+    /// Se transforme en la figure `to`, qui la remplace à la fin
+    Transform { to: String },
     /// La couleur du trait va vers `to`
     Color { to: String },
     /// La taille va vers ce facteur (1 = taille d'origine)
@@ -69,8 +112,24 @@ pub enum AnimKind {
     /// Le centre parcourt le contour d'une figure (de son début à sa fin, à vitesse régulière) ;
     /// `tangent` : la figure s'oriente selon la tangente
     Follow { path: String, tangent: bool },
-    /// Prévue par la spec mais pas encore implémentée (ignorée, avec un avertissement)
-    Unsupported(String),
+}
+
+impl AnimKind {
+    /// Animations d'apparition / disparition : elles ne comptent plus après un nouveau `start`
+    pub fn is_entry_or_exit(&self) -> bool {
+        matches!(
+            self,
+            AnimKind::FadeIn
+                | AnimKind::FadeOut
+                | AnimKind::Grow
+                | AnimKind::Shrink
+                | AnimKind::SlideIn { .. }
+                | AnimKind::SlideOut { .. }
+                | AnimKind::Draw
+                | AnimKind::Write
+                | AnimKind::Transform { .. }
+        )
+    }
 }
 
 /// Une animation planifiée sur la timeline
@@ -102,9 +161,6 @@ impl Anim {
     }
 }
 
-/// Animations de la spec pas encore implémentées
-const NOT_YET: &[&str] = &["slidein", "slideout", "write", "draw", "transform"];
-
 /// Lit un appel d'animation. Renvoie (ce qu'elle fait, durée, easing).
 pub fn parse_call(call: &AnimCall) -> Result<(AnimKind, f64, Ease), String> {
     let name = call.name.as_str();
@@ -127,10 +183,6 @@ pub fn parse_call(call: &AnimCall) -> Result<(AnimKind, f64, Ease), String> {
         }
     }
 
-    if NOT_YET.contains(&name) {
-        return Ok((AnimKind::Unsupported(name.to_string()), duration.unwrap_or(0.0), ease));
-    }
-
     let named_value = |key: &str| named.iter().find(|(k, _)| *k == key).map(|(_, v)| v.to_string());
 
     let kind = match name {
@@ -138,13 +190,33 @@ pub fn parse_call(call: &AnimCall) -> Result<(AnimKind, f64, Ease), String> {
         "fadeout" => AnimKind::FadeOut,
         "grow" => AnimKind::Grow,
         "shrink" => AnimKind::Shrink,
+        "draw" => AnimKind::Draw,
+        "write" => AnimKind::Write,
+        "slidein" | "slideout" => {
+            let dir = positional
+                .first()
+                .and_then(|d| Dir::parse(d))
+                .ok_or_else(|| format!("{} attend une direction (left, right, up, down), ex : {}(left, 1s)", name, name))?;
+            if name == "slidein" { AnimKind::SlideIn { from: dir } } else { AnimKind::SlideOut { to: dir } }
+        }
         "move" => match named_value("to") {
             Some(to) => AnimKind::Move { to },
-            // move(down, 3cm/s) : forme direction + vitesse, pas encore implémentée
             None if !positional.is_empty() => {
-                return Ok((AnimKind::Unsupported("move(direction, vitesse)".to_string()), duration.unwrap_or(0.0), ease))
+                const FORM: &str = "move(direction, distance, durée), ex : move(down, 20%, 2s)";
+                let dir = Dir::parse(positional[0])
+                    .ok_or_else(|| format!("direction inconnue '{}' (left, right, up, down) : {}", positional[0], FORM))?;
+                let distance = positional
+                    .get(1)
+                    .and_then(|d| d.strip_suffix('%'))
+                    .and_then(|d| d.trim().parse::<f64>().ok())
+                    .ok_or_else(|| format!("distance manquante ou invalide (en %) : {}", FORM))?;
+                AnimKind::MoveBy { dir, distance }
             }
-            None => return Err("move attend une destination : move(to=(x%, y%), durée)".to_string()),
+            None => return Err("move attend une destination : move(to=(x%, y%), durée) ou move(down, 20%, durée)".to_string()),
+        },
+        "transform" => match named_value("to") {
+            Some(to) => AnimKind::Transform { to },
+            None => return Err("transform attend une figure : transform(to=autre_figure, durée)".to_string()),
         },
         "color" => match named_value("to") {
             Some(to) => AnimKind::Color { to },
@@ -218,14 +290,26 @@ mod tests {
         );
         assert_eq!(parse_call(&call("rotate", &["-45", "2s"])).unwrap().0, AnimKind::Rotate(-45.0));
         assert!(parse_call(&call("fadein", &[])).unwrap_err().contains("durée manquante"));
-        assert!(parse_call(&call("move", &["2s"])).unwrap_err().contains("destination"));
+        assert!(parse_call(&call("move", &[])).unwrap_err().contains("destination"));
+        assert_eq!(
+            parse_call(&call("move", &["down", "20%", "2s"])).unwrap().0,
+            AnimKind::MoveBy { dir: Dir::Down, distance: 20.0 }
+        );
+        assert!(parse_call(&call("move", &["down", "3cm/s"])).unwrap_err().contains("move(down, 20%, 2s)"));
+        assert_eq!(parse_call(&call("slidein", &["left", "1s"])).unwrap().0, AnimKind::SlideIn { from: Dir::Left });
+        assert!(parse_call(&call("slideout", &["dehors", "1s"])).is_err());
+        assert_eq!(
+            parse_call(&call("transform", &["to=b", "2s"])).unwrap().0,
+            AnimKind::Transform { to: "b".into() }
+        );
         assert!(parse_call(&call("fadein", &["1s", "ease=rapide"])).is_err());
         assert_eq!(
             parse_call(&call("follow", &["path=c", "10s", "rotate=tangent"])).unwrap().0,
             AnimKind::Follow { path: "c".into(), tangent: true }
         );
         assert!(parse_call(&call("follow", &["path=c", "speed=1cm/s"])).unwrap_err().contains("durée"));
-        assert_eq!(parse_call(&call("draw", &["1s"])).unwrap().0, AnimKind::Unsupported("draw".into()));
+        assert_eq!(parse_call(&call("draw", &["1s"])).unwrap().0, AnimKind::Draw);
+        assert!(parse_call(&call("write", &[])).unwrap_err().contains("durée manquante"));
     }
 
     #[test]

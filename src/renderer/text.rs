@@ -12,3 +12,8 @@ use super::typeset::{self, Content};
 pub fn text_shapes(content: &str, x: f32, y: f32, size: f32, align: Align, color: Rgba) -> Result<Vec<Shape>, String> {
     typeset::shapes(&Content::Text(content.to_string()), x, y, size, align, color)
 }
+
+/// Largeur et hauteur (pixels) d'un texte à la taille `size`
+pub fn text_size(content: &str, size: f32) -> Result<(f32, f32), String> {
+    typeset::measure(&Content::Text(content.to_string()), size)
+}

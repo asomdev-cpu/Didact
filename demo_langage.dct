@@ -1,0 +1,104 @@
+# ═════════════════════════════════════════════════════════════
+#  DÉMO — groupes et animations « à la 3Blue1Brown »
+#
+#  defgroup (pos = décalage), draw, write, slidein / slideout,
+#  move(direction, distance, durée), transform(to=...)
+#
+#  didact demo_langage.dct
+# ═════════════════════════════════════════════════════════════
+
+[config]
+window       : [16:9]
+languages    : [FR, EN]
+default_lang : FR
+
+[figures]
+
+# ─── Un groupe : un cercle et un carré qui bougent ensemble ───
+
+deffigure c1 =
+    type   : circle
+    center : (15%, 70%)
+    radius : 8%
+    color  : #2563EB
+    stroke : 4px
+    fill   : #BFDBFE
+
+deffigure r1 =
+    type   : rect
+    pos    : (8%, 30%)
+    width  : 14%
+    height : 14%
+    color  : #DC2626
+    stroke : 4px
+    fill   : #FECACA
+
+# pos d'un groupe = décalage de toutes ses figures (ici : 10% vers la droite)
+defgroup g =
+    items : [c1, r1]
+    pos   : (10%, 0%)
+
+# ─── Texte et équation ───
+
+deffigure titre =
+    type    : text
+    content : "La dérivée de $x^2$ est $2x$"
+    pos     : (65%, 80%)
+    font    : 48px
+
+deffigure eq =
+    type : equation
+    expr : \int_0^1 x^n \, dx = \frac{1}{n+1}
+    pos  : (65%, 55%)
+    font : 56px
+
+# ─── Morphing : le carré devient un cercle ───
+
+deffigure carre =
+    type   : rect
+    pos    : (55%, 15%)
+    width  : 16%
+    height : 16%
+    anchor : center
+    color  : #059669
+    stroke : 4px
+    fill   : #A7F3D0
+
+deffigure rond =
+    type   : circle
+    center : (80%, 20%)
+    radius : 9%
+    color  : #7C3AED
+    stroke : 4px
+    fill   : #DDD6FE
+
+[timeline]
+0.000 => {
+    start   : [g draw(2s)]
+    comment : ["draw : le contour se trace, puis la figure se remplit.", "draw: the outline is traced, then the shape fills in."]
+}
+2.000 => {
+    anim    : [g move(right, 20%, 1s)]
+    comment : ["Un groupe se déplace comme un seul objet.", "A group moves as a single object."]
+}
+3.000 => { anim : [g [rotate(90, 1s), scale(0.6, 1s)]] }
+5.000 => {
+    start   : [titre write(2s)]
+    comment : ["write : le texte s'écrit lettre après lettre.", "write: the text is written letter by letter."]
+}
+7.000 => {
+    start   : [eq slidein(left, 1s)]
+    comment : ["slidein : arrive en glissant, en fondu.", "slidein: slides in while fading in."]
+}
+8.000 => { start : [carre draw(1s)] }
+9.000 => {
+    anim    : [carre transform(to=rond, 2s)]
+    comment : ["transform : le carré devient le cercle, qui le remplace.", "transform: the square becomes the circle, which replaces it."]
+}
+12.000 => {
+    end     : [eq slideout(right, 1s), g fadeout(1s)]
+    comment : ["slideout et fadeout : sorties.", "slideout and fadeout: exits."]
+}
+13.000 => { destroy : [g] }
+14.000 => { end : [rond shrink(1s), titre fadeout(1s)] }
+15.000 => { comment : ["Fin.", "The end."] }

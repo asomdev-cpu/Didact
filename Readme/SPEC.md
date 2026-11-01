@@ -285,7 +285,7 @@ destroy : [ma_ligne]           # suppression complète
 ```
 1.000 => {
     start : [courbe_sin, rect_mobile]
-    anim  : [rect_mobile follow(path=courbe_sin, speed=1cm/s)]
+    anim  : [rect_mobile follow(path=courbe_sin, 5s)]
 }
 
 # La courbe disparaît visuellement mais rect_mobile continue à la suivre
@@ -646,10 +646,18 @@ defstyle rouge_epais =
 ```
 defgroup mon_graphe =
     items : [mes_axes, mon_plot, mon_scatter]
-    pos   : (50%, 50%)
+    pos   : (10%, 0%)
 ```
 
 Un groupe se déplace, s'anime et apparaît/disparaît comme un seul objet.
+
+- **`items`** (obligatoire) : les figures du groupe, définies **avant** lui. Un groupe peut contenir d'autres groupes.
+- **`pos`** (optionnel) : **décalage** appliqué à toutes ses figures, en % (x de la largeur, y de la hauteur, vers le haut). `(10%, 0%)` = tout 10 % plus à droite ; `(-5%, 0%)` est permis. Sans `pos`, les figures restent où elles sont définies.
+- **`start` / `end` / `destroy`** d'un groupe s'appliquent à toutes ses figures. On peut toujours démarrer une figure du groupe seule.
+- **Animations** (`move`, `rotate`, `scale`, `fadein`, `draw`, ...) : appliquées à l'ensemble, autour du **centre de l'ensemble** des figures affichées. `draw` et `write` révèlent les figures l'une après l'autre.
+- **Références** : `center(groupe)` = centre de l'ensemble ; `center(figure)` suit le groupe pour les figures définies **après** le groupe.
+- Une figure peut être dans plusieurs groupes : les effets s'additionnent (provisoire, cf. §15).
+- `transform` n'est pas encore possible sur un groupe.
 
 ---
 
@@ -659,7 +667,7 @@ Un groupe se déplace, s'anime et apparaît/disparaît comme un seul objet.
 
 ```
 fadein(durée)
-slidein(direction, durée)      # direction : left / right / top / bottom
+slidein(direction, durée)      # arrive depuis : left / right / up / down (ou top / bottom)
 grow(durée)
 write(durée)                   # s'écrit progressivement (texte/équation)
 draw(durée)                    # se dessine progressivement (géométrie)
@@ -669,7 +677,7 @@ draw(durée)                    # se dessine progressivement (géométrie)
 
 ```
 move(to=position, durée)
-move(direction, vitesse)       # ex: move(down, 3cm/s)
+move(direction, distance, durée)   # ex: move(down, 20%, 2s)
 follow(path=fig, durée, rotate=tangent)    # parcourt tout le contour de fig, à vitesse régulière
 rotate(angle, durée)
 ```
@@ -679,7 +687,7 @@ rotate(angle, durée)
 ```
 color(to=couleur, durée)
 scale(facteur, durée)
-transform(to=fig, durée)       # morphe vers une autre figure
+transform(to=fig, durée)       # se déforme en fig, qui la remplace à la fin
 ```
 
 ### 11.4 Disparition
@@ -722,7 +730,13 @@ anim  : [a fadein(1s), b move(to=center(a), 1s)]  # séparées par une virgule :
 
 | `follow(path=fig, d)` | le **centre** parcourt le contour de `fig` (courbe, ligne, arc, cercle, ...) du début à la fin, à vitesse régulière ; `rotate=tangent` : la figure s'oriente selon la tangente |
 
-Pas encore implémentées (ignorées avec un avertissement) : `slidein`, `slideout`, `write`, `draw`, `transform`, `move(direction, vitesse)`.
+| `slidein(dir, d)` / `slideout(dir, d)` | glissé court (12 % de la hauteur) + fondu ; `slidein(left)` arrive **depuis** la gauche, `slideout(right)` part **vers** la droite |
+| `draw(d)` | le contour se trace, puis la figure se remplit en fondu (les morceaux presque en même temps) |
+| `write(d)` | pareil, morceau par morceau, comme une écriture (texte, équations : lettre après lettre) |
+| `move(dir, dist%, d)` | se déplace de `dist` % dans la direction `up` / `down` / `left` / `right` (% de la largeur ou de la hauteur) |
+| `transform(to=b, d)` | les formes se déforment vers celles de `b` (position, forme, couleurs) ; à la fin, la figure est cachée et `b` est affichée à sa place. `b` doit être définie (pas forcément démarrée) |
+
+Les apparitions et disparitions (`fadein`, `slidein`, `grow`, `draw`, `write`, `fadeout`, `slideout`, `shrink`, `transform`) ne comptent plus après un nouveau `start` de la figure.
 
 Rotation fixe d'une figure : propriété `rotate : 30` (degrés) ou `rotate : auto_tangent(courbe)` (parallèle à la courbe, au point le plus proche).
 
@@ -880,9 +894,9 @@ On utilise des noms (`red`, `blue`) et le hexadécimal (`#FF0000`) dans les exem
 
 On a décidé du format `XX.XXX` (secondes.millisecondes) mais la précision exacte au-delà du millième n'est pas définie. Arrondir ? Tolérer plus ?
 
-### Une figure dans plusieurs groupes
+### Une figure dans plusieurs groupes (implémenté, à valider)
 
-Une même figure peut-elle appartenir à plusieurs groupes simultanément ?
+Permis pour l'instant : les décalages et animations des groupes s'additionnent, dans l'ordre de définition des groupes.
 
 ### Effacer un commentaire sans le remplacer
 

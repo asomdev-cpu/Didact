@@ -15,8 +15,31 @@
 
 use super::animation::{self, Anim, AnimKind};
 use crate::ast::{AnimCall, StartItem, TimelineAction};
+use crate::ast::PropValue;
 use crate::resolver::{ResolvedDocument, ResolvedFigure};
 use std::collections::HashMap;
+
+/// Figures d'un groupe (`items`), groupes imbriqués compris, sans le groupe lui-même
+pub fn group_members(group: &str, figures: &[ResolvedFigure]) -> Vec<String> {
+    fn walk(name: &str, figures: &[ResolvedFigure], out: &mut Vec<String>, depth: usize) {
+        let Some(f) = figures.iter().find(|f| f.name == name) else { return };
+        if f.ftype != "group" || depth > 32 {
+            return;
+        }
+        if let Some(PropValue::List(items)) = f.properties.get("items") {
+            for item in items {
+                if !out.contains(item) {
+                    out.push(item.clone());
+                    walk(item, figures, out, depth + 1);
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(group, figures, &mut out, 0);
+    out.retain(|m| m != group);
+    out
+}
 
 /// État d'une figure à un instant donné
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -66,6 +89,8 @@ pub struct FigureState<'a> {
     pub anims: Vec<&'a Anim>,
     /// Instant du dernier `start` (les fondus d'avant ne comptent plus)
     pub last_start: f64,
+    /// Pour un groupe : ses figures (groupes imbriqués compris), sinon vide
+    pub members: &'a [String],
 }
 
 /// Ce qu'il faut afficher à l'instant t
@@ -90,6 +115,8 @@ pub struct Timeline {
     definition_order: Vec<usize>,
     /// Animations de chaque figure, triées par début
     anims: HashMap<String, Vec<Anim>>,
+    /// Membres de chaque groupe (groupes imbriqués compris)
+    groups: HashMap<String, Vec<String>>,
     /// Timestamps des blocs, triés
     times: Vec<f64>,
     /// snapshots[i] = état juste après le bloc times[i]
@@ -99,11 +126,28 @@ pub struct Timeline {
     default_lang: String,
 }
 
+/// `a` remplacée par `b` à la fin d'un transform(to=b)
+#[derive(Debug, Clone)]
+struct Swap {
+    time: f64,
+    from: String,
+    to: String,
+}
+
 /// Planifie un appel d'animation qui commence à `start`. Renvoie sa durée.
 /// Les erreurs ont déjà été signalées par le validateur : un appel invalide est ignoré.
-fn schedule(anims: &mut HashMap<String, Vec<Anim>>, figure: &str, call: &AnimCall, start: f64) -> f64 {
+fn schedule(
+    anims: &mut HashMap<String, Vec<Anim>>,
+    swaps: &mut Vec<Swap>,
+    figure: &str,
+    call: &AnimCall,
+    start: f64,
+) -> f64 {
     match animation::parse_call(call) {
         Ok((kind, duration, ease)) => {
+            if let AnimKind::Transform { to } = &kind {
+                swaps.push(Swap { time: start + duration, from: figure.to_string(), to: to.clone() });
+            }
             anims.entry(figure.to_string()).or_default().push(Anim {
                 kind,
                 start,
@@ -123,6 +167,21 @@ impl Timeline {
         let mut times = Vec::new();
         let mut snapshots = Vec::new();
         let mut anims: HashMap<String, Vec<Anim>> = HashMap::new();
+        let mut swaps: Vec<Swap> = Vec::new();
+        let groups: HashMap<String, Vec<String>> = doc
+            .figures
+            .iter()
+            .filter(|f| f.ftype == "group")
+            .map(|f| (f.name.clone(), group_members(&f.name, &doc.figures)))
+            .collect();
+        // Une figure et, si c'est un groupe, tous ses membres
+        let with_members = |name: &str| -> Vec<String> {
+            let mut v = vec![name.to_string()];
+            if let Some(m) = groups.get(name) {
+                v.extend(m.iter().cloned());
+            }
+            v
+        };
 
         let mut current = Snapshot {
             status: HashMap::new(),
@@ -135,13 +194,15 @@ impl Timeline {
         // doc.timeline est déjà triée par le résolveur
         for ev in &doc.timeline {
             let t = ev.timestamp;
+            // Fins de transform d'avant ce bloc : instantanés intermédiaires
+            flush_swaps(&mut swaps, &mut current, Some(t), &mut times, &mut snapshots);
             // Ordre fixe : destroy → end → start → anim → comment (SPEC §6.3)
             // On parcourt le bloc une fois par commande.
             for located in &ev.actions {
                 if let TimelineAction::Destroy(names) = &located.action {
-                    for name in names {
+                    for name in names.iter().flat_map(|n| with_members(n)) {
                         current.status.insert(name.clone(), Status::Destroyed);
-                        current.exits.remove(name);
+                        current.exits.remove(&name);
                     }
                 }
             }
@@ -152,10 +213,16 @@ impl Timeline {
                             current.audio.remove(&item.name);
                             continue;
                         }
-                        current.status.insert(item.name.clone(), Status::Hidden);
-                        if let Some(call) = &item.anim {
-                            let d = schedule(&mut anims, &item.name, call, t);
-                            current.exits.insert(item.name.clone(), t + d);
+                        let d = match &item.anim {
+                            Some(call) => schedule(&mut anims, &mut swaps, &item.name, call, t),
+                            None => 0.0,
+                        };
+                        for name in with_members(&item.name) {
+                            current.status.insert(name.clone(), Status::Hidden);
+                            current.exits.remove(&name);
+                            if item.anim.is_some() {
+                                current.exits.insert(name, t + d);
+                            }
                         }
                     }
                 }
@@ -165,11 +232,13 @@ impl Timeline {
                     for item in items {
                         match item {
                             StartItem::Figure { name, anim } => {
-                                current.status.insert(name.clone(), Status::Visible);
-                                current.exits.remove(name);
-                                current.last_start.insert(name.clone(), t);
+                                for n in with_members(name) {
+                                    current.status.insert(n.clone(), Status::Visible);
+                                    current.exits.remove(&n);
+                                    current.last_start.insert(n, t);
+                                }
                                 if let Some(call) = anim {
-                                    schedule(&mut anims, name, call, t);
+                                    schedule(&mut anims, &mut swaps, name, call, t);
                                 }
                             }
                             StartItem::Audio { file, volume } => {
@@ -185,7 +254,7 @@ impl Timeline {
                         // Animations enchaînées : chacune commence à la fin de la précédente
                         let mut start = t;
                         for call in &item.calls {
-                            start += schedule(&mut anims, &item.figure, call, start);
+                            start += schedule(&mut anims, &mut swaps, &item.figure, call, start);
                         }
                     }
                 }
@@ -199,6 +268,7 @@ impl Timeline {
             times.push(t);
             snapshots.push(current.clone());
         }
+        flush_swaps(&mut swaps, &mut current, None, &mut times, &mut snapshots);
 
         for list in anims.values_mut() {
             list.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
@@ -211,6 +281,7 @@ impl Timeline {
             figures: doc.figures.clone(),
             definition_order,
             anims,
+            groups,
             times,
             snapshots,
             languages: doc.config.languages.clone(),
@@ -235,21 +306,9 @@ impl Timeline {
         &self.times
     }
 
-    /// Animations prévues mais pas encore supportées : (figure, nom), sans doublon
-    pub fn unsupported_anims(&self) -> Vec<(String, String)> {
-        let mut out: Vec<(String, String)> = self
-            .anims
-            .iter()
-            .flat_map(|(fig, list)| {
-                list.iter().filter_map(move |a| match &a.kind {
-                    AnimKind::Unsupported(n) => Some((fig.clone(), n.clone())),
-                    _ => None,
-                })
-            })
-            .collect();
-        out.sort();
-        out.dedup();
-        out
+    /// Membres d'un groupe (groupes imbriqués compris) ; vide si ce n'est pas un groupe
+    pub fn members(&self, group: &str) -> &[String] {
+        self.groups.get(group).map(|v| v.as_slice()).unwrap_or(&[])
     }
 
     /// Index du dernier bloc dont le timestamp est ≤ t (None si t est avant le premier bloc)
@@ -299,6 +358,7 @@ impl Timeline {
                     .map(|list| list.iter().filter(|a| a.start <= t).collect())
                     .unwrap_or_default(),
                 last_start: snap.last_start.get(&f.name).copied().unwrap_or(0.0),
+                members: self.members(&f.name),
             })
             .collect();
 
@@ -323,6 +383,43 @@ impl Timeline {
         audio.sort_by(|a, b| a.file.cmp(&b.file));
 
         Frame { t, visible, states, comment, audio }
+    }
+}
+
+/// Applique les fins de transform (a cachée, b affichée) d'avant `until`
+/// (toutes si None). Une fin qui tombe pile sur un bloc est appliquée juste avant lui ;
+/// les autres créent un instantané à leur instant.
+fn flush_swaps(
+    swaps: &mut Vec<Swap>,
+    current: &mut Snapshot,
+    until: Option<f64>,
+    times: &mut Vec<f64>,
+    snapshots: &mut Vec<Snapshot>,
+) {
+    swaps.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap());
+    let last = times.last().copied().unwrap_or(f64::NEG_INFINITY);
+    while let Some(sw) = swaps.first().cloned() {
+        if until.is_some_and(|u| sw.time > u) {
+            break;
+        }
+        swaps.remove(0);
+        current.status.insert(sw.from.clone(), Status::Hidden);
+        current.exits.remove(&sw.from);
+        current.status.insert(sw.to.clone(), Status::Visible);
+        current.exits.remove(&sw.to);
+        current.last_start.insert(sw.to.clone(), sw.time);
+        let is_block_time = until.is_some_and(|u| (sw.time - u).abs() < 1e-9);
+        let next_same = swaps.first().is_some_and(|n| (n.time - sw.time).abs() < 1e-9);
+        if !is_block_time && !next_same {
+            if sw.time <= last {
+                // fin d'un transform démarré dans le dernier bloc, au même instant (durée 0) :
+                // on corrige l'instantané de ce bloc
+                *snapshots.last_mut().unwrap() = current.clone();
+            } else {
+                times.push(sw.time);
+                snapshots.push(current.clone());
+            }
+        }
     }
 }
 
@@ -484,5 +581,36 @@ mod tests {
             tl.frame_at(31.0, Some("EN")).comment,
             Some("The curve disappears but the rectangle continues")
         );
+    }
+
+    #[test]
+    fn groupe_et_transform() {
+        let tl = timeline(
+            "[figures]
+            deffigure a =
+                type : circle
+            deffigure b =
+                type : rect
+            deffigure c =
+                type : star
+            defgroup g =
+                items : [a, b]
+                pos : (10%, -5%)
+            [timeline]
+            0.000 => { start : [g fadein(1s)] }
+            2.000 => { anim : [a transform(to=c, 1.5s)] }
+            5.000 => { end : [g] }
+            6.000 => { destroy : [g] }",
+        );
+        assert_eq!(visibles(&tl, 0.5), ["a", "b", "g"]);
+        // pendant le transform : a encore affichée, c pas encore
+        assert_eq!(visibles(&tl, 3.0), ["a", "b", "g"]);
+        // à la fin (3.5 s) : a remplacée par c (instantané intermédiaire)
+        assert_eq!(visibles(&tl, 3.5), ["b", "c", "g"]);
+        assert!(tl.times().contains(&3.5));
+        assert_eq!(visibles(&tl, 5.5), ["c"]);
+        assert_eq!(tl.status_at("a", 6.0), Status::Destroyed);
+        assert_eq!(tl.status_at("b", 6.0), Status::Destroyed);
+        assert_eq!(tl.members("g"), ["a", "b"]);
     }
 }

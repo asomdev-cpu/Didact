@@ -144,12 +144,20 @@ player.free();              // libère la mémoire quand on n'en a plus besoin
 
 ---
 
-## 4. Héberger
+## 4. Page autonome (un seul fichier)
+
+```powershell
+cargo run --release -- cours.dct --export html     # → cours.html
+```
+
+Produit un fichier `.html` qui contient tout (le cours, le lecteur et le moteur). Il s'ouvre d'un double-clic, sans serveur ni connexion, et peut s'envoyer tel quel. Il pèse environ un tiers du moteur (compressé). Le moteur `web/pkg` doit avoir été compilé avant (section 1) ; sinon : `--engine <dossier>`.
+
+## 5. Héberger
 
 - Servir `didact_bg.wasm` avec le type `application/wasm` (c'est le cas de la plupart des hébergeurs : GitHub Pages, Netlify, ...).
 - Le moteur est lourd (37 Mo, le compositeur LaTeX en représente la plus grande partie) mais il est mis en cache par le navigateur : seule la première visite le télécharge. Les fichiers `.dct` restent de quelques ko. Pistes pour le réduire : voir « Améliorations prévues » dans `DECISIONS.md`.
 
-## 5. Limites actuelles
+## 6. Limites actuelles
 
 - L'audio (`start : [audio ...]`) n'est pas encore joué (Phase 5).
 - `raw.matplotlib` n'existe pas sur le web (pas de Python dans le navigateur).

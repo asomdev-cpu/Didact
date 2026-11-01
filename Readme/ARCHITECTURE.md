@@ -102,6 +102,10 @@ didact cours.dct --export html    →  produit un HTML autonome
 
 L'export n'est pas le mode normal d'utilisation. C'est une fonctionnalité opt-in.
 
+**MP4 (`output/video.rs`)** : chaque image est rendue dans le programme (tiny-skia, comme le PNG), le sous-titre est dessiné par-dessus, et les pixels bruts (RGBA) sont envoyés à `ffmpeg` par son entrée standard. ffmpeg encode en H.264 (yuv420p, dimensions paires). Les pistes `audio` de la timeline sont converties en segments (début, fin, volume) puis placées (`adelay`) et mélangées (`amix`) par ffmpeg. ffmpeg doit être installé.
+
+**HTML autonome (`output/html.rs`)** : un seul fichier contenant la source `.dct`, le lecteur `web/didact.js` (inclus dans l'exécutable à la compilation) et le moteur `web/pkg` compressé (gzip + base64). Au chargement, un crochet `__DIDACT_ENGINE__` décompresse le moteur (`DecompressionStream`) et l'initialise : pas de serveur ni de réseau nécessaire. Le moteur doit avoir été compilé une fois (`web/build.ps1`).
+
 ---
 
 ## 4. Pipeline de compilation

@@ -11,6 +11,7 @@
 //    controls  "false" pour cacher la barre de contrôles
 //
 //  Le moteur (pkg/didact_bg.wasm) est chargé une seule fois pour toute la page.
+//  (Dans une page faite par `didact --export html`, il est inclus dans la page.)
 // ─────────────────────────────────────────────
 
 let ready = null;
@@ -20,6 +21,10 @@ let ready = null;
  * Renvoie le module : `const { Player } = await initDidact();`
  */
 export function initDidact() {
+  if (!ready && typeof globalThis.__DIDACT_ENGINE__ === "function") {
+    // Page autonome (didact --export html) : le moteur est inclus dans la page
+    ready = Promise.resolve().then(() => globalThis.__DIDACT_ENGINE__());
+  }
   if (!ready) {
     ready = import("./pkg/didact.js")
       .catch(() => {
@@ -133,7 +138,11 @@ class DidactPlayer extends HTMLElement {
         if (!response.ok) throw new Error(`Impossible de charger ${src} (HTTP ${response.status})`);
         source = await response.text();
       } else {
-        source = this.querySelector('script[type="text/didact"]')?.textContent ?? "";
+        const script = this.querySelector('script[type="text/didact"]');
+        source = script?.textContent ?? "";
+        if (script?.dataset.encoding === "base64") {
+          source = new TextDecoder().decode(Uint8Array.from(atob(source.trim()), (c) => c.charCodeAt(0)));
+        }
       }
     } catch (e) {
       return this.showMessage("error", String(e.message ?? e));

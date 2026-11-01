@@ -151,7 +151,13 @@ pub fn tokenize(input: &str) -> Vec<Spanned> {
                             break;
                         }
                     }
-                    push(&mut tokens, start, Token::Number(num.parse().unwrap_or(0.0)));
+                    // -10% : pourcentage négatif (décalage d'un groupe, move...)
+                    if chars.peek() == Some(&'%') {
+                        chars.next();
+                        push(&mut tokens, start, Token::Percentage(format!("{}%", num)));
+                    } else {
+                        push(&mut tokens, start, Token::Number(num.parse().unwrap_or(0.0)));
+                    }
                 } else {
                     // Juste un tiret seul, on l'ignore
                 }
@@ -233,6 +239,12 @@ mod tests {
         // mot qui commence par des lettres hexa → commentaire
         assert_eq!(tokens("#fabrique"), [Token::EOF]);
         assert_eq!(tokens("# --- Styles ---"), [Token::EOF]);
+    }
+
+    #[test]
+    fn pourcentage_negatif() {
+        let toks: Vec<Token> = tokenize("(-10%, 5%)").into_iter().map(|t| t.token).collect();
+        assert!(toks.contains(&Token::Percentage("-10%".into())));
     }
 
     #[test]

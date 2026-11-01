@@ -11,12 +11,16 @@
 //!    formes de base → animations appliquées → géométrie enregistrée pour les
 //!    références des figures suivantes (pas de référence en avant, donc l'ordre
 //!    du fichier suffit) ;
-//! 2. on dessine celles qui sont visibles, dans l'ordre des layers.
+//!    Un groupe applique ensuite son décalage et ses animations à ses figures ;
+//! 2. `transform(to=b)` : les formes en cours de déformation sont remplacées ;
+//! 3. on dessine celles qui sont visibles, dans l'ordre des layers.
 //!
 //! Changer de bibliothèque de dessin = écrire un autre backend, sans toucher au reste.
 
 pub mod expr;
 pub mod geometry;
+pub mod morph;
+pub mod reveal;
 pub mod skia;
 pub mod text;
 pub mod typeset;
@@ -40,34 +44,54 @@ pub trait RenderBackend {
 
 /// Dessine une frame complète.
 /// Retourne les problèmes rencontrés : (figure, raison) pour les figures visibles
-/// non dessinables et les animations pas encore supportées.
+/// non dessinables.
 pub fn render_frame(frame: &Frame, scene: &Scene, backend: &mut dyn RenderBackend) -> Vec<(String, String)> {
     let mut refs = Refs::new();
-    let mut shapes_by_name: HashMap<&str, Vec<Shape>> = HashMap::new();
+    let mut shapes_by_name: HashMap<String, Vec<Shape>> = HashMap::new();
     let mut problems = Vec::new();
+    let visible: HashMap<&str, bool> = frame.states.iter().map(|s| (s.fig.name.as_str(), s.visible)).collect();
 
-    // 1. Calcul, dans l'ordre de définition
+    // 1. Calcul, dans l'ordre de définition (un groupe est défini après ses figures)
     for st in &frame.states {
-        match build_figure(st, frame.t, scene, &refs) {
-            Ok((shapes, geom, warnings)) => {
+        let result = if st.fig.ftype == "group" {
+            build_group(st, frame.t, scene, &mut refs, &mut shapes_by_name, &visible)
+        } else {
+            build_figure(st, frame.t, scene, &refs).map(|(shapes, geom)| {
                 refs.insert(st.fig.name.clone(), geom);
-                shapes_by_name.insert(&st.fig.name, shapes);
-                if st.visible {
-                    problems.extend(warnings.into_iter().map(|w| (st.fig.name.clone(), w)));
-                }
+                shapes_by_name.insert(st.fig.name.clone(), shapes);
+            })
+        };
+        if let Err(reason) = result {
+            if st.visible {
+                problems.push((st.fig.name.clone(), reason));
             }
-            Err(reason) => {
-                if st.visible {
-                    problems.push((st.fig.name.clone(), reason));
+        }
+    }
+
+    // 2. transform(to=b) : les formes de la figure se déforment vers celles de b
+    //    (b est calculée même si elle n'est pas encore affichée)
+    for st in &frame.states {
+        if !st.visible {
+            continue;
+        }
+        for a in &st.anims {
+            if let AnimKind::Transform { to } = &a.kind {
+                if a.start < st.last_start {
+                    continue;
+                }
+                let e = a.progress(frame.t) as f32;
+                let target = shapes_by_name.get(to).cloned().unwrap_or_default();
+                if let Some(shapes) = shapes_by_name.get_mut(&st.fig.name) {
+                    *shapes = morph::morph(shapes, &target, e);
                 }
             }
         }
     }
 
-    // 2. Dessin, dans l'ordre des layers
+    // 3. Dessin, dans l'ordre des layers
     backend.clear(scene.background);
     for fig in &frame.visible {
-        if let Some(shapes) = shapes_by_name.get(fig.name.as_str()) {
+        if let Some(shapes) = shapes_by_name.get(&fig.name) {
             for shape in shapes {
                 backend.draw(shape);
             }
@@ -76,7 +100,7 @@ pub fn render_frame(frame: &Frame, scene: &Scene, backend: &mut dyn RenderBacken
     problems
 }
 
-/// Effet cumulé des animations d'une figure à l'instant t
+/// Effet cumulé des animations d'une figure (ou d'un groupe) à l'instant t
 struct AnimEffect {
     /// Position du centre (pixels)
     center: (f32, f32),
@@ -85,17 +109,150 @@ struct AnimEffect {
     /// Rotation en degrés (sens trigonométrique)
     rotation: f32,
     opacity: f32,
+    /// Orientation imposée par follow(..., rotate=tangent)
+    follow_rotation: Option<f32>,
+    /// draw / write en cours : (mode, avancement)
+    reveal: Option<(reveal::Mode, f32)>,
+}
+
+/// Distance d'un slidein / slideout, en part de la hauteur de la scène
+const SLIDE_DISTANCE: f32 = 0.12;
+
+/// Calcule l'effet des animations commencées, à partir du centre et de la rotation de base
+fn compute_effect(
+    st: &FigureState,
+    t: f64,
+    base_center: (f32, f32),
+    base_rotation: f32,
+    scene: &Scene,
+    refs: &Refs,
+) -> Result<AnimEffect, String> {
+    let mut fx = AnimEffect {
+        center: base_center,
+        scale: 1.0,
+        rotation: base_rotation,
+        opacity: 1.0,
+        follow_rotation: None,
+        reveal: None,
+    };
+    let mut size_factor: f32 = 1.0; // scale(...) : facteur cible absolu
+    let mut appear: f32 = 1.0; // grow / shrink
+    let mut slide = (0.0f32, 0.0f32); // décalage temporaire de slidein / slideout
+    let slide_len = scene.height as f32 * SLIDE_DISTANCE;
+    for a in &st.anims {
+        let e = a.progress(t) as f32;
+        // Les apparitions / disparitions d'avant le dernier `start` ne comptent plus
+        if a.kind.is_entry_or_exit() && a.start < st.last_start {
+            continue;
+        }
+        match &a.kind {
+            AnimKind::Move { to } => {
+                let target = geometry::resolve_point(to, scene, refs)?;
+                fx.center.0 += (target.0 - fx.center.0) * e;
+                fx.center.1 += (target.1 - fx.center.1) * e;
+            }
+            AnimKind::MoveBy { dir, distance } => {
+                let (ux, uy) = dir.unit();
+                let d = *distance as f32 / 100.0;
+                fx.center.0 += ux * d * scene.width as f32 * e;
+                fx.center.1 += uy * d * scene.height as f32 * e;
+            }
+            AnimKind::Scale(f) => size_factor += (*f as f32 - size_factor) * e,
+            AnimKind::Rotate(deg) => fx.rotation += *deg as f32 * e,
+            AnimKind::Follow { path, tangent } => {
+                let outline = &geometry::resolve_geom(path, refs)?.outline;
+                let (point, dir) = point_along(outline, e as f64)
+                    .ok_or_else(|| format!("follow : la figure '{}' n'a pas de contour à suivre", path))?;
+                fx.center = point;
+                if *tangent {
+                    fx.follow_rotation = Some(direction_angle(dir));
+                }
+            }
+            AnimKind::FadeIn => fx.opacity = e,
+            AnimKind::FadeOut => fx.opacity = 1.0 - e,
+            AnimKind::Grow => appear = e,
+            AnimKind::Shrink => appear = 1.0 - e,
+            AnimKind::SlideIn { from } => {
+                let (ux, uy) = from.unit();
+                slide = (ux * slide_len * (1.0 - e), uy * slide_len * (1.0 - e));
+                fx.opacity = e;
+            }
+            AnimKind::SlideOut { to } => {
+                let (ux, uy) = to.unit();
+                slide = (ux * slide_len * e, uy * slide_len * e);
+                fx.opacity = 1.0 - e;
+            }
+            AnimKind::Draw => fx.reveal = Some((reveal::Mode::Draw, e)),
+            AnimKind::Write => fx.reveal = Some((reveal::Mode::Write, e)),
+            AnimKind::Color { .. } | AnimKind::Transform { .. } => {}
+        }
+    }
+    fx.scale = size_factor * appear;
+    fx.center = (fx.center.0 + slide.0, fx.center.1 + slide.1);
+    if let Some(r) = fx.follow_rotation {
+        fx.rotation = r;
+    }
+    Ok(fx)
+}
+
+/// Transformation d'un point : rotation et taille autour de `base_center`, puis déplacement vers fx.center
+fn mapper(base_center: (f32, f32), fx: &AnimEffect) -> impl Fn(f32, f32) -> (f32, f32) {
+    // y pixel vers le bas : le sens trigonométrique devient négatif
+    let r = (-fx.rotation).to_radians();
+    let (c, s) = (r.cos(), r.sin());
+    let (center, scale) = (fx.center, fx.scale);
+    move |x, y| {
+        let (dx, dy) = ((x - base_center.0) * scale, (y - base_center.1) * scale);
+        (center.0 + dx * c - dy * s, center.1 + dx * s + dy * c)
+    }
+}
+
+/// Applique l'effet (géométrie et opacité) à des formes
+fn apply_effect(shapes: &mut [Shape], base_center: (f32, f32), fx: &AnimEffect) {
+    let identity = fx.scale == 1.0 && fx.rotation == 0.0 && fx.center == base_center;
+    if identity && fx.opacity >= 1.0 {
+        return;
+    }
+    let map = mapper(base_center, fx);
+    for shape in shapes {
+        if !identity {
+            for cmd in &mut shape.path {
+                *cmd = match *cmd {
+                    PathCmd::MoveTo(x, y) => {
+                        let (x, y) = map(x, y);
+                        PathCmd::MoveTo(x, y)
+                    }
+                    PathCmd::LineTo(x, y) => {
+                        let (x, y) = map(x, y);
+                        PathCmd::LineTo(x, y)
+                    }
+                    PathCmd::CubicTo(x1, y1, x2, y2, x, y) => {
+                        let ((x1, y1), (x2, y2), (x, y)) = (map(x1, y1), map(x2, y2), map(x, y));
+                        PathCmd::CubicTo(x1, y1, x2, y2, x, y)
+                    }
+                    PathCmd::Close => PathCmd::Close,
+                };
+            }
+            if let Some((_, w)) = &mut shape.stroke {
+                *w *= fx.scale;
+            }
+        }
+        if let Some(c) = &mut shape.fill {
+            c.a *= fx.opacity;
+        }
+        if let Some((c, _)) = &mut shape.stroke {
+            c.a *= fx.opacity;
+        }
+    }
+}
+
+/// Épaisseur du trait temporaire de draw / write
+fn reveal_line(scene: &Scene) -> f32 {
+    (1.2 * scene.px_scale).max(0.8)
 }
 
 /// Calcule les formes animées d'une figure et sa géométrie
-fn build_figure(
-    st: &FigureState,
-    t: f64,
-    scene: &Scene,
-    refs: &Refs,
-) -> Result<(Vec<Shape>, Geom, Vec<String>), String> {
-    let mut warnings = Vec::new();
-
+fn build_figure(st: &FigureState, t: f64, scene: &Scene, refs: &Refs) -> Result<(Vec<Shape>, Geom), String> {
     // ── Couleur animée : on remplace `color` avant de construire les formes ──
     let fig_with_color;
     let fig: &ResolvedFigure = match animated_color(st, t)? {
@@ -112,119 +269,126 @@ fn build_figure(
     let mut shapes = geometry::figure_shapes(fig, scene, refs)?;
     let base_center = bbox_center(&shapes);
 
-    // ── Autres animations ──
+    // ── Animations ──
     // Rotation fixe écrite sur la figure : rotate : 30
     let base_rotation = match fig.properties.get("rotate") {
         Some(PropValue::Number(n)) => *n as f32,
         _ => 0.0,
     };
-    let mut fx = AnimEffect { center: base_center, scale: 1.0, rotation: base_rotation, opacity: 1.0 };
-    let mut follow_rotation: Option<f32> = None;
-    let mut size_factor: f32 = 1.0; // scale(...) : facteur cible absolu
-    let mut appear: f32 = 1.0; // grow / shrink
-    for a in &st.anims {
-        let e = a.progress(t) as f32;
-        // Les fondus et grow/shrink d'avant le dernier `start` ne comptent plus
-        let since_start = a.start >= st.last_start;
-        match &a.kind {
-            AnimKind::Move { to } => {
-                let target = geometry::resolve_point(to, scene, refs)?;
-                fx.center.0 += (target.0 - fx.center.0) * e;
-                fx.center.1 += (target.1 - fx.center.1) * e;
-            }
-            AnimKind::Scale(f) => size_factor += (*f as f32 - size_factor) * e,
-            AnimKind::Rotate(deg) => fx.rotation += *deg as f32 * e,
-            AnimKind::Follow { path, tangent } => {
-                let outline = &geometry::resolve_geom(path, refs)?.outline;
-                let (point, dir) = point_along(outline, e as f64)
-                    .ok_or_else(|| format!("follow : la figure '{}' n'a pas de contour à suivre", path))?;
-                fx.center = point;
-                if *tangent {
-                    follow_rotation = Some(direction_angle(dir));
-                }
-            }
-            AnimKind::FadeIn if since_start => fx.opacity = e,
-            AnimKind::FadeOut if since_start => fx.opacity = 1.0 - e,
-            AnimKind::Grow if since_start => appear = e,
-            AnimKind::Shrink if since_start => appear = 1.0 - e,
-            AnimKind::Color { .. } | AnimKind::FadeIn | AnimKind::FadeOut | AnimKind::Grow | AnimKind::Shrink => {}
-            AnimKind::Unsupported(name) => {
-                warnings.push(format!("animation '{}' (ligne {}) pas encore supportée, ignorée", name, a.line))
-            }
-        }
-    }
-    fx.scale = size_factor * appear;
+    let mut fx = compute_effect(st, t, base_center, base_rotation, scene, refs)?;
 
-    // Orientation selon une tangente : follow(..., rotate=tangent) ou rotate : auto_tangent(courbe)
-    if let Some(r) = follow_rotation {
-        fx.rotation = r;
-    } else if let Some(PropValue::Single(v)) = fig.properties.get("rotate") {
-        if let Some(name) = v.strip_prefix("auto_tangent(").and_then(|r| r.strip_suffix(')')) {
-            let outline = &geometry::resolve_geom(name.trim(), refs)?.outline;
-            if let Some(dir) = tangent_near(outline, fx.center) {
-                fx.rotation = direction_angle(dir);
+    // Orientation selon une courbe : rotate : auto_tangent(courbe)
+    if fx.follow_rotation.is_none() {
+        if let Some(PropValue::Single(v)) = fig.properties.get("rotate") {
+            if let Some(name) = v.strip_prefix("auto_tangent(").and_then(|r| r.strip_suffix(')')) {
+                let outline = &geometry::resolve_geom(name.trim(), refs)?.outline;
+                if let Some(dir) = tangent_near(outline, fx.center) {
+                    fx.rotation = direction_angle(dir);
+                }
             }
         }
     }
 
-    // ── Application : rotation et taille autour du centre de base, puis déplacement ──
-    let (rad_cos, rad_sin) = {
-        // y pixel vers le bas : le sens trigonométrique devient négatif
-        let r = (-fx.rotation).to_radians();
-        (r.cos(), r.sin())
-    };
-    let map = |x: f32, y: f32| {
-        let (dx, dy) = ((x - base_center.0) * fx.scale, (y - base_center.1) * fx.scale);
-        (
-            fx.center.0 + dx * rad_cos - dy * rad_sin,
-            fx.center.1 + dx * rad_sin + dy * rad_cos,
-        )
-    };
-    let identity = fx.scale == 1.0 && fx.rotation == 0.0 && fx.center == base_center;
-    if !identity || fx.opacity < 1.0 {
-        for shape in &mut shapes {
-            if !identity {
-                for cmd in &mut shape.path {
-                    *cmd = match *cmd {
-                        PathCmd::MoveTo(x, y) => {
-                            let (x, y) = map(x, y);
-                            PathCmd::MoveTo(x, y)
-                        }
-                        PathCmd::LineTo(x, y) => {
-                            let (x, y) = map(x, y);
-                            PathCmd::LineTo(x, y)
-                        }
-                        PathCmd::CubicTo(x1, y1, x2, y2, x, y) => {
-                            let ((x1, y1), (x2, y2), (x, y)) = (map(x1, y1), map(x2, y2), map(x, y));
-                            PathCmd::CubicTo(x1, y1, x2, y2, x, y)
-                        }
-                        PathCmd::Close => PathCmd::Close,
-                    };
-                }
-                if let Some((_, w)) = &mut shape.stroke {
-                    *w *= fx.scale;
-                }
-            }
-            if let Some(c) = &mut shape.fill {
-                c.a *= fx.opacity;
-            }
-            if let Some((c, _)) = &mut shape.stroke {
-                c.a *= fx.opacity;
-            }
-        }
-    }
+    apply_effect(&mut shapes, base_center, &fx);
 
     // Repère : la conversion suit les déplacements et la taille (pas la rotation)
     let axes = if fig.ftype == "axes" {
         let m = geometry::axes_map(fig, scene, refs)?;
-        let (ox, oy) = map(m.ox, m.oy);
+        let (ox, oy) = mapper(base_center, &fx)(m.ox, m.oy);
         Some(AxesMap { ox, oy, ux: m.ux * fx.scale, uy: m.uy * fx.scale, ..m })
     } else {
         None
     };
 
+    // La géométrie publiée est celle de la figure entière, même pendant draw / write
     let geom = figure_geom(fig, &shapes, &fx, axes);
-    Ok((shapes, geom, warnings))
+    if let Some((mode, e)) = fx.reveal {
+        let n = shapes.len();
+        shapes = reveal::reveal(shapes, mode, e, 0, n, reveal_line(scene));
+    }
+    Ok((shapes, geom))
+}
+
+/// Groupe : ses figures sont déjà calculées (elles sont définies avant lui).
+/// Son décalage `pos` et ses animations leur sont appliqués comme à un seul objet,
+/// autour du centre de l'ensemble ; leurs géométries (références) sont mises à jour.
+fn build_group(
+    st: &FigureState,
+    t: f64,
+    scene: &Scene,
+    refs: &mut Refs,
+    shapes_by_name: &mut HashMap<String, Vec<Shape>>,
+    visible: &HashMap<&str, bool>,
+) -> Result<(), String> {
+    let members: Vec<&String> = st.members.iter().filter(|m| shapes_by_name.contains_key(*m)).collect();
+
+    // Centre de l'ensemble : figures affichées (toutes si aucune ne l'est)
+    let shown: Vec<&String> = members.iter().copied().filter(|m| visible.get(m.as_str()) == Some(&true)).collect();
+    let basis = if shown.is_empty() { &members } else { &shown };
+    let all: Vec<Shape> = basis.iter().flat_map(|m| shapes_by_name[*m].clone()).collect();
+    let base_center = bbox_center(&all);
+
+    // pos : décalage (x en % de la largeur, y en % de la hauteur, vers le haut)
+    let offset = match st.fig.properties.get("pos") {
+        Some(PropValue::Tuple(v)) if v.len() == 2 => {
+            let pct = |s: &str| {
+                s.trim()
+                    .trim_end_matches('%')
+                    .parse::<f32>()
+                    .map_err(|_| format!("pos d'un groupe : décalage en %, ex : (10%, 0%), pas '{}'", s))
+            };
+            (pct(&v[0])? / 100.0 * scene.width as f32, -pct(&v[1])? / 100.0 * scene.height as f32)
+        }
+        Some(other) => {
+            return Err(format!("pos d'un groupe : décalage (x%, y%) attendu, pas '{}'", fmt_value(other)))
+        }
+        None => (0.0, 0.0),
+    };
+    let start_center = (base_center.0 + offset.0, base_center.1 + offset.1);
+    let fx = compute_effect(st, t, start_center, 0.0, scene, refs)?;
+
+    let total: usize = members.iter().map(|m| shapes_by_name[*m].len()).sum();
+    let mut first = 0;
+    let map = mapper(base_center, &fx);
+    for m in &members {
+        let shapes = shapes_by_name.get_mut(*m).unwrap();
+        apply_effect(shapes, base_center, &fx);
+        // Références : la figure a bougé avec le groupe
+        if let Some(g) = refs.get_mut(*m) {
+            g.center = map(g.center.0, g.center.1);
+            g.angle += fx.rotation;
+            g.bbox = bbox(shapes);
+            g.outline = outline(shapes);
+            if let Some(ax) = &mut g.axes {
+                let (ox, oy) = map(ax.ox, ax.oy);
+                *ax = AxesMap { ox, oy, ux: ax.ux * fx.scale, uy: ax.uy * fx.scale, ..ax.clone() };
+            }
+            if let Some((p, d)) = g.label {
+                g.label = Some((map(p.0, p.1), d));
+            }
+        }
+        let n = shapes.len();
+        if let Some((mode, e)) = fx.reveal {
+            let taken = std::mem::take(shapes);
+            *shapes = reveal::reveal(taken, mode, e, first, total, reveal_line(scene));
+        }
+        first += n;
+    }
+
+    let shapes_now: Vec<Shape> = members.iter().flat_map(|m| shapes_by_name[*m].clone()).collect();
+    refs.insert(
+        st.fig.name.clone(),
+        Geom {
+            center: fx.center,
+            angle: fx.rotation,
+            bbox: bbox(&shapes_now),
+            label: None,
+            axes: None,
+            outline: Vec::new(),
+        },
+    );
+    shapes_by_name.insert(st.fig.name.clone(), Vec::new());
+    Ok(())
 }
 
 /// Couleur du trait après les animations color(...), en "#RRGGBBAA" ; None si aucune

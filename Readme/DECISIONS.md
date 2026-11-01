@@ -87,14 +87,14 @@ L'objectif est d'arriver à un `cargo run -- exemple.dct` qui ouvre une fenêtre
 ### Phase 5 — Audio et multilingue
 
 18. **Lecture audio**
-19. **Système de commentaires multilingues**
-20. **Sélection de langue au runtime**
+19. ~~**Système de commentaires multilingues**~~ ✅ (fait en Phase 2 avec la timeline)
+20. ~~**Sélection de langue au runtime**~~ ✅ (`--lang`, menu de la fenêtre et du lecteur web)
 
 ### Phase 6 — Exports
 
-21. **Export MP4** (avec ffmpeg)
-22. **Export HTML autonome**
-23. **Mode podcast (TTS)**
+21. ~~**Export MP4** (avec ffmpeg)~~ ✅ (`--export mp4` : sous-titres incrustés, pistes audio mixées)
+22. ~~**Export HTML autonome**~~ ✅ (`--export html` : un seul fichier, s'ouvre sans serveur)
+23. **Mode podcast (TTS)** — après la Phase 5. Décidé : si une phrase lue dure plus longtemps que l'écart avant le commentaire suivant, avertissement avec le numéro de ligne, sans couper la phrase. Reste à choisir : moteur de voix (Windows SAPI / Piper / API cloud) et sortie (audio seul, voix dans le MP4, ou les deux).
 
 ### Phase 7 — Écosystème
 
@@ -391,6 +391,28 @@ Cette section liste les choix importants qui ont été tranchés. Chaque décisi
 - Un seul code de dessin à maintenir
 - Une balise suffit à intégrer une animation, sans écrire de JavaScript
 
+### Groupes : `pos` est un décalage
+
+**Décision :** `pos : (10%, 0%)` sur un groupe décale toutes ses figures de 10 % vers la droite. Sans `pos`, elles restent où elles sont définies.
+
+**Raisonnement :** chaque figure garde ses propres coordonnées, et le groupe permet de déplacer un ensemble déjà construit sans rien recalculer.
+
+### `transform(to=b)` : `b` remplace la figure
+
+**Décision :** pendant le transform, la figure se déforme vers `b` ; à la fin, elle est cachée et `b` est affichée à sa place (comme `ReplacementTransform` de manim). On anime ensuite `b`.
+
+**Raisonnement :** après le transform, le nom `b` désigne ce qu'on voit ; `center(b)` est juste. L'autre option (la figure garde son nom avec l'aspect de `b`) rend les références confuses.
+
+### `slidein` / `slideout` : glissé court + fondu
+
+**Décision :** la figure arrive d'un peu plus loin (12 % de la hauteur), en fondu, style 3Blue1Brown. La direction de `slidein` est le côté d'où elle **vient**, celle de `slideout` le côté où elle **part**.
+
+### `move(direction, distance, durée)` au lieu d'une vitesse
+
+**Décision :** `move(down, 20%, 2s)` remplace `move(down, 3cm/s)`.
+
+**Raisonnement :** les `cm` n'existent pas dans Didact (tout est en %), et une durée obligatoire est cohérente avec toutes les autres animations.
+
 ### Licence MIT
 
 **Décision :** Le projet est sous licence MIT.
@@ -515,6 +537,8 @@ Idées qui ont été discutées et rejetées explicitement.
 - `width` → `stroke` pour l'épaisseur du trait (`width` réservé aux `rect`)
 - Runtime timeline : instantanés après chaque bloc, état à t par recherche dichotomique (avancer/reculer gratuit), commentaires dans la langue choisie, audio
 - CLI : `--lang XX`, `--debug` (tokens et AST seulement sur demande), `--summary`, `--png <t> <fichier>`
+- Langage complété : groupes (`defgroup`, `pos` = décalage, `start`/`end`/`destroy` en cascade, animations autour du centre de l'ensemble) ; `draw`, `write` ; `slidein`/`slideout` (glissé court + fondu) ; `move(direction, distance, durée)` ; `transform(to=b)` (morphing, `b` remplace la figure à la fin) ; pourcentages négatifs (`-10%`) ; `demo_langage.dct`
+- Phase 6 : `--export mp4` (images rendues dans le programme et envoyées à ffmpeg, H.264 ; sous-titres incrustés coupés en lignes, maths jamais coupées ; pistes `audio` placées et mixées ; options `-o`, `--fps`, `--height`, `--no-subtitles`, `--ffmpeg`) ; `--export html` (page autonome : source, lecteur et moteur WASM compressé en gzip/base64 dans un seul fichier, ouvrable en `file://` ; option `--engine`)
 - Phase 4 : bibliothèque + programme ; module `web` (wasm-bindgen : `Player`) ; lecteur `web/didact.js` (`<didact-player>`, contrôles, sous-titres, langues, erreurs) ; `web/build.ps1` ; guide `Readme/WEB.md`
 - LaTeX complet via MiTeX + Typst : `text` avec `$...$`, `equation`, `latex`, `raw.latex`, `table` ; erreurs LaTeX signalées avec le numéro de ligne
 - Blocs `|` multilignes lus depuis le source (retours à la ligne et `|` conservés)

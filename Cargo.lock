@@ -1037,7 +1037,9 @@ checksum = "9e9de72ce2ad1f90dc62fa25f0f430ef85eb4b0d8fa0be4f30373bc40a21d28e"
 name = "didact"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "eframe",
+ "flate2",
  "mitex",
  "tiny-skia 0.12.0",
  "typst",

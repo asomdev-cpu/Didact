@@ -368,6 +368,13 @@ pub fn shapes(content: &Content, x: f32, y: f32, size: f32, align: Align, color:
     Ok(place(&ts, x, y, size, align, color))
 }
 
+/// Taille (largeur, hauteur) en pixels d'un contenu composé à la taille `size`
+pub fn measure(content: &Content, size: f32) -> Result<(f32, f32), String> {
+    let ts = typeset(content, Align::Left)?;
+    let k = size / BASE_PT;
+    Ok((ts.width * k, ts.height * k))
+}
+
 /// Vérifie qu'un contenu se compose (pour le validateur)
 pub fn check(content: &Content) -> Result<(), String> {
     typeset(content, Align::Center).map(|_| ())

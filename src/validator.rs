@@ -75,6 +75,8 @@ struct Validator {
     /// Pour chaque figure, les figures qu'elle référence dans sa définition
     /// (sert à vérifier `destroy`)
     figure_refs: HashMap<String, Vec<String>>,
+    /// Membres de chaque groupe (groupes imbriqués compris)
+    groups: HashMap<String, Vec<String>>,
 }
 
 // ─────────────────────────────────────────────
@@ -86,6 +88,7 @@ pub fn validate(doc: &Document) -> Result<(), Vec<String>> {
         errors: Vec::new(),
         defs: HashMap::new(),
         figure_refs: HashMap::new(),
+        groups: HashMap::new(),
     };
 
     v.check_config(&doc.config);
@@ -255,6 +258,10 @@ impl Validator {
                 }
             }
 
+            if ftype == "group" {
+                self.check_group(f);
+            }
+
             let mut refs = Vec::new();
 
             // Tri par ligne pour avoir les erreurs dans l'ordre du fichier
@@ -304,6 +311,43 @@ impl Validator {
             }
 
             self.figure_refs.insert(f.name.clone(), refs);
+        }
+    }
+
+    /// Groupe : `items` non vide, `pos` = décalage en %
+    fn check_group(&mut self, f: &FigureDef) {
+        let line_of = |key: &str| f.prop_lines.get(key).copied().unwrap_or(f.line);
+        match f.properties.get("items") {
+            Some(PropValue::List(items)) if !items.is_empty() => {
+                // membres, groupes imbriqués compris (ils sont définis plus haut)
+                let mut members = Vec::new();
+                for item in items {
+                    if !members.contains(item) {
+                        members.push(item.clone());
+                    }
+                    for sub in self.groups.get(item).cloned().unwrap_or_default() {
+                        if !members.contains(&sub) {
+                            members.push(sub);
+                        }
+                    }
+                }
+                self.groups.insert(f.name.clone(), members);
+            }
+            _ => self.error(
+                line_of("items"),
+                format!("groupe '{}' : `items` attend une liste de figures, ex : items : [a, b]", f.name),
+            ),
+        }
+        if let Some(pos) = f.properties.get("pos") {
+            let ok = matches!(pos, PropValue::Tuple(v) if v.len() == 2 && v.iter().all(|x| {
+                x.trim().trim_end_matches('%').parse::<f64>().is_ok() && x.trim().ends_with('%')
+            }));
+            if !ok {
+                self.error(
+                    line_of("pos"),
+                    format!("groupe '{}' : `pos` est un décalage en %, ex : pos : (10%, 0%)", f.name),
+                );
+            }
         }
     }
 
@@ -399,6 +443,12 @@ impl Validator {
             for (line, name) in destroy {
                 if self.check_usable(line, t, name, &destroyed) {
                     destroyed_now.push((line, name.clone()));
+                    // détruire un groupe détruit aussi ses figures
+                    for m in self.groups.get(name).cloned().unwrap_or_default() {
+                        if !destroyed.contains_key(&m) && !destroyed_now.iter().any(|(_, n)| *n == m) {
+                            destroyed_now.push((line, m));
+                        }
+                    }
                 }
             }
             for (_, name) in &destroyed_now {
@@ -469,6 +519,16 @@ impl Validator {
             Ok((AnimKind::Color { to }, _, _)) => {
                 if let Err(e) = parse_color(&to) {
                     self.error_t(line, t, format!("'{}' : {}", figure, e));
+                }
+            }
+            Ok((AnimKind::Transform { to }, _, _)) => {
+                if to == figure {
+                    self.error_t(line, t, format!("'{}' : transform vers elle-même", figure));
+                }
+                for name in [figure, to.as_str()] {
+                    if self.groups.contains_key(name) {
+                        self.error_t(line, t, format!("transform : '{}' est un groupe (pas encore possible)", name));
+                    }
                 }
             }
             Ok(_) => {}
