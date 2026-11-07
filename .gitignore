@@ -1,2 +1,6 @@
 /target
 web/pkg/
+
+# Voix : modèles téléchargés et fichiers générés par --voice
+/voix/
+*_voix/

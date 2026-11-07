@@ -79,6 +79,17 @@ pub struct AudioTrack {
     pub position: f64,
 }
 
+/// Une piste audio sur toute sa durée de lecture
+#[derive(Debug, Clone, PartialEq)]
+pub struct AudioSegment {
+    pub file: String,
+    pub volume: f64,
+    /// Instant de démarrage dans la vidéo (secondes)
+    pub start: f64,
+    /// Instant d'arrêt (None = jusqu'à la fin de la vidéo)
+    pub end: Option<f64>,
+}
+
 /// Une figure à l'instant t, avec ses animations déjà commencées
 #[derive(Debug)]
 pub struct FigureState<'a> {
@@ -106,6 +117,8 @@ pub struct Frame<'a> {
     pub comment: Option<&'a str>,
     /// Pistes audio en cours
     pub audio: Vec<AudioTrack>,
+    /// Valeur de chaque paramètre (`defparam`) à l'instant t
+    pub params: HashMap<String, f64>,
 }
 
 pub struct Timeline {
@@ -124,6 +137,18 @@ pub struct Timeline {
     /// Langues dans l'ordre de [config]
     languages: Vec<String>,
     default_lang: String,
+    /// Chaque `comment` de la timeline, dans l'ordre chronologique
+    comments: Vec<CommentAt>,
+    /// Paramètres et valeurs de départ
+    params: Vec<(String, f64)>,
+}
+
+/// Un `comment` de la timeline : instant, ligne, traductions (dans l'ordre de `languages`)
+#[derive(Debug, Clone, PartialEq)]
+pub struct CommentAt {
+    pub t: f64,
+    pub line: usize,
+    pub texts: Vec<String>,
 }
 
 /// `a` remplacée par `b` à la fin d'un transform(to=b)
@@ -168,6 +193,7 @@ impl Timeline {
         let mut snapshots = Vec::new();
         let mut anims: HashMap<String, Vec<Anim>> = HashMap::new();
         let mut swaps: Vec<Swap> = Vec::new();
+        let mut comments: Vec<CommentAt> = Vec::new();
         let groups: HashMap<String, Vec<String>> = doc
             .figures
             .iter()
@@ -218,6 +244,11 @@ impl Timeline {
                             None => 0.0,
                         };
                         for name in with_members(&item.name) {
+                            // une figure du groupe déjà cachée le reste (pas de nouvelle sortie)
+                            let was_visible = current.status.get(&name) == Some(&Status::Visible);
+                            if name != item.name && !was_visible {
+                                continue;
+                            }
                             current.status.insert(name.clone(), Status::Hidden);
                             current.exits.remove(&name);
                             if item.anim.is_some() {
@@ -262,6 +293,7 @@ impl Timeline {
             for located in &ev.actions {
                 if let TimelineAction::Comment(texts) = &located.action {
                     current.comment = Some(texts.clone());
+                    comments.push(CommentAt { t, line: located.line, texts: texts.clone() });
                 }
             }
 
@@ -286,7 +318,26 @@ impl Timeline {
             snapshots,
             languages: doc.config.languages.clone(),
             default_lang: doc.config.default_lang.clone(),
+            comments,
+            params: doc.params.clone(),
         }
+    }
+
+    /// Valeur des paramètres à l'instant t : chaque `to` commencé rapproche la valeur de sa cible.
+    /// Comme le reste, elle ne dépend que de t (on peut reculer).
+    fn params_at(&self, t: f64) -> HashMap<String, f64> {
+        self.params
+            .iter()
+            .map(|(name, start)| {
+                let mut v = *start;
+                for a in self.anims.get(name).map(|l| l.as_slice()).unwrap_or(&[]) {
+                    if let (AnimKind::To(target), true) = (&a.kind, a.start <= t) {
+                        v += (target - v) * a.progress(t);
+                    }
+                }
+                (name.clone(), v)
+            })
+            .collect()
     }
 
     /// Fin de la timeline : dernier bloc, ou fin de la dernière animation si elle est plus tardive
@@ -304,6 +355,60 @@ impl Timeline {
     /// Timestamps de tous les blocs, triés
     pub fn times(&self) -> &[f64] {
         &self.times
+    }
+
+    /// Pistes audio sur toute la durée : quand chacune démarre et s'arrête (fenêtre, web, MP4)
+    pub fn audio_segments(&self) -> Vec<AudioSegment> {
+        let mut done: Vec<AudioSegment> = Vec::new();
+        let mut open: Vec<AudioSegment> = Vec::new();
+        for &t in self.times() {
+            let frame = self.frame_at(t, None);
+            let now: Vec<(String, f64, f64)> = frame
+                .audio
+                .iter()
+                .map(|a| (a.file.clone(), a.volume, round_ms(t - a.position)))
+                .collect();
+            // Pistes arrêtées (ou relancées) à t
+            let mut still = Vec::new();
+            for mut seg in open.drain(..) {
+                if now.iter().any(|(f, v, s)| *f == seg.file && *v == seg.volume && *s == seg.start) {
+                    still.push(seg);
+                } else {
+                    seg.end = Some(t);
+                    done.push(seg);
+                }
+            }
+            open = still;
+            // Nouvelles pistes
+            for (file, volume, start) in now {
+                if !open.iter().any(|s| s.file == file && s.start == start) {
+                    open.push(AudioSegment { file, volume, start, end: None });
+                }
+            }
+        }
+        done.extend(open);
+        done.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap_or(std::cmp::Ordering::Equal));
+        done
+    }
+
+    /// Tous les `comment`, dans l'ordre chronologique
+    pub fn comments(&self) -> &[CommentAt] {
+        &self.comments
+    }
+
+    /// Langues déclarées dans [config], dans l'ordre
+    pub fn languages(&self) -> &[String] {
+        &self.languages
+    }
+
+    /// Position d'une langue dans `languages` (langue inconnue ou None → default_lang)
+    pub fn lang_index(&self, lang: Option<&str>) -> usize {
+        let lang = lang.unwrap_or(&self.default_lang);
+        self.languages
+            .iter()
+            .position(|l| l == lang)
+            .or_else(|| self.languages.iter().position(|l| *l == self.default_lang))
+            .unwrap_or(0)
     }
 
     /// Membres d'un groupe (groupes imbriqués compris) ; vide si ce n'est pas un groupe
@@ -331,7 +436,14 @@ impl Timeline {
     pub fn frame_at(&self, t: f64, lang: Option<&str>) -> Frame<'_> {
         let snap = match self.snapshot_index(t) {
             None => {
-                return Frame { t, visible: Vec::new(), states: Vec::new(), comment: None, audio: Vec::new() };
+                return Frame {
+                    t,
+                    visible: Vec::new(),
+                    states: Vec::new(),
+                    comment: None,
+                    audio: Vec::new(),
+                    params: self.params_at(t),
+                };
             }
             Some(i) => &self.snapshots[i],
         };
@@ -362,13 +474,7 @@ impl Timeline {
             })
             .collect();
 
-        let lang = lang.unwrap_or(&self.default_lang);
-        let lang_index = self
-            .languages
-            .iter()
-            .position(|l| l == lang)
-            .or_else(|| self.languages.iter().position(|l| *l == self.default_lang))
-            .unwrap_or(0);
+        let lang_index = self.lang_index(lang);
         let comment = snap
             .comment
             .as_ref()
@@ -382,8 +488,12 @@ impl Timeline {
             .collect();
         audio.sort_by(|a, b| a.file.cmp(&b.file));
 
-        Frame { t, visible, states, comment, audio }
+        Frame { t, visible, states, comment, audio, params: self.params_at(t) }
     }
+}
+
+fn round_ms(x: f64) -> f64 {
+    (x * 1000.0).round() / 1000.0
 }
 
 /// Applique les fins de transform (a cachée, b affichée) d'avant `until`
@@ -599,7 +709,7 @@ mod tests {
             [timeline]
             0.000 => { start : [g fadein(1s)] }
             2.000 => { anim : [a transform(to=c, 1.5s)] }
-            5.000 => { end : [g] }
+            5.000 => { end : [g fadeout(1s)] }
             6.000 => { destroy : [g] }",
         );
         assert_eq!(visibles(&tl, 0.5), ["a", "b", "g"]);
@@ -608,9 +718,52 @@ mod tests {
         // à la fin (3.5 s) : a remplacée par c (instantané intermédiaire)
         assert_eq!(visibles(&tl, 3.5), ["b", "c", "g"]);
         assert!(tl.times().contains(&3.5));
-        assert_eq!(visibles(&tl, 5.5), ["c"]);
+        assert_eq!(visibles(&tl, 5.5), ["b", "c", "g"]);
+        assert_eq!(visibles(&tl, 6.5), ["c"]);
+        // a, cachée par le transform, ne réapparaît pas avec le end du groupe
+        assert_eq!(tl.status_at("a", 5.0), Status::Hidden);
         assert_eq!(tl.status_at("a", 6.0), Status::Destroyed);
         assert_eq!(tl.status_at("b", 6.0), Status::Destroyed);
         assert_eq!(tl.members("g"), ["a", "b"]);
+    }
+
+    #[test]
+    fn parametres_dans_le_temps() {
+        let tl = timeline(
+            "[figures]
+            defparam k = 1
+            [timeline]
+            1.000 => { anim : [k to(3, 2s, ease=linear)] }
+            5.000 => { anim : [k [to(0, 1s, ease=linear), to(-2, 1s, ease=linear)]] }",
+        );
+        let k = |t: f64| tl.frame_at(t, None).params["k"];
+        assert_eq!(k(0.0), 1.0); // avant le premier bloc : valeur de départ
+        assert_eq!(k(1.0), 1.0);
+        assert_eq!(k(2.0), 2.0); // à mi-chemin
+        assert_eq!(k(3.0), 3.0);
+        assert_eq!(k(4.0), 3.0); // garde sa valeur
+        assert_eq!(k(5.5), 1.5);
+        assert_eq!(k(6.5), -1.0); // enchaîné
+        assert_eq!(k(9.0), -2.0);
+        assert_eq!(k(2.0), 2.0); // on peut reculer
+        assert_eq!(tl.duration(), 7.0); // la fin d'un `to` compte dans la durée
+    }
+
+    #[test]
+    fn segments_audio() {
+        let tl = timeline(
+            "[config]\nwindow : [16:9]\n[figures]\n[timeline]
+            2.000 => { start : [audio musique.mp3 volume=0.3] }
+            8.000 => { end : [audio musique.mp3] }
+            9.000 => { start : [audio bip.wav] }",
+        );
+        let segs = tl.audio_segments();
+        assert_eq!(
+            segs,
+            vec![
+                AudioSegment { file: "musique.mp3".into(), volume: 0.3, start: 2.0, end: Some(8.0) },
+                AudioSegment { file: "bip.wav".into(), volume: 1.0, start: 9.0, end: None },
+            ]
+        );
     }
 }

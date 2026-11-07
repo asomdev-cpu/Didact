@@ -104,6 +104,8 @@ L'export n'est pas le mode normal d'utilisation. C'est une fonctionnalité opt-i
 
 **MP4 (`output/video.rs`)** : chaque image est rendue dans le programme (tiny-skia, comme le PNG), le sous-titre est dessiné par-dessus, et les pixels bruts (RGBA) sont envoyés à `ffmpeg` par son entrée standard. ffmpeg encode en H.264 (yuv420p, dimensions paires). Les pistes `audio` de la timeline sont converties en segments (début, fin, volume) puis placées (`adelay`) et mélangées (`amix`) par ffmpeg. ffmpeg doit être installé.
 
+**Son dans la fenêtre (`output/audio.rs`)** : les pistes (début, fin, volume, déduites de la timeline) sont décodées en mémoire au démarrage (symphonia). La carte son (cpal) demande des échantillons ; on mélange les pistes actives à l'instant joué. Pendant la lecture, la fenêtre prend son temps dans l'horloge du son (image et son synchronisés) ; un saut ou une pause recale l'horloge.
+
 **HTML autonome (`output/html.rs`)** : un seul fichier contenant la source `.dct`, le lecteur `web/didact.js` (inclus dans l'exécutable à la compilation) et le moteur `web/pkg` compressé (gzip + base64). Au chargement, un crochet `__DIDACT_ENGINE__` décompresse le moteur (`DecompressionStream`) et l'initialise : pas de serveur ni de réseau nécessaire. Le moteur doit avoir été compilé une fois (`web/build.ps1`).
 
 ---
@@ -161,6 +163,10 @@ L'export n'est pas le mode normal d'utilisation. C'est une fonctionnalité opt-i
 - Gère les identifiants, nombres, strings, symboles, pourcentages, commentaires
 - Garde le numéro de ligne de chaque token, propagé dans l'AST pour des messages d'erreur `ligne N : ...`
 
+**Modèles (`src/model.rs`) — ✅ implémenté**
+- `defmodel` et `defrepeat` : remplace `@nom` et `@(calcul)` dans le texte d'un modèle
+- Le parser relit le texte obtenu comme une figure ordinaire : le validateur et le renderer ne voient que des figures
+
 **Parser (`src/parser.rs` + `src/ast.rs`) — ✅ implémenté**
 - Recursive descent parser
 - Produit une struct `Document` contenant Config, Styles, Figures, Timeline
@@ -201,6 +207,10 @@ L'export n'est pas le mode normal d'utilisation. C'est une fonctionnalité opt-i
 - `mod.rs` : trait `RenderBackend` + `render_frame` (dessine une frame, liste les figures non dessinables)
 - Délègue à LaTeX/Matplotlib pour les contenus complexes (à faire)
 
+**Rechargement (`src/output/reload.rs`) — ✅ implémenté**
+- Surveille la date et la taille du `.dct`, attend qu'il soit stable, relit avec `didact::load`
+- La fenêtre garde l'instant courant ; en cas d'erreur, elle garde l'ancienne version et affiche l'erreur
+
 **Fenêtre (`src/output/window.rs`) — ✅ implémenté**
 - eframe/egui : affiche l'image produite par tiny-skia, au ratio de `window`, à la taille réelle en pixels
 - Contrôles : lecture/pause, retour au début, barre de lecture, temps, langue ; sous-titres par-dessus
@@ -225,6 +235,7 @@ didact/
     │
     ├── lexer.rs             # Tokenisation
     ├── ast.rs               # Structures de données (AST)
+    ├── model.rs             # Modèles : defmodel, defrepeat
     ├── parser.rs            # Parser récursif descendant
     │
     ├── validator.rs         # Validation sémantique
@@ -245,6 +256,7 @@ didact/
     │   └── audio.rs         # Lecture audio
     │
     └── output/
+        ├── reload.rs        # Rechargement à chaud
         ├── window.rs        # Affichage fenêtre desktop
         ├── wasm.rs          # Export WebAssembly
         ├── mp4.rs           # Export MP4 (optionnel)
@@ -456,4 +468,4 @@ Quand l'utilisateur lance `didact cours.dct`, voici ce qui se passe :
 9. Si l'utilisateur ferme la fenêtre :
    └─ event loop termine
    └─ programme quitte proprement
-```
+```

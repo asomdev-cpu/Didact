@@ -9,6 +9,7 @@ use crate::renderer::geometry::{PathCmd, Rgba, Shape};
 use crate::renderer::skia::SkiaBackend;
 use crate::renderer::text::{self, Align};
 use crate::renderer::{self, RenderBackend, Scene};
+use crate::runtime::timeline::AudioSegment;
 use crate::runtime::Timeline;
 
 use std::collections::BTreeSet;
@@ -28,17 +29,8 @@ pub struct VideoOptions {
     pub ffmpeg: String,
     /// Dossier du fichier .dct : les chemins audio sont relatifs à lui
     pub base_dir: PathBuf,
-}
-
-/// Une piste audio sur toute sa durée de lecture
-#[derive(Debug, Clone, PartialEq)]
-pub struct AudioSegment {
-    pub file: String,
-    pub volume: f64,
-    /// Instant de démarrage dans la vidéo (secondes)
-    pub start: f64,
-    /// Instant d'arrêt (None = jusqu'à la fin de la vidéo)
-    pub end: Option<f64>,
+    /// Voix de la langue choisie (fichiers générés par --voice) et pauses de l'animation
+    pub voice: super::speech::VoicePlan,
 }
 
 /// Résultat de l'export
@@ -66,44 +58,6 @@ pub fn video_size(config: &Config, height: Option<u32>) -> (u32, u32) {
     ((w / 2 * 2).max(2), (h / 2 * 2).max(2))
 }
 
-/// Pistes audio jouées pendant la vidéo, déduites des blocs de la timeline
-pub fn audio_segments(timeline: &Timeline) -> Vec<AudioSegment> {
-    let mut done: Vec<AudioSegment> = Vec::new();
-    let mut open: Vec<AudioSegment> = Vec::new();
-    for &t in timeline.times() {
-        let frame = timeline.frame_at(t, None);
-        let now: Vec<(String, f64, f64)> = frame
-            .audio
-            .iter()
-            .map(|a| (a.file.clone(), a.volume, round_ms(t - a.position)))
-            .collect();
-        // Pistes arrêtées (ou relancées) à t
-        let mut still = Vec::new();
-        for mut seg in open.drain(..) {
-            if now.iter().any(|(f, v, s)| *f == seg.file && *v == seg.volume && *s == seg.start) {
-                still.push(seg);
-            } else {
-                seg.end = Some(t);
-                done.push(seg);
-            }
-        }
-        open = still;
-        // Nouvelles pistes
-        for (file, volume, start) in now {
-            if !open.iter().any(|s| s.file == file && s.start == start) {
-                open.push(AudioSegment { file, volume, start, end: None });
-            }
-        }
-    }
-    done.extend(open);
-    done.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap_or(std::cmp::Ordering::Equal));
-    done
-}
-
-fn round_ms(x: f64) -> f64 {
-    (x * 1000.0).round() / 1000.0
-}
-
 /// Exporte la timeline en MP4. `progress(image, total)` est appelé après chaque image.
 pub fn export(
     timeline: &Timeline,
@@ -112,11 +66,14 @@ pub fn export(
     mut progress: impl FnMut(u32, u32),
 ) -> Result<VideoReport, String> {
     let (w, h) = video_size(config, opts.height);
-    let duration = timeline.duration().max(1.0 / opts.fps as f64);
+    // Temps réel de la vidéo = timeline + pauses laissées aux phrases trop longues
+    let holds = &opts.voice.holds;
+    let duration = (timeline.duration() + holds.extra()).max(1.0 / opts.fps as f64);
     let total = (duration * opts.fps as f64).ceil() as u32;
 
-    // ── Pistes audio ──
-    let segments = audio_segments(timeline);
+    // ── Pistes audio (en temps réel) ──
+    let mut segments = super::speech::real_time(&timeline.audio_segments(), holds);
+    segments.extend(super::speech::real_time(&opts.voice.segments, holds));
     let mut audio_inputs = Vec::new();
     for seg in &segments {
         let path = opts.base_dir.join(&seg.file);
@@ -135,7 +92,7 @@ pub fn export(
         cmd.arg("-i").arg(path);
     }
     if !segments.is_empty() {
-        cmd.args(["-filter_complex", &audio_filter(&segments, duration)]);
+        cmd.args(["-filter_complex", &audio_filter(&segments, duration, 1)]);
         cmd.args(["-map", "0:v", "-map", "[aout]", "-c:a", "aac", "-b:a", "192k"]);
     }
     cmd.args(["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p"]);
@@ -171,7 +128,7 @@ pub fn export(
     {
         let mut stdin = child.stdin.take().expect("stdin");
         for i in 0..total {
-            let t = i as f64 / opts.fps as f64;
+            let t = holds.to_timeline(i as f64 / opts.fps as f64);
             let frame = timeline.frame_at(t, opts.lang.as_deref());
             for (name, reason) in renderer::render_frame(&frame, &scene, &mut backend) {
                 warnings.insert(format!("'{}' non dessinée : {}", name, reason));
@@ -214,8 +171,8 @@ pub fn export(
 }
 
 /// Filtre ffmpeg qui place chaque piste à son instant, avec son volume, puis les mélange.
-/// L'entrée 0 est la vidéo ; la piste i est l'entrée i + 1.
-fn audio_filter(segments: &[AudioSegment], duration: f64) -> String {
+/// La piste i est l'entrée `first + i` (pour la vidéo, l'entrée 0 est l'image).
+fn audio_filter(segments: &[AudioSegment], duration: f64, first: usize) -> String {
     let mut parts = Vec::new();
     let mut labels = String::new();
     for (i, seg) in segments.iter().enumerate() {
@@ -223,7 +180,7 @@ fn audio_filter(segments: &[AudioSegment], duration: f64) -> String {
         let delay = (seg.start * 1000.0).round() as i64;
         parts.push(format!(
             "[{}:a]atrim=0:{:.3},asetpts=PTS-STARTPTS,volume={},adelay={}:all=1[a{}]",
-            i + 1,
+            i + first,
             length.max(0.0),
             seg.volume,
             delay,
@@ -241,6 +198,42 @@ fn audio_filter(segments: &[AudioSegment], duration: f64) -> String {
         ));
     }
     parts.join(";")
+}
+
+/// Export du son seul (le « podcast ») : pistes audio et voix mélangées, en MP3
+pub fn export_audio(
+    segments: &[AudioSegment],
+    duration: f64,
+    base_dir: &Path,
+    output: &Path,
+    ffmpeg: &str,
+) -> Result<(), String> {
+    if segments.is_empty() {
+        return Err("aucun son à exporter (ni piste audio, ni voix : lancez d'abord --voice)".to_string());
+    }
+    let mut cmd = Command::new(ffmpeg);
+    cmd.args(["-y", "-hide_banner", "-loglevel", "error"]);
+    for seg in segments {
+        let path = base_dir.join(&seg.file);
+        if !path.is_file() {
+            return Err(format!("fichier audio introuvable : {}", path.display()));
+        }
+        cmd.arg("-i").arg(path);
+    }
+    cmd.args(["-filter_complex", &audio_filter(segments, duration, 0)]);
+    cmd.args(["-map", "[aout]", "-t", &format!("{:.3}", duration), "-c:a", "libmp3lame", "-q:a", "2"]);
+    cmd.arg(output);
+    let out = cmd.output().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            format!("ffmpeg introuvable ('{}') : voir --ffmpeg", ffmpeg)
+        } else {
+            e.to_string()
+        }
+    })?;
+    if !out.status.success() {
+        return Err(format!("ffmpeg a échoué : {}", String::from_utf8_lossy(&out.stderr).trim()));
+    }
+    Ok(())
 }
 
 // ─────────────────────────────────────────────
@@ -341,10 +334,6 @@ pub fn default_output(source: &Path, lang: Option<&str>, ext: &str) -> PathBuf {
 mod tests {
     use super::*;
 
-    fn timeline(src: &str) -> Timeline {
-        crate::load(src).map(|(_, tl)| tl).unwrap()
-    }
-
     #[test]
     fn mots_et_maths() {
         assert_eq!(words("la dérivée $f'(x) = 2 x$ vaut"), vec!["la", "dérivée", "$f'(x) = 2 x$", "vaut"]);
@@ -355,23 +344,5 @@ mod tests {
         let config = Config::default();
         let (w, h) = video_size(&config, Some(721));
         assert_eq!((w % 2, h % 2), (0, 0));
-    }
-
-    #[test]
-    fn segments_audio() {
-        let tl = timeline(
-            "[config]\nwindow : [16:9]\n[figures]\n[timeline]
-            2.000 => { start : [audio musique.mp3 volume=0.3] }
-            8.000 => { end : [audio musique.mp3] }
-            9.000 => { start : [audio bip.wav] }",
-        );
-        let segs = audio_segments(&tl);
-        assert_eq!(
-            segs,
-            vec![
-                AudioSegment { file: "musique.mp3".into(), volume: 0.3, start: 2.0, end: Some(8.0) },
-                AudioSegment { file: "bip.wav".into(), volume: 1.0, start: 9.0, end: None },
-            ]
-        );
     }
 }

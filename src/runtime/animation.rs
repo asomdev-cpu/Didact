@@ -103,8 +103,8 @@ pub enum AnimKind {
     MoveBy { dir: Dir, distance: f64 },
     /// Se transforme en la figure `to`, qui la remplace à la fin
     Transform { to: String },
-    /// La couleur du trait va vers `to`
-    Color { to: String },
+    /// La couleur du trait va vers `to` ; avec `part`, seulement ce morceau d'un texte ou d'une équation
+    Color { to: String, part: Option<String> },
     /// La taille va vers ce facteur (1 = taille d'origine)
     Scale(f64),
     /// Tourne de cet angle en degrés (positif = sens trigonométrique)
@@ -112,6 +112,8 @@ pub enum AnimKind {
     /// Le centre parcourt le contour d'une figure (de son début à sa fin, à vitesse régulière) ;
     /// `tangent` : la figure s'oriente selon la tangente
     Follow { path: String, tangent: bool },
+    /// Un paramètre (`defparam`) va vers cette valeur
+    To(f64),
 }
 
 impl AnimKind {
@@ -219,7 +221,7 @@ pub fn parse_call(call: &AnimCall) -> Result<(AnimKind, f64, Ease), String> {
             None => return Err("transform attend une figure : transform(to=autre_figure, durée)".to_string()),
         },
         "color" => match named_value("to") {
-            Some(to) => AnimKind::Color { to },
+            Some(to) => AnimKind::Color { to, part: named_value("part") },
             None => return Err("color attend une couleur : color(to=red, durée)".to_string()),
         },
         "scale" => AnimKind::Scale(parse_number(positional.first(), "scale attend un facteur : scale(2, durée)")?),
@@ -235,6 +237,7 @@ pub fn parse_call(call: &AnimCall) -> Result<(AnimKind, f64, Ease), String> {
             };
             AnimKind::Follow { path, tangent }
         }
+        "to" => AnimKind::To(parse_number(positional.first(), "to attend une valeur : to(3, durée)")?),
         "rotate" => AnimKind::Rotate(parse_number(
             positional.first(),
             "rotate attend un angle en degrés : rotate(90, durée)",

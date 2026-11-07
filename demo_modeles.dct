@@ -1,0 +1,82 @@
+# ─────────────────────────────────────────────
+#  Modèles et répétitions : defmodel, defrepeat
+#  Somme de Riemann : 8 rectangles, puis 16
+#  didact demo_modeles.dct
+# ─────────────────────────────────────────────
+
+[config]
+window       : [16:9]
+languages    : [FR, EN]
+default_lang : FR
+
+[figures]
+
+deffigure repere =
+    type   : axes
+    from   : (6%, 10%)
+    to     : (94%, 92%)
+    xrange : [0, 4]
+    yrange : [0, 2.4]
+    equal  : false
+    xlabel : "$x$"
+
+deffigure courbe =
+    type   : plot
+    expr   : sqrt(x)
+    axes   : repere
+    color  : #DC2626
+    stroke : 4px
+    layer  : 1
+
+# Un modèle : un rectangle de la somme, n°i, de largeur h, posé sous la courbe
+# @i est remplacé par l'argument, @(...) par le résultat du calcul
+
+defmodel barre(i, h, teinte) =
+    type   : polygon
+    points : [repere(@(i*h), 0), repere(@((i+1)*h), 0), repere(@((i+1)*h), @(sqrt(i*h))), repere(@(i*h), @(sqrt(i*h)))]
+    fill   : @teinte
+    color  : #1E3A8A
+    stroke : 1px
+
+# Une répétition : barres8_0 … barres8_7, et le groupe barres8 qui les contient
+
+defrepeat barres8  = barre(@i, 0.5, #93C5FD) for i in 0..7
+defrepeat barres16 = barre(@i, 0.25, #BFDBFE) for i in 0..15
+
+# Un modèle sert aussi pour écrire moins : deux légendes de même forme
+
+defmodel legende(texte) =
+    type    : text
+    content : "@texte"
+    pos     : (28%, 80%)
+    font    : 40px
+
+deffigure l8  = legende("8 rectangles")
+deffigure l16 = legende("16 rectangles")
+
+[timeline]
+
+0.000 => {
+    start   : [repere fadein(0.5s), courbe draw(1s)]
+    comment : ["Quelle est l'aire sous la courbe ?", "What is the area under the curve?"]
+}
+
+1.500 => {
+    start   : [barres8 draw(2s), l8 fadein(0.5s)]
+    comment : ["On l'approche avec 8 rectangles.", "We approximate it with 8 rectangles."]
+}
+
+4.000 => {
+    anim    : [barres8_5 color(to=#DC2626, 0.5s)]
+    comment : ["Chaque figure du groupe reste accessible.", "Each figure of the group stays reachable."]
+}
+
+5.500 => {
+    end     : [barres8 fadeout(0.8s), l8 fadeout(0.5s)]
+    start   : [barres16 fadein(0.8s), l16 fadein(0.5s)]
+    comment : ["Avec 16, l'erreur diminue.", "With 16, the error shrinks."]
+}
+
+8.000 => {
+    end     : [barres16 fadeout(0.5s), l16 fadeout(0.5s), courbe fadeout(0.5s), repere fadeout(0.5s)]
+}

@@ -1,0 +1,96 @@
+# ─────────────────────────────────────────────
+#  Équations terme à terme : transform et color(part=...)
+#  didact demo_equations.dct
+# ─────────────────────────────────────────────
+
+[config]
+window       : [16:9]
+languages    : [FR, EN]
+default_lang : FR
+
+[figures]
+
+# --- Partie 1 : la formule s'allonge, ce qui existe déjà reste à sa place ---
+# align : left garde le début de la formule immobile
+
+deffigure t1 =
+    type  : equation
+    expr  : T(x) = x
+    pos   : (12%, 70%)
+    align : left
+    size  : 56px
+
+deffigure t3 =
+    type  : equation
+    expr  : T(x) = x - \frac{x^3}{3!}
+    pos   : (12%, 70%)
+    align : left
+    size  : 56px
+
+deffigure t5 =
+    type  : equation
+    expr  : T(x) = x - \frac{x^3}{3!} + \frac{x^5}{5!}
+    pos   : (12%, 70%)
+    align : left
+    size  : 56px
+
+# --- Partie 2 : un terme change de côté ---
+
+deffigure e1 =
+    type : equation
+    expr : 2x + 3 = 7
+    pos  : (50%, 35%)
+    size : 56px
+
+deffigure e2 =
+    type : equation
+    expr : 2x = 7 - 3
+    pos  : (50%, 35%)
+    size : 56px
+
+deffigure e3 =
+    type : equation
+    expr : x = \frac{7 - 3}{2}
+    pos  : (50%, 35%)
+    size : 56px
+
+[timeline]
+
+0.000 => {
+    start   : [t1 fadein(0.5s)]
+    comment : ["On part de l'ordre 1.", "We start at order 1."]
+}
+
+1.500 => {
+    anim    : [t1 transform(to=t3, 1.5s)]
+    comment : ["Ordre 3 : seul le nouveau terme apparaît.", "Order 3: only the new term appears."]
+}
+
+3.500 => {
+    anim    : [t3 color(to=#DC2626, 0.5s, part="\frac{x^3}{3!}")]
+    comment : ["Voici la correction.", "Here is the correction."]
+}
+
+5.000 => {
+    anim    : [t3 [color(to=black, 0.4s, part="\frac{x^3}{3!}"), transform(to=t5, 1.5s)]]
+    comment : ["Ordre 5, même principe.", "Order 5, same idea."]
+}
+
+7.500 => {
+    start   : [e1 fadein(0.5s)]
+    anim    : [t5 color(to=#2563EB, 0.5s, part="\frac{x^5}{5!}")]
+}
+
+9.000 => {
+    anim    : [e1 transform(to=e2, 1.5s)]
+    comment : ["Le 3 passe de l'autre côté.", "The 3 moves to the other side."]
+}
+
+11.000 => {
+    anim    : [e2 transform(to=e3, 1.5s)]
+    comment : ["Le 2 aussi.", "So does the 2."]
+}
+
+13.500 => {
+    end     : [t5 fadeout(0.5s), e3 fadeout(0.5s)]
+}

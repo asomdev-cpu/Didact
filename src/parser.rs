@@ -1,5 +1,6 @@
 use crate::lexer::{Spanned, Token};
 use crate::ast::*;
+use crate::model::{self, Model};
 use std::collections::HashMap;
 
 // ─────────────────────────────────────────────
@@ -13,6 +14,8 @@ pub struct Parser {
     last_line: usize,
     /// Texte source, ligne par ligne (pour les propriétés lues telles quelles, comme `expr`)
     source_lines: Vec<String>,
+    /// Modèles déjà définis (`defmodel`)
+    models: HashMap<String, Model>,
 }
 
 /// Propriétés dont la valeur est le reste de la ligne, tel quel
@@ -21,7 +24,7 @@ const RAW_LINE_PROPS: &[&str] = &["expr"];
 
 impl Parser {
     pub fn new(tokens: Vec<Spanned>) -> Self {
-        Parser { tokens, pos: 0, last_line: 1, source_lines: Vec::new() }
+        Parser { tokens, pos: 0, last_line: 1, source_lines: Vec::new(), models: HashMap::new() }
     }
 
     /// Bloc multilignes `key : |` : les lignes suivantes plus indentées que `key`,
@@ -82,6 +85,43 @@ impl Parser {
         Some(PropValue::Single(value))
     }
 
+    /// Valeur de la forme `nom(arguments)` qui occupe toute la fin de la ligne :
+    /// gardée telle quelle (sans espaces), pour que les coordonnées restent des expressions
+    /// (`repere(a - 1, sin(a))`). Le découpage en tokens perdrait les opérateurs.
+    fn raw_call_value(&mut self, line: usize) -> Option<PropValue> {
+        let Token::Ident(name) = self.peek().clone() else { return None };
+        if self.tokens.get(self.pos + 1).map(|t| &t.token) != Some(&Token::LParen) {
+            return None;
+        }
+        let text = self.source_lines.get(line.checked_sub(1)?)?;
+        let after = text.split_once(':')?.1;
+        let after = match after.find(" #") {
+            Some(i) => &after[..i],
+            None => after,
+        };
+        let value: String = after.chars().filter(|c| !c.is_whitespace()).collect();
+        let args = value.strip_prefix(&name)?.strip_prefix('(')?.strip_suffix(')')?;
+        // Parenthèses équilibrées : la dernière ferme bien la première
+        let mut depth = 0i32;
+        for c in args.chars() {
+            match c {
+                '(' => depth += 1,
+                ')' => depth -= 1,
+                _ => {}
+            }
+            if depth < 0 {
+                return None;
+            }
+        }
+        if depth != 0 {
+            return None;
+        }
+        while self.line() == line && *self.peek() != Token::EOF {
+            self.advance();
+        }
+        Some(PropValue::Single(value))
+    }
+
     /// Regarde le token courant sans avancer
     fn peek(&self) -> &Token {
         &self.tokens[self.pos].token
@@ -126,7 +166,7 @@ impl Parser {
             return true;
         }
         if let Token::Ident(s) = self.peek() {
-            if matches!(s.as_str(), "deffigure" | "defstyle" | "defgroup") {
+            if matches!(s.as_str(), "deffigure" | "defstyle" | "defgroup" | "defparam" | "defmodel" | "defrepeat") {
                 return true;
             }
         }
@@ -155,6 +195,7 @@ impl Parser {
     fn parse_document(&mut self) -> Result<Document, String> {
         let mut config = Config::default();
         let mut styles = Vec::new();
+        let mut params = Vec::new();
         let mut figures = Vec::new();
         let mut timeline = Vec::new();
 
@@ -168,8 +209,9 @@ impl Parser {
                     match section.as_str() {
                         "config" => config = self.parse_config()?,
                         "figures" => {
-                            let (s, f) = self.parse_figures_section()?;
+                            let (s, p, f) = self.parse_figures_section()?;
                             styles = s;
+                            params = p;
                             figures = f;
                         }
                         "timeline" => timeline = self.parse_timeline_section()?,
@@ -184,7 +226,7 @@ impl Parser {
             }
         }
 
-        Ok(Document { config, styles, figures, timeline })
+        Ok(Document { config, styles, params, figures, timeline })
     }
 
     // ─────────────────────────────────────────────
@@ -253,8 +295,9 @@ impl Parser {
     //  SECTION [figures]
     // ─────────────────────────────────────────────
 
-    fn parse_figures_section(&mut self) -> Result<(Vec<StyleDef>, Vec<FigureDef>), String> {
+    fn parse_figures_section(&mut self) -> Result<(Vec<StyleDef>, Vec<ParamDef>, Vec<FigureDef>), String> {
         let mut styles = Vec::new();
+        let mut params = Vec::new();
         let mut figures = Vec::new();
         // Ordre de définition, partagé entre styles, figures et groupes
         // (sert au validateur pour interdire les références en avant)
@@ -269,10 +312,24 @@ impl Parser {
                         styles.push(self.parse_style(index)?);
                         index += 1;
                     }
+                    "defparam" => {
+                        self.advance();
+                        params.push(self.parse_param(index)?);
+                        index += 1;
+                    }
                     "deffigure" => {
                         self.advance();
                         figures.push(self.parse_figure(index)?);
                         index += 1;
+                    }
+                    "defmodel" => {
+                        self.advance();
+                        self.parse_model()?;
+                    }
+                    "defrepeat" => {
+                        self.advance();
+                        let group = self.parse_repeat(&mut index)?;
+                        figures.extend(group);
                     }
                     "defgroup" => {
                         self.advance();
@@ -294,7 +351,150 @@ impl Parser {
             }
         }
 
-        Ok((styles, figures))
+        Ok((styles, params, figures))
+    }
+
+    /// Texte d'une ligne du fichier, après le premier `=`
+    fn line_after_equals(&self, line: usize) -> Result<String, String> {
+        let text = self
+            .source_lines
+            .get(line.wrapping_sub(1))
+            .and_then(|l| l.split_once('='))
+            .map(|(_, rest)| rest)
+            .ok_or_else(|| format!("ligne {} : ligne illisible", line))?;
+        // Commentaire de fin de ligne : un # hors des parenthèses et des guillemets
+        // (dans les arguments, c'est une couleur)
+        let (mut depth, mut quoted) = (0i32, false);
+        for (i, c) in text.char_indices() {
+            match c {
+                '"' => quoted = !quoted,
+                '(' if !quoted => depth += 1,
+                ')' if !quoted => depth -= 1,
+                '#' if !quoted && depth == 0 => return Ok(text[..i].trim().to_string()),
+                _ => {}
+            }
+        }
+        Ok(text.trim().to_string())
+    }
+
+    /// Passe tous les tokens jusqu'à la ligne `last` comprise
+    fn skip_through_line(&mut self, last: usize) {
+        while self.line() <= last && *self.peek() != Token::EOF {
+            self.advance();
+        }
+    }
+
+    /// defmodel nom(a, b) =
+    ///     type : ...
+    /// Les lignes plus indentées que `defmodel` forment le corps, gardé comme texte.
+    fn parse_model(&mut self) -> Result<(), String> {
+        let line = self.last_line;
+        if self.source_lines.is_empty() {
+            return Err(format!("ligne {} : defmodel a besoin du texte source", line));
+        }
+        let name = self.expect_ident()?;
+        self.expect(&Token::LParen)?;
+        let mut params = Vec::new();
+        loop {
+            match self.advance() {
+                Token::RParen => break,
+                Token::Comma => {}
+                Token::Ident(p) => params.push(p),
+                tok => return Err(format!("ligne {} : defmodel {} : nom d'argument attendu, trouvé {:?}", line, name, tok)),
+            }
+        }
+        self.expect(&Token::Equals)?;
+
+        let indent = |l: &str| l.len() - l.trim_start().len();
+        let def_indent = indent(&self.source_lines[line - 1]);
+        let mut body = Vec::new();
+        let mut last = line;
+        for (i, l) in self.source_lines.iter().enumerate().skip(line) {
+            if !l.trim().is_empty() && indent(l) <= def_indent {
+                break;
+            }
+            body.push(l.clone());
+            last = i + 1;
+        }
+        while body.last().is_some_and(|l: &String| l.trim().is_empty()) {
+            body.pop();
+        }
+        if body.is_empty() {
+            return Err(format!("ligne {} : le modèle '{}' est vide (ses lignes doivent être indentées)", line, name));
+        }
+        self.skip_through_line(last);
+        if self.models.insert(name.clone(), Model { params, body }).is_some() {
+            return Err(format!("ligne {} : le modèle '{}' est défini deux fois", line, name));
+        }
+        Ok(())
+    }
+
+    /// Crée une figure à partir d'un modèle : le texte obtenu est relu comme une figure ordinaire.
+    /// Toutes ses propriétés portent la ligne de l'appel.
+    fn figure_from_model(&self, name: &str, call: &str, index: usize, line: usize) -> Result<FigureDef, String> {
+        let (model_name, args) =
+            model::split_call(call).ok_or_else(|| format!("ligne {} : appel de modèle attendu : nom(arguments)", line))?;
+        let m = self
+            .models
+            .get(model_name)
+            .ok_or_else(|| format!("ligne {} : modèle inconnu '{}' (à définir plus haut avec defmodel)", line, model_name))?;
+        let text = model::expand(model_name, m, name, &model::split_args(args)).map_err(|e| format!("ligne {} : {}", line, e))?;
+
+        let mut sub = Parser::new(crate::lexer::tokenize(&text));
+        sub.source_lines = text.lines().map(|l| l.to_string()).collect();
+        sub.advance(); // deffigure
+        let mut fig = sub.parse_figure(index).map_err(|e| format!("ligne {} : modèle '{}' : {}", line, model_name, e))?;
+        fig.line = line;
+        for l in fig.prop_lines.values_mut() {
+            *l = line;
+        }
+        Ok(fig)
+    }
+
+    /// defrepeat barres = barre(@i, red) for i in 0..7
+    /// Crée barres_0 … barres_7 et le groupe `barres` qui les contient.
+    fn parse_repeat(&mut self, index: &mut usize) -> Result<Vec<FigureDef>, String> {
+        const FORM: &str = "defrepeat nom = modele(arguments) for i in 0..7";
+        let line = self.last_line;
+        if self.source_lines.is_empty() {
+            return Err(format!("ligne {} : defrepeat a besoin du texte source", line));
+        }
+        let name = self.expect_ident()?;
+        let text = self.line_after_equals(line)?;
+        self.skip_through_line(line);
+        let (call, range) = text.rsplit_once(" for ").ok_or_else(|| format!("ligne {} : forme attendue : {}", line, FORM))?;
+        let (var, first, last) = model::parse_range(range).ok_or_else(|| format!("ligne {} : forme attendue : {}", line, FORM))?;
+        if first < 0 || last < first || last - first >= 1000 {
+            return Err(format!("ligne {} : defrepeat : intervalle {}..{} invalide (entiers ≥ 0, 1000 au plus)", line, first, last));
+        }
+
+        let mut figures = Vec::new();
+        let mut items = Vec::new();
+        for i in first..=last {
+            let values = HashMap::from([(var.clone(), i.to_string())]);
+            let call = model::substitute(call, &values).map_err(|e| format!("ligne {} : defrepeat : {}", line, e))?;
+            let item = format!("{}_{}", name, i);
+            figures.push(self.figure_from_model(&item, &call, *index, line)?);
+            *index += 1;
+            items.push(item);
+        }
+        let mut properties = HashMap::new();
+        properties.insert("type".to_string(), PropValue::Single("group".to_string()));
+        properties.insert("items".to_string(), PropValue::List(items));
+        figures.push(FigureDef { name, index: *index, line, properties, prop_lines: HashMap::new() });
+        *index += 1;
+        Ok(figures)
+    }
+
+    /// defparam k = 1
+    fn parse_param(&mut self, index: usize) -> Result<ParamDef, String> {
+        let line = self.last_line; // ligne du mot-clé defparam
+        let name = self.expect_ident()?;
+        self.expect(&Token::Equals)?;
+        match self.advance() {
+            Token::Number(value) => Ok(ParamDef { name, index, line, value }),
+            tok => Err(format!("ligne {} : defparam {} : valeur de départ numérique attendue, trouvé {:?}", line, name, tok)),
+        }
     }
 
     fn parse_style(&mut self, index: usize) -> Result<StyleDef, String> {
@@ -323,6 +523,8 @@ impl Parser {
                     properties.insert(key, v);
                 } else if let Some(v) = self.raw_line_value(&key, line) {
                     properties.insert(key, v);
+                } else if let Some(v) = self.raw_call_value(line) {
+                    properties.insert(key, v);
                 } else {
                     properties.insert(key, self.parse_prop_value()?);
                 }
@@ -338,6 +540,13 @@ impl Parser {
         let line = self.last_line; // ligne du mot-clé deffigure / defgroup
         let name = self.expect_ident()?;
         self.expect(&Token::Equals)?;
+
+        // deffigure t1 = modele(arguments)
+        if self.line() == line && matches!(self.peek(), Token::Ident(_)) && !self.source_lines.is_empty() {
+            let call = self.line_after_equals(line)?;
+            self.skip_through_line(line);
+            return self.figure_from_model(&name, &call, index, line);
+        }
 
         let mut properties = HashMap::new();
         let mut prop_lines = HashMap::new();
@@ -356,7 +565,10 @@ impl Parser {
                     Some(v) => v,
                     None => match self.raw_line_value(&key, line) {
                         Some(v) => v,
-                        None => self.parse_prop_value()?,
+                        None => match self.raw_call_value(line) {
+                            Some(v) => v,
+                            None => self.parse_prop_value()?,
+                        },
                     },
                 };
                 properties.insert(key, value);
@@ -411,7 +623,15 @@ impl Parser {
                     match self.peek().clone() {
                         Token::RBracket | Token::EOF => { self.advance(); break; }
                         Token::Comma => { self.advance(); }
-                        Token::Ident(s) => { items.push(s); self.advance(); }
+                        Token::Ident(s) => {
+                            self.advance();
+                            // Un point dans un repère : repere(1, 2)
+                            if *self.peek() == Token::LParen {
+                                items.push(format!("{}{}", s, self.parse_paren_group()));
+                            } else {
+                                items.push(s);
+                            }
+                        }
                         Token::StringLit(s) => { items.push(s); self.advance(); }
                         Token::Number(n) => { items.push(n.to_string()); self.advance(); }
                         Token::Percentage(p) => { items.push(p); self.advance(); }
@@ -767,6 +987,7 @@ impl Parser {
                 Token::Percentage(p) => { out.push_str(&p); self.advance(); }
                 Token::Ident(s) => { out.push_str(&s); self.advance(); }
                 Token::StringLit(s) => { out.push_str(&s); self.advance(); }
+                Token::Op(c) => { out.push(c); self.advance(); }
                 _ => { self.advance(); }
             }
         }

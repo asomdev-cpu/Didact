@@ -19,6 +19,7 @@ pub enum Token {
     RParen,     // )
     Comma,      // ,
     Pipe,       // |    (bloc multilignes)
+    Op(char),   // + - * / ^  seuls (dans les paramètres d'animation : a - 1)
 
     // --- Fin ---
     EOF,
@@ -159,7 +160,7 @@ pub fn tokenize(input: &str) -> Vec<Spanned> {
                         push(&mut tokens, start, Token::Number(num.parse().unwrap_or(0.0)));
                     }
                 } else {
-                    // Juste un tiret seul, on l'ignore
+                    push(&mut tokens, start, Token::Op('-'));
                 }
             }
 
@@ -184,6 +185,7 @@ pub fn tokenize(input: &str) -> Vec<Spanned> {
             ')' => { chars.next(); push(&mut tokens, start, Token::RParen); }
             ',' => { chars.next(); push(&mut tokens, start, Token::Comma); }
             '|' => { chars.next(); push(&mut tokens, start, Token::Pipe); }
+            '+' | '*' | '/' | '^' => { chars.next(); push(&mut tokens, start, Token::Op(c)); }
 
             // --- Identifiants ---
             // Peuvent contenir : lettres, chiffres, _, ., /, \, ^ (pour LaTeX)

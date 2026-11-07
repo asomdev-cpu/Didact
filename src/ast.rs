@@ -5,6 +5,7 @@ use std::collections::HashMap;
 pub struct Document {
     pub config: Config,
     pub styles: Vec<StyleDef>,
+    pub params: Vec<ParamDef>,
     pub figures: Vec<FigureDef>,
     pub timeline: Vec<TimelineEvent>,
 }
@@ -45,6 +46,18 @@ pub enum WindowConfig {
 // ─────────────────────────────────────────────
 //  FIGURES & STYLES
 // ─────────────────────────────────────────────
+
+/// Un paramètre animable : defparam k = 1
+#[derive(Debug, Clone)]
+pub struct ParamDef {
+    pub name: String,
+    /// Position de la définition dans [figures] (compteur partagé avec les styles et figures)
+    pub index: usize,
+    /// Ligne du `defparam`
+    pub line: usize,
+    /// Valeur de départ
+    pub value: f64,
+}
 
 /// Un style réutilisable
 #[derive(Debug, Clone)]

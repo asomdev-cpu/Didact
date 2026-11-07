@@ -99,8 +99,40 @@ impl AxesMap {
     }
 }
 
-/// Géométries des figures déjà calculées, par nom
-pub type Refs = HashMap<String, Geom>;
+/// Ce que les figures peuvent référencer : géométries des figures déjà calculées (par nom)
+/// et valeur des paramètres à l'instant t
+#[derive(Debug, Clone, Default)]
+pub struct Refs {
+    geoms: HashMap<String, Geom>,
+    pub params: HashMap<String, f64>,
+}
+
+impl Refs {
+    pub fn new() -> Refs {
+        Refs::default()
+    }
+
+    pub fn with_params(params: HashMap<String, f64>) -> Refs {
+        Refs { geoms: HashMap::new(), params }
+    }
+
+    fn param_names(&self) -> Vec<String> {
+        self.params.keys().cloned().collect()
+    }
+}
+
+impl std::ops::Deref for Refs {
+    type Target = HashMap<String, Geom>;
+    fn deref(&self) -> &Self::Target {
+        &self.geoms
+    }
+}
+
+impl std::ops::DerefMut for Refs {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.geoms
+    }
+}
 
 /// La zone de dessin
 #[derive(Debug, Clone)]
@@ -180,7 +212,7 @@ pub fn figure_shapes(f: &ResolvedFigure, scene: &Scene, refs: &Refs) -> Result<V
         "line" => line(f, scene, refs, &look),
         "circle" => circle(f, scene, refs, &look),
         "rect" => rect(f, scene, refs, &look),
-        "polygon" => polygon(f, scene, &look),
+        "polygon" => polygon(f, scene, refs, &look),
         "arc" => arc(f, scene, refs, &look),
         "star" => star(f, scene, refs, &look),
         "text" => text(f, scene, refs, &look),
@@ -266,7 +298,7 @@ fn rect(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<V
     }])
 }
 
-fn polygon(f: &ResolvedFigure, scene: &Scene, look: &Look) -> Result<Vec<Shape>, String> {
+fn polygon(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<Vec<Shape>, String> {
     let items = match require(f, "points")? {
         PropValue::List(items) => items,
         v => return Err(format!("points doit être une liste de points, trouvé '{}'", fmt_value(v))),
@@ -276,7 +308,7 @@ fn polygon(f: &ResolvedFigure, scene: &Scene, look: &Look) -> Result<Vec<Shape>,
     }
     let mut path = Vec::new();
     for (i, item) in items.iter().enumerate() {
-        let (x, y) = point_str(item, scene)?;
+        let (x, y) = resolve_point(item, scene, refs)?;
         path.push(if i == 0 { PathCmd::MoveTo(x, y) } else { PathCmd::LineTo(x, y) });
     }
     path.push(PathCmd::Close);
@@ -396,7 +428,13 @@ fn equation(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Resu
     let size = font_size(f, scene, 1.25)?;
     let color = look.color.unwrap_or(Rgba::BLACK);
     let content = super::typeset::Content::Math(tex);
-    super::typeset::shapes(&content, x, y, size, super::typeset::Align::Center, color)
+    let align = match f.properties.get("align").map(fmt_value).as_deref() {
+        None | Some("center") => super::typeset::Align::Center,
+        Some("left") => super::typeset::Align::Left,
+        Some("right") => super::typeset::Align::Right,
+        Some(other) => return Err(format!("align '{}' invalide (left / center / right)", other)),
+    };
+    super::typeset::shapes(&content, x, y, size, align, color)
 }
 
 /// latex / raw.latex : du LaTeX en mode texte (`\begin{align}`, paragraphes, ...)
@@ -602,7 +640,7 @@ fn axes_of<'a>(f: &ResolvedFigure, refs: &'a Refs) -> Result<&'a AxesMap, String
 fn plot(f: &ResolvedFigure, _scene: &Scene, refs: &Refs, look: &Look) -> Result<Vec<Shape>, String> {
     let m = axes_of(f, refs)?;
     let src = fmt_value(require(f, "expr")?);
-    let e = super::expr::parse(&src)?;
+    let e = super::expr::parse_with(&src, &refs.param_names())?;
     let (xa, xb) = m.xrange;
     let (ya, yb) = m.yrange;
     let samples = match f.properties.get("samples") {
@@ -617,7 +655,7 @@ fn plot(f: &ResolvedFigure, _scene: &Scene, refs: &Refs, look: &Look) -> Result<
     let mut prev: Option<(f64, f64)> = None;
     for i in 0..=samples {
         let x = xa + (xb - xa) * i as f64 / samples as f64;
-        let y = e.eval(x);
+        let y = e.eval(x, &refs.params);
         let cur = if y.is_finite() { Some((x, y)) } else { None };
         if let (Some(a), Some(b)) = (prev, cur) {
             if let Some((p, q)) = clip_y(a, b, ya, yb) {
@@ -842,23 +880,43 @@ fn ref_point(s: &str, scene: &Scene, refs: &Refs) -> Result<(f32, f32), String> 
             let m = geom(name, refs)?
                 .axes
                 .ok_or_else(|| format!("'{}' : '{}' n'est pas un repère axes", s, name))?;
-            let x: f64 = x.parse().map_err(|_| format!("'{}' : x invalide", s))?;
-            let y: f64 = y.parse().map_err(|_| format!("'{}' : y invalide", s))?;
+            let x = coordinate(x, refs).map_err(|e| format!("'{}' : {}", s, e))?;
+            let y = coordinate(y, refs).map_err(|e| format!("'{}' : {}", s, e))?;
             Ok(m.to_px(x, y))
         }
         _ => Err(format!("position invalide '{}'", s)),
     }
 }
 
-/// "offset(arc_theta,1%)" → ("offset", ["arc_theta", "1%"])
-fn split_call(s: &str) -> (&str, Vec<&str>) {
-    match s.split_once('(') {
-        Some((name, rest)) => (
-            name.trim(),
-            rest.trim_end_matches(')').split(',').map(|a| a.trim()).filter(|a| !a.is_empty()).collect(),
-        ),
-        None => (s.trim(), Vec::new()),
+/// Coordonnée dans un repère : un nombre, ou une expression avec des paramètres (`a - 1`, `sin(a)`)
+fn coordinate(s: &str, refs: &Refs) -> Result<f64, String> {
+    if let Ok(v) = s.parse::<f64>() {
+        return Ok(v);
     }
+    let e = super::expr::parse_with(s, &refs.param_names())?;
+    Ok(e.eval(0.0, &refs.params))
+}
+
+/// "offset(arc_theta,1%)" → ("offset", ["arc_theta", "1%"]) ;
+/// les virgules dans des parenthèses imbriquées ne séparent pas : "r(a,sin(a))" → ("r", ["a", "sin(a)"])
+pub fn split_call(s: &str) -> (&str, Vec<&str>) {
+    let Some((name, rest)) = s.split_once('(') else { return (s.trim(), Vec::new()) };
+    let inside = rest.trim_end().strip_suffix(')').unwrap_or(rest);
+    let mut args = Vec::new();
+    let (mut depth, mut start) = (0i32, 0);
+    for (i, c) in inside.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            ',' if depth == 0 => {
+                args.push(&inside[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    args.push(&inside[start..]);
+    (name.trim(), args.into_iter().map(|a| a.trim()).filter(|a| !a.is_empty()).collect())
 }
 
 /// Longueur écrite en texte : "1%" (du plus petit côté) ou "5px"

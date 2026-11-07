@@ -5,13 +5,26 @@
 //! - Les contrôles (lecture/pause, barre de lecture, langue) et les sous-titres
 //!   sont dessinés par egui par-dessus.
 //!
+//! Le son (pistes `audio`) est joué par `audio::AudioPlayer` ; pendant la lecture,
+//! son horloge donne le temps, pour que l'image suive le son.
+//!
+//! Le fichier .dct est surveillé : à chaque sauvegarde, l'animation est rechargée au même
+//! instant. S'il contient une erreur, l'ancienne version reste affichée, avec l'erreur par-dessus.
+//!
 //! Raccourcis : Espace = lecture/pause, ← / → = reculer / avancer d'1 s, Début = revenir à 0.
 
+use super::audio::AudioPlayer;
+use super::reload::Watcher;
 use crate::ast::{Config, WindowConfig};
 use crate::renderer::{self, skia::SkiaBackend, Scene};
+use super::speech::{self, VoicePlan};
+use crate::runtime::timeline::AudioSegment;
 use crate::runtime::Timeline;
+use crate::voice::Holds;
 use eframe::egui;
 use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 struct DidactApp {
     timeline: Timeline,
@@ -20,14 +33,77 @@ struct DidactApp {
     t: f64,
     playing: bool,
     lang: String,
+    /// Langue de la dernière image (pour recaler le temps quand on en change)
+    shown_lang: String,
+    /// Pauses de l'animation de chaque langue (voix plus longues que l'écart entre commentaires).
+    /// `t` est le temps réel ; le temps de la timeline s'en déduit.
+    holds: Vec<Holds>,
     backend: Option<SkiaBackend>,
     texture: Option<egui::TextureHandle>,
     /// Problèmes déjà signalés (pour ne pas répéter le même message à chaque frame)
     warned: HashSet<String>,
+    /// Son (None s'il n'y a pas de piste audio, ou pas de sortie audio)
+    audio: Option<AudioPlayer>,
+    /// Pistes du son actuel : le son n'est reconstruit que si elles changent
+    tracks: Tracks,
+    /// Le fichier .dct joué
+    source: PathBuf,
+    /// Surveille les sauvegardes du fichier
+    watcher: Watcher,
+    /// Erreurs de la dernière sauvegarde (l'ancienne version reste affichée)
+    reload_errors: Vec<String>,
+}
+
+/// Toutes les pistes de la fenêtre, avec la langue à laquelle chacune appartient
+type Tracks = Vec<(AudioSegment, Option<usize>)>;
+
+/// Chaque langue a ses pauses, donc ses propres instants (en temps réel) :
+/// les pistes sont préparées pour chaque langue.
+fn tracks_of(timeline: &Timeline, voices: &[VoicePlan]) -> Tracks {
+    let music = timeline.audio_segments();
+    let has_voice = voices.iter().any(|v| !v.segments.is_empty());
+    let mut segments = Vec::new();
+    for (index, plan) in voices.iter().enumerate() {
+        if !music.is_empty() || has_voice {
+            let tracks = speech::real_time(&music, &plan.holds)
+                .into_iter()
+                .chain(speech::real_time(&plan.segments, &plan.holds));
+            segments.extend(tracks.map(|s| (s, Some(index))));
+        }
+    }
+    segments
+}
+
+/// Décode les pistes et ouvre le son ; sans son, la fenêtre marche quand même
+fn open_audio(tracks: &Tracks, base_dir: &Path, lang: usize) -> Option<AudioPlayer> {
+    if tracks.is_empty() {
+        return None;
+    }
+    match AudioPlayer::new(tracks, base_dir, lang) {
+        Ok((player, warnings)) => {
+            for w in warnings {
+                eprintln!("Attention : {}", w);
+            }
+            Some(player)
+        }
+        Err(e) => {
+            eprintln!("Attention : pas de son ({})", e);
+            None
+        }
+    }
 }
 
 /// Ouvre la fenêtre et bloque jusqu'à sa fermeture.
-pub fn run(timeline: Timeline, config: Config, lang: Option<String>, title: &str) -> Result<(), String> {
+/// `source` : le fichier .dct (surveillé ; les chemins audio sont relatifs à son dossier).
+/// `voices` : voix de chaque langue, dans l'ordre de `languages`.
+pub fn run(
+    timeline: Timeline,
+    config: Config,
+    lang: Option<String>,
+    title: &str,
+    source: &Path,
+    voices: Vec<VoicePlan>,
+) -> Result<(), String> {
     let lang = lang.unwrap_or_else(|| config.default_lang.clone());
     let (w, h) = initial_window_size(&config);
     let options = eframe::NativeOptions {
@@ -37,15 +113,28 @@ pub fn run(timeline: Timeline, config: Config, lang: Option<String>, title: &str
         ..Default::default()
     };
 
+    // Son : décodé avant d'ouvrir la fenêtre
+    let tracks = tracks_of(&timeline, &voices);
+    let base_dir = source.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+    let audio = open_audio(&tracks, &base_dir, timeline.lang_index(Some(&lang)));
+    let holds: Vec<Holds> = voices.into_iter().map(|v| v.holds).collect();
+
     let app = DidactApp {
         timeline,
         config,
         t: 0.0,
         playing: true,
+        shown_lang: lang.clone(),
         lang,
+        holds,
         backend: None,
         texture: None,
         warned: HashSet::new(),
+        audio,
+        tracks,
+        source: source.to_path_buf(),
+        watcher: Watcher::new(source),
+        reload_errors: Vec::new(),
     };
 
     eframe::run_native("Didact", options, Box::new(|_cc| Ok(Box::new(app)))).map_err(|e| e.to_string())
@@ -71,7 +160,31 @@ fn scene_ratio(config: &Config) -> Option<f32> {
 impl eframe::App for DidactApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        let duration = self.timeline.duration();
+        // Fichier sauvegardé : on recharge, même en pause
+        self.check_reload();
+        ctx.request_repaint_after(Duration::from_millis(200));
+
+        // Changement de langue : on reste au même endroit de la timeline
+        if self.lang != self.shown_lang {
+            let old = self.timeline.lang_index(Some(&self.shown_lang));
+            let t_timeline = self.holds_of(old).to_timeline(self.t);
+            self.t = self.holds_of(self.lang_idx()).to_real(t_timeline);
+            self.shown_lang = self.lang.clone();
+        }
+        let duration = self.timeline.duration() + self.holds_of(self.lang_idx()).extra();
+
+        // ── Avancement du temps (horloge du son s'il y en a un) ──
+        if self.playing {
+            match &self.audio {
+                Some(a) => self.t = a.now(),
+                None => self.t += ctx.input(|i| i.stable_dt) as f64,
+            }
+            if self.t >= duration {
+                self.t = duration;
+                self.playing = false;
+            }
+            ctx.request_repaint();
+        }
 
         // ── Clavier ──
         ctx.input(|i| {
@@ -88,16 +201,6 @@ impl eframe::App for DidactApp {
                 self.t = 0.0;
             }
         });
-
-        // ── Avancement du temps ──
-        if self.playing {
-            self.t += ctx.input(|i| i.stable_dt) as f64;
-            if self.t >= duration {
-                self.t = duration;
-                self.playing = false;
-            }
-            ctx.request_repaint();
-        }
 
         // ── Barre de contrôles ──
         egui::Panel::bottom("controles").show(ui, |ui| {
@@ -134,10 +237,68 @@ impl eframe::App for DidactApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(egui::Color32::from_gray(30)))
             .show(ui, |ui| self.draw_scene(ui));
+
+        // ── Son : suit les sauts, la pause et la reprise ──
+        if let Some(a) = &self.audio {
+            a.set_lang(self.lang_idx());
+            a.sync(self.t, self.playing);
+        }
     }
 }
 
 impl DidactApp {
+    fn lang_idx(&self) -> usize {
+        self.timeline.lang_index(Some(&self.lang))
+    }
+
+    /// Recharge le fichier s'il a été sauvegardé. On reste au même instant de la timeline ;
+    /// en cas d'erreur, l'ancienne version continue et l'erreur est affichée.
+    fn check_reload(&mut self) {
+        let Some(result) = self.watcher.poll() else { return };
+        let (doc, timeline) = match result {
+            Ok(loaded) => loaded,
+            Err(errors) => {
+                for e in &errors {
+                    eprintln!("✗ {}", e);
+                }
+                self.reload_errors = errors;
+                return;
+            }
+        };
+        self.reload_errors.clear();
+        self.warned.clear();
+
+        let t_timeline = self.holds_of(self.lang_idx()).to_timeline(self.t);
+        self.timeline = timeline;
+        self.config = doc.config;
+        if !self.config.languages.contains(&self.lang) {
+            self.lang = self.config.default_lang.clone();
+            self.shown_lang = self.lang.clone();
+        }
+
+        let voices: Vec<VoicePlan> =
+            self.timeline.languages().iter().map(|l| speech::plan(&self.timeline, &self.source, l)).collect();
+        let tracks = tracks_of(&self.timeline, &voices);
+        self.holds = voices.into_iter().map(|v| v.holds).collect();
+        let duration = self.timeline.duration() + self.holds_of(self.lang_idx()).extra();
+        self.t = self.holds_of(self.lang_idx()).to_real(t_timeline).min(duration);
+
+        // Le son n'est redécodé que si ses pistes ont changé
+        if tracks != self.tracks {
+            let base_dir = self.source.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+            self.audio = open_audio(&tracks, &base_dir, self.lang_idx());
+            self.tracks = tracks;
+        }
+        if let Some(a) = &self.audio {
+            a.sync(self.t, self.playing);
+        }
+        println!("✓ Rechargé : {}", self.source.display());
+    }
+
+    fn holds_of(&self, lang: usize) -> Holds {
+        self.holds.get(lang).cloned().unwrap_or_default()
+    }
+
     fn toggle_play(&mut self, duration: f64) {
         if !self.playing && self.t >= duration {
             self.t = 0.0; // relancer depuis le début une fois la fin atteinte
@@ -170,10 +331,11 @@ impl DidactApp {
         if self.backend.as_ref().map(|b| (b.width(), b.height())) != Some((pw, ph)) {
             self.backend = SkiaBackend::new(pw, ph);
         }
+        let t = self.holds_of(self.lang_idx()).to_timeline(self.t);
         let Some(backend) = self.backend.as_mut() else { return };
 
         // Dessin
-        let frame = self.timeline.frame_at(self.t, Some(&self.lang));
+        let frame = self.timeline.frame_at(t, Some(&self.lang));
         let scene = Scene::new(&self.config, pw, ph);
         let skipped = renderer::render_frame(&frame, &scene, backend);
         for (name, reason) in skipped {
@@ -205,6 +367,17 @@ impl DidactApp {
             let pos = egui::pos2(rect.center().x - galley.size().x / 2.0, rect.bottom() - galley.size().y - size.y * 0.05);
             let bg = egui::Rect::from_min_size(pos, galley.size()).expand(6.0);
             ui.painter().rect_filled(bg, 4.0, egui::Color32::from_black_alpha(170));
+            ui.painter().galley(pos, galley, egui::Color32::WHITE);
+        }
+
+        // Erreurs de la dernière sauvegarde, en haut de la scène
+        if !self.reload_errors.is_empty() {
+            let text = format!("Fichier non rechargé :\n{}", self.reload_errors.join("\n"));
+            let font = egui::FontId::monospace((size.y * 0.025).clamp(11.0, 18.0));
+            let galley = ui.painter().layout(text, font, egui::Color32::WHITE, size.x * 0.94);
+            let pos = rect.left_top() + egui::vec2(size.x * 0.03, size.y * 0.03);
+            let bg = egui::Rect::from_min_size(pos, galley.size()).expand(8.0);
+            ui.painter().rect_filled(bg, 4.0, egui::Color32::from_rgb(153, 27, 27));
             ui.painter().galley(pos, galley, egui::Color32::WHITE);
         }
     }

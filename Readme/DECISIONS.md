@@ -86,7 +86,7 @@ L'objectif est d'arriver à un `cargo run -- exemple.dct` qui ouvre une fenêtre
 
 ### Phase 5 — Audio et multilingue
 
-18. **Lecture audio**
+18. ~~**Lecture audio**~~ ✅ (fenêtre : symphonia + cpal, l'horloge du son guide l'image ; web : `<audio>` recalé ; inclus dans la page autonome)
 19. ~~**Système de commentaires multilingues**~~ ✅ (fait en Phase 2 avec la timeline)
 20. ~~**Sélection de langue au runtime**~~ ✅ (`--lang`, menu de la fenêtre et du lecteur web)
 
@@ -94,7 +94,7 @@ L'objectif est d'arriver à un `cargo run -- exemple.dct` qui ouvre une fenêtre
 
 21. ~~**Export MP4** (avec ffmpeg)~~ ✅ (`--export mp4` : sous-titres incrustés, pistes audio mixées)
 22. ~~**Export HTML autonome**~~ ✅ (`--export html` : un seul fichier, s'ouvre sans serveur)
-23. **Mode podcast (TTS)** — après la Phase 5. Décidé : si une phrase lue dure plus longtemps que l'écart avant le commentaire suivant, avertissement avec le numéro de ligne, sans couper la phrase. Reste à choisir : moteur de voix (Windows SAPI / Piper / API cloud) et sortie (audio seul, voix dans le MP4, ou les deux).
+23. ~~**Mode podcast (TTS)**~~ ✅ (`--voice` + `didact-voix.txt`, `--export audio`) — Décidé : si une phrase lue dure plus longtemps que l'écart avant le commentaire suivant, **l'animation attend** que la phrase soit finie (comme manim-voiceover). D'abord on avait choisi « avertir sans couper », mais les voix se superposaient et devenaient inaudibles. Décidé : Didact ne dépend d'aucun modèle de voix ; il appelle un programme de synthèse vocale externe choisi par l'utilisateur (comme ffmpeg), qui renvoie un fichier audio par commentaire. Pour commencer : un modèle open source léger qui tourne sur processeur (Piper ou Kokoro). Sortie : la voix est jouée partout (fenêtre, web, MP4, HTML) ; `--export audio` donne le son seul.
 
 ### Phase 7 — Écosystème
 
@@ -413,6 +413,57 @@ Cette section liste les choix importants qui ont été tranchés. Chaque décisi
 
 **Raisonnement :** les `cm` n'existent pas dans Didact (tout est en %), et une durée obligatoire est cohérente avec toutes les autres animations.
 
+### Paramètres animés : `defparam` et `to(...)`
+
+**Décision :** `defparam k = 1` définit un nombre ; `anim : [k to(3, 2s)]` le fait évoluer. Il est utilisable dans `expr` et dans les coordonnées d'un repère.
+
+**Raisonnement :**
+- Une courbe qui change sous les yeux montre la cause et l'effet : c'est le cas où l'animation aide le plus à comprendre
+- La valeur ne dépend que de t, comme le reste de la timeline : reculer et sauter marchent sans rien stocker
+- Même mécanisme que les autres animations (`anim`, durée, easing, enchaînement)
+- Pas de référence en avant : même règle que les figures
+
+**Limite assumée :** pas encore utilisable dans les autres propriétés (`radius`, angles, texte).
+
+### `transform` lettre par lettre entre textes et équations
+
+**Décision :** entre deux figures de texte, `transform` reconnaît les lettres identiques (même contour, à la taille près) : elles glissent à leur place, le reste passe en fondu. Automatique, sans nouvelle syntaxe. Les formes géométriques gardent la déformation point par point.
+
+**Raisonnement :**
+- La déformation dans l'ordre des formes mélangeait des lettres sans rapport
+- Le spectateur voit ce qui a changé dans la formule, et un terme qui change de côté se déplace vraiment
+- On compare les dessins, pas le LaTeX : rien à annoter, et ça marche pour tout ce que Typst compose
+
+**Comment :** plus longue sous-suite commune (ce qui garde son ordre), puis association des lettres identiques restantes.
+
+### `color(..., part="...")` plutôt qu'une nouvelle animation
+
+**Décision :** surligner un terme, c'est `color` avec un paramètre `part`. Le morceau est composé à part puis retrouvé dans la figure, lettre par lettre.
+
+**Raisonnement :** un nom = un sens : c'est bien un changement de couleur. Un morceau introuvable est signalé à la compilation, avec sa ligne.
+
+### Modèles : `defmodel`, `defrepeat`, `@nom`
+
+**Décision :** un modèle est du texte avec des trous : `@nom` et `@(calcul)`. `deffigure a = modele(...)` remplit les trous et relit le texte comme une figure ordinaire. `defrepeat nom = modele(@i) for i in 0..7` crée `nom_0` … `nom_7` et le groupe `nom`.
+
+**Raisonnement :**
+- Remplacer du texte fonctionne pour toutes les propriétés, y compris le LaTeX et `expr`, sans cas particulier
+- `@` n'entre en conflit ni avec le LaTeX (`{}`) ni avec les maths (`$`), ni avec les formules
+- Le validateur et le renderer ne changent pas : ils voient des figures normales
+- Le groupe créé par `defrepeat` donne directement les animations d'ensemble
+
+**Limite assumée :** le nombre de figures est fixé à la compilation, il ne peut pas dépendre d'un paramètre animé.
+
+### Rechargement à chaud dans la fenêtre
+
+**Décision :** la fenêtre surveille le fichier `.dct` (date et taille, 10 fois par seconde) et recharge à chaque sauvegarde, au même instant de la timeline. En cas d'erreur, l'ancienne version reste affichée, avec l'erreur par-dessus.
+
+**Raisonnement :**
+- Tester un réglage ne doit pas obliger à relancer et à revenir au bon instant
+- Une faute de frappe pendant l'écriture ne doit pas fermer la fenêtre
+- Aucune dépendance en plus : un regard sur la date du fichier suffit. On attend que le fichier soit stable, car les éditeurs écrivent parfois en deux temps
+- Le son n'est redécodé que si ses pistes ont changé
+
 ### Licence MIT
 
 **Décision :** Le projet est sous licence MIT.
@@ -530,6 +581,10 @@ Idées qui ont été discutées et rejetées explicitement.
 ## Changelog des versions du langage
 
 ### v0.2 (en cours)
+- `defmodel` / `defrepeat` (`@nom`, `@(calcul)`) ; points de `polygon` dans un repère ; `demo_modeles.dct`
+- Rechargement à chaud de la fenêtre à chaque sauvegarde (`src/output/reload.rs`)
+- `transform` lettre par lettre entre textes et équations ; `color(..., part="...")` ; `align` sur `equation` ; `demo_equations.dct`
+- Paramètres animés : `defparam`, animation `to(valeur, durée)`, utilisables dans `expr` et dans les coordonnées d'un repère (`repere(a - 1, sin(a))`) ; `demo_parametres.dct`
 - Mots-clés `defstyle`, `deffigure`, `defgroup` (renommage)
 - Documentation restructurée en trois fichiers (SPEC, ARCHITECTURE, DECISIONS)
 - Clarification du modèle compilateur = renderer
@@ -537,7 +592,9 @@ Idées qui ont été discutées et rejetées explicitement.
 - `width` → `stroke` pour l'épaisseur du trait (`width` réservé aux `rect`)
 - Runtime timeline : instantanés après chaque bloc, état à t par recherche dichotomique (avancer/reculer gratuit), commentaires dans la langue choisie, audio
 - CLI : `--lang XX`, `--debug` (tokens et AST seulement sur demande), `--summary`, `--png <t> <fichier>`
-- Langage complété : groupes (`defgroup`, `pos` = décalage, `start`/`end`/`destroy` en cascade, animations autour du centre de l'ensemble) ; `draw`, `write` ; `slidein`/`slideout` (glissé court + fondu) ; `move(direction, distance, durée)` ; `transform(to=b)` (morphing, `b` remplace la figure à la fin) ; pourcentages négatifs (`-10%`) ; `demo_langage.dct`
+- Phase 6 (23) : `--voice` (synthèse vocale par un programme externe configuré dans `didact-voix.txt`, un fichier par phrase dans `cours_voix/`, régénération seulement des phrases modifiées, maths prononcées, avertissements de durée) ; voix jouées dans la fenêtre (selon la langue), sur le web, dans le MP4 et la page autonome ; `--export audio` (MP3)
+- Phase 5 : lecture audio dans la fenêtre (décodage symphonia, sortie cpal, mélange des pistes, sauts/pause), sur le web (`audioSegments()` + `<audio>`), fichiers audio inclus dans `--export html`
+- Langage complété : groupes (`defgroup`, `pos` = décalage, `start`/`end`/`destroy` en cascade, animations autour du centre de l'ensemble) ; `draw`, `write` ; `slidein`/`slideout` (glissé court + fondu) ; `move(direction, distance, durée)` ; `transform(to=b)` (morphing, `b` remplace la figure à la fin) ; pourcentages négatifs (`-10%`) ; `demo_langage.dct` ; `demo_complete.dct` refaite (7 chapitres, un groupe par chapitre)
 - Phase 6 : `--export mp4` (images rendues dans le programme et envoyées à ffmpeg, H.264 ; sous-titres incrustés coupés en lignes, maths jamais coupées ; pistes `audio` placées et mixées ; options `-o`, `--fps`, `--height`, `--no-subtitles`, `--ffmpeg`) ; `--export html` (page autonome : source, lecteur et moteur WASM compressé en gzip/base64 dans un seul fichier, ouvrable en `file://` ; option `--engine`)
 - Phase 4 : bibliothèque + programme ; module `web` (wasm-bindgen : `Player`) ; lecteur `web/didact.js` (`<didact-player>`, contrôles, sous-titres, langues, erreurs) ; `web/build.ps1` ; guide `Readme/WEB.md`
 - LaTeX complet via MiTeX + Typst : `text` avec `$...$`, `equation`, `latex`, `raw.latex`, `table` ; erreurs LaTeX signalées avec le numéro de ligne
@@ -564,4 +621,4 @@ Idées qui ont été discutées et rejetées explicitement.
 - Animations principales
 - Audio et commentaires multilingues
 - Escape hatches `raw.latex` et `raw.matplotlib`
-- Implémentation lexer, AST, parser en Rust
+- Implémentation lexer, AST, parser en Rust

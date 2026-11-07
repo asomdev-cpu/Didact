@@ -7,11 +7,13 @@
 
 pub mod ast;
 pub mod lexer;
+pub mod model;
 pub mod parser;
 pub mod renderer;
 pub mod resolver;
 pub mod runtime;
 pub mod validator;
+pub mod voice;
 pub mod web;
 
 /// Fenêtre desktop (natif seulement)

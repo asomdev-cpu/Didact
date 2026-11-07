@@ -11,7 +11,7 @@
 //! Chaque erreur commence par "ligne N : ...".
 
 use crate::ast::*;
-use crate::renderer::geometry::parse_color;
+use crate::renderer::geometry::{parse_color, split_call};
 use crate::runtime::animation::{self, AnimKind};
 use std::collections::HashMap;
 
@@ -34,6 +34,7 @@ const ANIMATIONS: &[&str] = &[
     "move", "follow", "rotate",
     "color", "scale", "transform",
     "fadeout", "slideout", "shrink",
+    "to",
 ];
 
 /// Fonctions de référence dynamique dont le 1er argument est une figure (§12)
@@ -50,6 +51,7 @@ const FREE_TEXT_PROPS: &[&str] = &["type", "expr", "content", "code", "rows", "h
 /// Ce qu'un nom désigne
 enum Kind {
     Style,
+    Param,
     Figure { ftype: String },
 }
 
@@ -64,6 +66,7 @@ struct Def {
 #[derive(Clone, Copy)]
 enum Expected {
     Style,
+    Param,
     Figure,
     Axes,
 }
@@ -77,6 +80,10 @@ struct Validator {
     figure_refs: HashMap<String, Vec<String>>,
     /// Membres de chaque groupe (groupes imbriqués compris)
     groups: HashMap<String, Vec<String>>,
+    /// Noms des paramètres (`defparam`)
+    params: Vec<String>,
+    /// Type et contenu composé des figures de texte (pour `part="..."`)
+    typeset: HashMap<String, (String, crate::renderer::typeset::Content)>,
 }
 
 // ─────────────────────────────────────────────
@@ -89,10 +96,13 @@ pub fn validate(doc: &Document) -> Result<(), Vec<String>> {
         defs: HashMap::new(),
         figure_refs: HashMap::new(),
         groups: HashMap::new(),
+        params: doc.params.iter().map(|p| p.name.clone()).collect(),
+        typeset: HashMap::new(),
     };
 
     v.check_config(&doc.config);
     v.collect_definitions(doc);
+    v.check_params(&doc.params);
     v.check_styles(&doc.styles);
     v.check_figures(&doc.figures, &doc.styles);
     v.check_timeline(doc);
@@ -145,6 +155,9 @@ impl Validator {
         for s in &doc.styles {
             all.push((s.index, s.line, &s.name, Kind::Style));
         }
+        for p in &doc.params {
+            all.push((p.index, p.line, &p.name, Kind::Param));
+        }
         for f in &doc.figures {
             let ftype = match f.properties.get("type") {
                 Some(PropValue::Single(t)) => t.clone(),
@@ -160,6 +173,38 @@ impl Validator {
                 self.error(line, format!("'{}' est défini deux fois (déjà à la ligne {})", name, first_line));
             } else {
                 self.defs.insert(name.to_string(), Def { kind, index, line });
+            }
+        }
+    }
+
+    /// Noms de paramètres utilisables dans une expression
+    fn check_params(&mut self, params: &[ParamDef]) {
+        for p in params {
+            let mut chars = p.name.chars();
+            let valid = chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+            if !valid {
+                self.error(p.line, format!("paramètre '{}' : nom invalide (lettres, chiffres et _ seulement)", p.name));
+            } else if crate::renderer::expr::is_reserved(&p.name) {
+                self.error(p.line, format!("paramètre '{}' : ce nom est réservé dans les expressions", p.name));
+            }
+        }
+    }
+
+    /// Expression qui peut utiliser des paramètres : elle doit se lire, et ses paramètres
+    /// doivent être définis plus haut que `from`. `x` n'est permis que si `allow_x` est vrai.
+    fn check_expr(&mut self, line: usize, from: &str, from_index: usize, src: &str, allow_x: bool) {
+        match crate::renderer::expr::parse_with(src, &self.params) {
+            Err(e) => self.error(line, format!("'{}' : {}", from, e)),
+            Ok(e) => {
+                if !allow_x && e.uses_x() {
+                    self.error(line, format!("'{}' : '{}' utilise x, qui n'existe que dans `expr`", from, src));
+                }
+                let mut used = Vec::new();
+                e.vars(&mut used);
+                for p in used {
+                    self.check_ref(line, from, from_index, &p, Expected::Param);
+                }
             }
         }
     }
@@ -180,6 +225,7 @@ impl Validator {
             Some(def) => {
                 let ok_kind = match (expected, &def.kind) {
                     (Expected::Style, Kind::Style) => true,
+                    (Expected::Param, Kind::Param) => true,
                     (Expected::Figure, Kind::Figure { .. }) => true,
                     (Expected::Axes, Kind::Figure { ftype }) => ftype == "axes",
                     _ => false,
@@ -200,6 +246,7 @@ impl Validator {
         if !ok_kind {
             let attendu = match expected {
                 Expected::Style => "un style",
+                Expected::Param => "un paramètre",
                 Expected::Figure => "une figure",
                 Expected::Axes => "une figure de type axes",
             };
@@ -274,13 +321,12 @@ impl Validator {
                     if let Err(e) = crate::renderer::typeset::check(&content) {
                         self.error(line_of(key), format!("'{}' : {}", f.name, e));
                     }
+                    self.typeset.insert(f.name.clone(), (ftype.to_string(), content));
                 }
                 // Formule d'un plot : on vérifie qu'elle se lit
                 if key == "expr" && ftype == "plot" {
                     if let PropValue::Single(src) = &f.properties[key] {
-                        if let Err(e) = crate::renderer::expr::parse(src) {
-                            self.error(line_of(key), format!("'{}' : {}", f.name, e));
-                        }
+                        self.check_expr(line_of(key), &f.name, f.index, src, true);
                     }
                 }
                 if FREE_TEXT_PROPS.contains(&key.as_str()) {
@@ -299,6 +345,14 @@ impl Validator {
                         for item in items {
                             self.check_ref(line, &f.name, f.index, item, Expected::Figure);
                             refs.push(item.clone());
+                        }
+                    }
+                    // Points d'un polygone : (x%, y%) ou repere(x, y)
+                    ("points", PropValue::List(points)) => {
+                        for p in points.iter().filter(|p| !p.starts_with('(') && p.contains('(')) {
+                            if let Some(r) = self.check_call(line, &f.name, f.index, p) {
+                                refs.push(r);
+                            }
                         }
                     }
                     (_, PropValue::Single(s)) if s.contains('(') => {
@@ -364,6 +418,10 @@ impl Validator {
             Some(target.to_string())
         } else if self.defs.contains_key(fname) {
             self.check_ref(line, from, from_index, fname, Expected::Axes);
+            // Coordonnées : des nombres ou des expressions avec des paramètres
+            for arg in args {
+                self.check_expr(line, from, from_index, arg, false);
+            }
             Some(fname.to_string())
         } else {
             self.error(
@@ -498,11 +556,50 @@ impl Validator {
 
             // 4. anim
             for (line, item) in anim {
+                if matches!(self.defs.get(&item.figure), Some(Def { kind: Kind::Param, .. })) {
+                    for call in &item.calls {
+                        self.check_param_anim(t, &item.figure, call);
+                    }
+                    continue;
+                }
                 self.check_usable(line, t, &item.figure, &destroyed);
                 for call in &item.calls {
                     self.check_anim_call(t, &item.figure, call, &destroyed);
                 }
             }
+        }
+    }
+
+    /// color(..., part="...") : la figure est un texte et contient ce morceau
+    fn check_part(&mut self, line: usize, t: f64, figure: &str, part: &str) {
+        use crate::renderer::{morph, typeset, Rgba};
+        let Some((ftype, content)) = self.typeset.get(figure) else {
+            self.error_t(line, t, format!("'{}' : part ne s'applique qu'à un texte ou une équation", figure));
+            return;
+        };
+        let compose = |c: &typeset::Content| typeset::shapes(c, 0.0, 0.0, 40.0, typeset::Align::Center, Rgba::BLACK);
+        let found = compose(content)
+            .and_then(|whole| Ok(morph::find_part(&whole, &compose(&typeset::part_content(ftype, part))?)));
+        match found {
+            Err(e) => self.error_t(line, t, format!("'{}' : part : {}", figure, e)),
+            Ok(found) if found.is_empty() => {
+                let hint = if ftype == "equation" { "" } else { " (maths entre $...$)" };
+                self.error_t(line, t, format!("'{}' : part « {} » introuvable dans la figure{}", figure, part, hint));
+            }
+            Ok(_) => {}
+        }
+    }
+
+    /// Un paramètre ne connaît qu'une animation : to(valeur, durée)
+    fn check_param_anim(&mut self, t: f64, param: &str, call: &AnimCall) {
+        if call.name != "to" {
+            self.error_t(
+                call.line,
+                t,
+                format!("'{}' est un paramètre : seule l'animation to(valeur, durée) s'y applique, pas '{}'", param, call.name),
+            );
+        } else if let Err(e) = animation::parse_call(call) {
+            self.error_t(call.line, t, format!("'{}' : {}", param, e));
         }
     }
 
@@ -514,11 +611,18 @@ impl Validator {
             self.error_t(line, t, format!("'{}' : animation inconnue '{}'", figure, call.name));
             return;
         }
+        if call.name == "to" {
+            self.error_t(line, t, format!("'{}' : to(...) s'applique à un paramètre (defparam), pas à une figure", figure));
+            return;
+        }
         match animation::parse_call(call) {
             Err(e) => self.error_t(line, t, format!("'{}' : {}", figure, e)),
-            Ok((AnimKind::Color { to }, _, _)) => {
+            Ok((AnimKind::Color { to, part }, _, _)) => {
                 if let Err(e) = parse_color(&to) {
                     self.error_t(line, t, format!("'{}' : {}", figure, e));
+                }
+                if let Some(part) = part {
+                    self.check_part(line, t, figure, &part);
                 }
             }
             Ok((AnimKind::Transform { to }, _, _)) => {
@@ -550,6 +654,15 @@ impl Validator {
             };
             if let Some(target) = target {
                 self.check_usable(line, t, &target, destroyed);
+                // move(to=repere(a, sin(a)), ...) : coordonnées avec des paramètres
+                let (fname, args) = split_call(value);
+                if call.name == "move" && !REF_FUNCTIONS.contains(&fname) {
+                    for arg in args {
+                        if let Err(e) = crate::renderer::expr::parse_with(arg, &self.params) {
+                            self.error_t(line, t, format!("'{}' : {}", figure, e));
+                        }
+                    }
+                }
             }
         }
     }
@@ -563,6 +676,14 @@ impl Validator {
             }
             Some(Def { kind: Kind::Style, .. }) => {
                 self.error_t(line, t, format!("'{}' est un style, pas une figure", name));
+                false
+            }
+            Some(Def { kind: Kind::Param, .. }) => {
+                self.error_t(
+                    line,
+                    t,
+                    format!("'{}' est un paramètre, pas une figure : il s'anime avec anim : [{} to(valeur, durée)]", name, name),
+                );
                 false
             }
             Some(_) => match destroyed.get(name) {
@@ -630,22 +751,6 @@ fn find_in_style_chain<'a>(
         current = style.extends.as_deref().and_then(|p| styles.get(p).copied());
     }
     None
-}
-
-/// Découpe "offset(arc_theta,1%)" en ("offset", ["arc_theta", "1%"])
-fn split_call(value: &str) -> (&str, Vec<&str>) {
-    match value.split_once('(') {
-        Some((name, rest)) => {
-            let inside = rest.trim_end_matches(')');
-            let args = inside
-                .split(',')
-                .map(|a| a.trim())
-                .filter(|a| !a.is_empty())
-                .collect();
-            (name.trim(), args)
-        }
-        None => (value.trim(), Vec::new()),
-    }
 }
 
 // ─────────────────────────────────────────────
@@ -1020,5 +1125,143 @@ deffigure a =
     type : hexagone",
             "ligne 6 : 'a' : type inconnu 'hexagone'",
         );
+    }
+
+    // ── Paramètres (defparam) ──
+
+    const REPERE: &str = "deffigure r =
+                type : axes
+                xrange : [-5, 5]
+                yrange : [-5, 5]
+            ";
+
+    #[test]
+    fn parametre_valide() {
+        let src = format!(
+            "[figures]
+            defparam k = 1
+            {REPERE}
+            deffigure c =
+                type : plot
+                axes : r
+                expr : sin(k*x)
+            deffigure p =
+                type   : circle
+                center : r(k - 1, sin(k) + 2)
+                radius : 2%
+            [timeline]
+            0.000 => {{ start : [r, c, p] anim : [k to(3, 2s)] }}
+            3.000 => {{ anim : [p move(to=r((k + 1)/2, k - 1), 1s)] }}"
+        );
+        assert!(crate::load(&src).is_ok(), "le fichier doit être accepté");
+    }
+
+    #[test]
+    fn erreurs_de_parametres() {
+        let base = format!("[figures]\ndefparam k = 1\n{REPERE}");
+        // en avant
+        assert_error(
+            &format!("[figures]\n{REPERE}\ndeffigure c =\n type : plot\n axes : r\n expr : k*x\ndefparam k = 1\n[timeline]"),
+            "défini plus bas",
+        );
+        // nom inconnu dans une formule
+        assert_error(
+            &format!("{base}\ndeffigure c =\n type : plot\n axes : r\n expr : j*x\n[timeline]"),
+            "nom inconnu 'j'",
+        );
+        // réservé, doublon
+        assert_error("[figures]\ndefparam pi = 3\n[timeline]", "réservé");
+        assert_error("[figures]\ndefparam k = 1\ndefparam k = 2\n[timeline]", "défini deux fois");
+        // le temps : start, anim inconnue, to sur une figure
+        assert_error(&format!("{base}\n[timeline]\n0.000 => {{ start : [k] }}"), "est un paramètre");
+        assert_error(&format!("{base}\n[timeline]\n0.000 => {{ anim : [k fadein(1s)] }}"), "seule l'animation to");
+        assert_error(&format!("{base}\n[timeline]\n0.000 => {{ anim : [r to(2, 1s)] }}"), "s'applique à un paramètre");
+        assert_error(&format!("{base}\n[timeline]\n0.000 => {{ anim : [k to(1s)] }}"), "to attend une valeur");
+        // x hors d'une formule
+        let e = crate::load(&format!("{base}\ndeffigure p =\n type : circle\n center : r(x, 0)\n radius : 2%\n[timeline]")).err().unwrap();
+        assert!(e.iter().any(|m| m.contains("utilise x")), "{:?}", e);
+    }
+
+    // ── color(part=...) ──
+
+    #[test]
+    fn part_dans_une_figure() {
+        let src = |fig: &str, part: &str| {
+            format!("[figures]\n{fig}\n[timeline]\n0.000 => {{ start : [f] anim : [f color(to=red, 1s, part=\"{part}\")] }}")
+        };
+        let eq = "deffigure f =\n type : equation\n expr : x - \\frac{x^3}{6} + y\n pos : (50%, 50%)";
+        assert!(crate::load(&src(eq, r"\frac{x^3}{6}")).is_ok());
+        assert!(crate::load(&src(eq, "y")).is_ok());
+        let e = crate::load(&src(eq, "z")).err().unwrap();
+        assert!(e.iter().any(|m| m.contains("introuvable")), "{:?}", e);
+
+        let txt = "deffigure f =\n type : text\n content : \"Soit $x^2$ et un mot\"\n pos : (50%, 50%)";
+        assert!(crate::load(&src(txt, "mot")).is_ok());
+        assert!(crate::load(&src(txt, "$x^2$")).is_ok());
+
+        let forme = "deffigure f =\n type : circle\n center : (50%, 50%)\n radius : 5%";
+        let e = crate::load(&src(forme, "z")).err().unwrap();
+        assert!(e.iter().any(|m| m.contains("ne s'applique qu'à un texte")), "{:?}", e);
+    }
+
+    // ── defmodel / defrepeat ──
+
+    #[test]
+    fn modeles_et_repetitions() {
+        let (doc, tl) = crate::load(
+            "[figures]
+defstyle epais =
+    stroke : 4px
+deffigure r =
+    type : axes
+    xrange : [0, 4]
+    yrange : [0, 4]
+defmodel courbe(e, c) =
+    type  : plot
+    axes  : r
+    expr  : @e
+    color : @c   # commentaire
+    style : epais
+deffigure a = courbe(\"x^2/4 + 1\", #2563EB)
+deffigure b = courbe(sqrt(x), red)   # fin de ligne
+
+defmodel barre(i, h) =
+    type   : polygon
+    points : [r(@(i*h), 0), r(@((i+1)*h), 0), r(@((i+1)*h), @(i*h)), r(@(i*h), @(i*h))]
+    fill   : blue
+defrepeat barres = barre(@i, 0.5) for i in 0..3   # fin de ligne
+[timeline]
+0.000 => { start : [r, a, b, barres write(1s)] }
+1.000 => { anim : [barres_2 color(to=red, 1s)] }",
+        )
+        .map_err(|e| panic!("{:?}", e))
+        .ok()
+        .unwrap();
+        let fig = |n: &str| doc.figures.iter().find(|f| f.name == n).unwrap_or_else(|| panic!("{} absente", n));
+        assert_eq!(crate::resolver::fmt_value(&fig("a").properties["expr"]), "x^2/4 + 1");
+        assert_eq!(crate::resolver::fmt_value(&fig("a").properties["color"]), "#2563EB");
+        assert_eq!(crate::resolver::fmt_value(&fig("a").properties["stroke"]), "4px"); // style appliqué
+        assert_eq!(crate::resolver::fmt_value(&fig("b").properties["expr"]), "sqrt(x)");
+        assert_eq!(fig("barres").ftype, "group");
+        assert_eq!(tl.members("barres"), ["barres_0", "barres_1", "barres_2", "barres_3"]);
+        assert_eq!(
+            crate::resolver::fmt_value(&fig("barres_2").properties["points"]),
+            "[r(1,0), r(1.5,0), r(1.5,1), r(1,1)]"
+        );
+    }
+
+    #[test]
+    fn erreurs_de_modeles() {
+        let err = |src: &str, what: &str| {
+            let e = crate::load(src).err().expect("une erreur est attendue");
+            assert!(e.iter().any(|m| m.contains(what)), "attendu « {} » : {:?}", what, e);
+        };
+        let m = "[figures]\ndefmodel c(r) =\n    type : circle\n    center : (50%, 50%)\n    radius : @r\n";
+        err(&format!("{m}deffigure a = c(1%, 2%)\n[timeline]"), "ligne 6 : le modèle 'c' attend 1 argument(s)");
+        err(&format!("{m}deffigure a = d(1%)\n[timeline]"), "ligne 6 : modèle inconnu 'd'");
+        err(&format!("{m}defrepeat a = c(@j) for i in 0..2\n[timeline]"), "@j n'est pas un argument");
+        err(&format!("{m}defrepeat a = c(1%) for i in 3..1\n[timeline]"), "intervalle");
+        err(&format!("{m}defrepeat a = c(1%) pour tous\n[timeline]"), "forme attendue");
+        err("[figures]\ndefmodel c(r) =\n    color : @q\ndeffigure a = c(1)\n[timeline]", "@q");
     }
 }

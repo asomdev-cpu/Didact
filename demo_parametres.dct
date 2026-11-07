@@ -1,0 +1,102 @@
+# ─────────────────────────────────────────────
+#  Paramètres animés : defparam + to(...)
+#  didact demo_parametres.dct
+# ─────────────────────────────────────────────
+
+[config]
+window       : [16:9]
+languages    : [FR, EN]
+default_lang : FR
+
+[figures]
+
+# --- Les paramètres : des nombres qui évoluent dans le temps ---
+
+defparam k = 1          # fréquence de l'onde
+defparam a = -3         # point de tangence
+
+# --- Partie 1 : une courbe qui change ---
+
+deffigure repere =
+    type   : axes
+    from   : (6%, 18%)
+    to     : (94%, 92%)
+    xrange : [-6.5, 6.5]
+    yrange : [-2.5, 2.5]
+    equal  : false
+    xlabel : "$x$"
+
+deffigure onde =
+    type   : plot
+    expr   : sin(k*x)
+    axes   : repere
+    color  : #2563EB
+    stroke : 4px
+
+deffigure titre1 =
+    type    : equation
+    expr    : y = \sin(kx)
+    pos     : (50%, 9%)
+    size    : 44px
+
+# --- Partie 2 : une tangente qui glisse ---
+
+deffigure parabole =
+    type   : plot
+    expr   : x^2/4 - 2
+    axes   : repere
+    color  : #2563EB
+    stroke : 4px
+
+deffigure tangente =
+    type   : line
+    from   : repere(a - 1.5, a^2/4 - 2 - 1.5*a/2)
+    to     : repere(a + 1.5, a^2/4 - 2 + 1.5*a/2)
+    color  : #DC2626
+    stroke : 4px
+    layer  : 1
+
+deffigure point =
+    type   : circle
+    center : repere(a, a^2/4 - 2)
+    radius : 1.2%
+    fill   : #DC2626
+    color  : white
+    layer  : 2
+
+deffigure titre2 =
+    type    : equation
+    expr    : f'(a) = \frac{a}{2}
+    pos     : (50%, 9%)
+    size    : 44px
+
+[timeline]
+
+0.000 => {
+    start   : [repere fadein(0.6s), onde draw(1s), titre1 fadein(0.6s)]
+    comment : ["Que se passe-t-il quand k augmente ?", "What happens as k grows?"]
+}
+
+1.500 => {
+    anim    : [k to(4, 3s)]
+    comment : ["L'onde se resserre.", "The wave tightens."]
+}
+
+5.000 => {
+    anim    : [k to(0.5, 2s)]
+    comment : ["Et elle s'étire quand k diminue.", "And it stretches as k shrinks."]
+}
+
+7.500 => {
+    end     : [onde fadeout(0.5s), titre1 fadeout(0.5s)]
+    start   : [parabole draw(1s), titre2 fadein(0.6s), tangente grow(0.5s), point grow(0.5s)]
+    comment : ["La tangente suit le point sur la courbe.", "The tangent follows the point along the curve."]
+}
+
+9.000 => {
+    anim    : [a to(3, 4s)]
+}
+
+14.000 => {
+    end     : [repere fadeout(0.5s), parabole fadeout(0.5s), tangente fadeout(0.5s), point fadeout(0.5s), titre2 fadeout(0.5s)]
+}

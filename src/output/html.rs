@@ -1,5 +1,5 @@
 //! Export HTML autonome : un seul fichier .html qui contient tout
-//! (la source .dct, le lecteur `didact.js`, et le moteur WebAssembly compressé).
+//! (la source .dct, le lecteur `didact.js`, le moteur WebAssembly compressé et les fichiers audio).
 //! Il s'ouvre d'un double-clic, sans serveur et sans connexion.
 //!
 //! Le moteur WASM n'est pas dans l'exécutable : il faut l'avoir compilé une fois
@@ -28,6 +28,10 @@ pub struct HtmlOptions {
     pub engine: Option<PathBuf>,
     /// Largeur / hauteur de la scène (pour dimensionner le lecteur dans la page)
     pub ratio: f64,
+    /// Fichiers audio à inclure : (nom écrit dans le .dct, chemin sur le disque)
+    pub audio: Vec<(String, PathBuf)>,
+    /// Dossier des voix (`cours_voix`) et contenu de son index.txt, si elles ont été générées
+    pub voice_dir: Option<(String, String)>,
 }
 
 pub struct HtmlReport {
@@ -71,10 +75,31 @@ pub fn export(source: &str, opts: &HtmlOptions) -> Result<HtmlReport, String> {
     let glue = gzip_base64(&read(GLUE)?)?;
     let wasm = gzip_base64(&read(WASM)?)?;
 
-    let page = page(source, &glue, &wasm, opts);
+    let mut audio = Vec::new();
+    for (name, path) in &opts.audio {
+        let bytes = std::fs::read(path).map_err(|e| format!("fichier audio {} : {}", path.display(), e))?;
+        audio.push((name.clone(), data_url(path, &bytes)));
+    }
+
+    let page = page(source, &glue, &wasm, &audio, opts);
     std::fs::write(&opts.output, &page)
         .map_err(|e| format!("écriture de {} impossible : {}", opts.output.display(), e))?;
     Ok(HtmlReport { engine_dir, size: page.len() })
+}
+
+/// Fichier audio en adresse `data:` (lisible par <audio> sans serveur)
+fn data_url(path: &Path, bytes: &[u8]) -> String {
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+    let mime = match ext.as_str() {
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "ogg" | "oga" => "audio/ogg",
+        "m4a" | "aac" | "mp4" => "audio/mp4",
+        "flac" => "audio/flac",
+        "opus" => "audio/opus",
+        _ => "application/octet-stream",
+    };
+    format!("data:{};base64,{}", mime, base64::engine::general_purpose::STANDARD.encode(bytes))
 }
 
 fn gzip_base64(bytes: &[u8]) -> Result<String, String> {
@@ -86,7 +111,24 @@ fn gzip_base64(bytes: &[u8]) -> Result<String, String> {
 
 /// La page HTML. Les blocs `<script type="application/gzip">` ne sont pas exécutés :
 /// ce sont des données (base64), lues par `__DIDACT_ENGINE__`.
-fn page(source: &str, glue_b64: &str, wasm_b64: &str, opts: &HtmlOptions) -> String {
+fn page(source: &str, glue_b64: &str, wasm_b64: &str, audio: &[(String, String)], opts: &HtmlOptions) -> String {
+    let audio_map: Vec<String> = audio.iter().map(|(name, url)| format!("{}: \"{}\"", js_string(name), url)).collect();
+    let voice = opts
+        .voice_dir
+        .as_ref()
+        .map(|(d, index)| {
+            format!(
+                "\nglobalThis.__DIDACT_VOICE_DIR__ = {};\nglobalThis.__DIDACT_VOICE_INDEX__ = {};",
+                js_string(d),
+                js_string(index)
+            )
+        })
+        .unwrap_or_default();
+    let audio_script = if audio.is_empty() {
+        String::new()
+    } else {
+        format!("<script>\nglobalThis.__DIDACT_AUDIO__ = {{ {} }};{}\n</script>\n", audio_map.join(", "), voice)
+    };
     let lang_attr = opts.lang.as_ref().map(|l| format!(" lang=\"{}\"", escape_attr(l))).unwrap_or_default();
     format!(
         r#"<!doctype html>
@@ -118,7 +160,7 @@ globalThis.__DIDACT_ENGINE__ = async () => {{
   return engine;
 }};
 </script>
-<script type="module">
+{audio_script}<script type="module">
 {player}
 </script>
 </head>
@@ -133,6 +175,7 @@ globalThis.__DIDACT_ENGINE__ = async () => {{
 "#,
         title = escape_text(&opts.title),
         ratio = if opts.ratio.is_finite() && opts.ratio > 0.0 { opts.ratio } else { 16.0 / 9.0 },
+        audio_script = audio_script,
         player = inline_js(PLAYER_JS),
         lang = lang_attr,
         source = source_script(source),
@@ -159,6 +202,22 @@ fn source_script(source: &str) -> String {
 /// fermerait la balise trop tôt. `<\/` est équivalent à `</` dans une chaîne JS.
 fn inline_js(js: &str) -> String {
     js.replace("</script", "<\\/script").replace("<!--", "<\\!--")
+}
+
+/// Chaîne JavaScript entre guillemets (sans `</` qui fermerait la balise)
+fn js_string(s: &str) -> String {
+    let mut out = String::from("\"");
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '<' => out.push_str("\\u003c"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 fn escape_text(s: &str) -> String {
@@ -189,8 +248,12 @@ mod tests {
             lang: Some("EN".into()),
             engine: None,
             ratio: 16.0 / 9.0,
+            audio: Vec::new(),
+            voice_dir: None,
         };
-        let p = page("[figures]", "R0xVRQ==", "V0FTTQ==", &opts);
+        let audio = vec![("son.mp3".to_string(), "data:audio/mpeg;base64,AAAA".to_string())];
+        let p = page("[figures]", "R0xVRQ==", "V0FTTQ==", &audio, &opts);
+        assert!(p.contains(r#"__DIDACT_AUDIO__ = { "son.mp3": "data:audio/mpeg;base64,AAAA" }"#));
         assert!(p.contains("<title>Cours &lt;1&gt;</title>"));
         assert!(p.contains("<didact-player lang=\"EN\">"));
         assert!(p.contains("__DIDACT_ENGINE__"));

@@ -1,16 +1,21 @@
 # ═════════════════════════════════════════════════════════════
-#  DÉMO COMPLÈTE — tout ce que Didact sait faire, en ~70 secondes
+#  DÉMO COMPLÈTE — tout ce que Didact sait faire, en ~80 secondes
 #
-#  didact demo_complete.dct              → fenêtre
-#  didact demo_complete.dct --lang EN    → sous-titres en anglais
+#  didact demo_complete.dct                  → fenêtre
+#  didact demo_complete.dct --lang EN        → sous-titres en anglais
+#  didact demo_complete.dct --export mp4     → vidéo
 #  web : <didact-player src="demo_complete.dct">
 #
-#  1. Formes et styles          (0 → 10 s)
-#  2. Animations                (11 → 22 s)
-#  3. Références dynamiques     (22 → 34 s)
-#  4. Repères et graphes        (34 → 50 s)
-#  5. Texte et LaTeX            (50 → 63 s)
-#  6. Fin : destroy             (64 → 69 s)
+#  1. Formes et styles            (0 → 10 s)
+#  2. Animations                  (10 → 22 s)
+#  3. Groupes et transform        (22 → 35 s)
+#  4. Références dynamiques       (35 → 46 s)
+#  5. Repères et graphes          (46 → 62 s)
+#  6. Texte et LaTeX              (62 → 75 s)
+#  7. Fin : destroy               (76 → 82 s)
+#
+#  Chaque chapitre est un groupe (chap1, chap2, ...) : un seul
+#  `end : [chapN fadeout(...)]` fait disparaître tout le chapitre.
 # ═════════════════════════════════════════════════════════════
 
 [config]
@@ -122,6 +127,10 @@ deffigure f_tourne =
     color  : none
     rotate : 30
 
+# Tout le chapitre, pour le faire disparaître d'un coup
+defgroup chap1 =
+    items : [t1, f_rect, f_cercle, f_poly, f_halo, f_etoile, f_fleche, f_double, f_arc, f_tourne]
+
 # ═════════════════════════════════════════════════════════════
 #  2. ANIMATIONS
 # ═════════════════════════════════════════════════════════════
@@ -169,13 +178,92 @@ deffigure a_bille =
     color  : none
     layer  : 1
 
+# Tout le chapitre, pour le faire disparaître d'un coup
+defgroup chap2 =
+    items : [t2, a_carre, a_rond, a_texte, a_piste, a_bille]
+
 # ═════════════════════════════════════════════════════════════
-#  3. RÉFÉRENCES DYNAMIQUES
+#  3. GROUPES ET TRANSFORM
 # ═════════════════════════════════════════════════════════════
 
 deffigure t3 =
     type    : text
-    content : "3 · Références dynamiques"
+    content : "3 · Groupes et transform"
+    pos     : (50%, 93%)
+    style   : titre_chapitre
+
+# Un « soleil » fait de trois figures, définies autour de (45%, 60%)…
+deffigure s_halo =
+    type   : circle
+    center : (45%, 60%)
+    radius : 13%
+    fill   : #FEF3C7
+    color  : none
+
+deffigure s_coeur =
+    type   : circle
+    center : (45%, 60%)
+    radius : 7%
+    fill   : #FBBF24
+    color  : #B45309
+    stroke : 3px
+
+deffigure s_nom =
+    type    : text
+    content : "Soleil"
+    pos     : (45%, 38%)
+    font    : 36px
+    color   : #B45309
+
+# … et décalées toutes ensemble par le groupe : pos = décalage (ici 20 % vers la gauche)
+defgroup soleil =
+    items : [s_halo, s_coeur, s_nom]
+    pos   : (-20%, 0%)
+
+# transform : le carré se déforme en cercle, qui le remplace
+deffigure tr_carre =
+    type   : rect
+    pos    : (62%, 62%)
+    anchor : center
+    width  : 14%
+    height : 14%
+    fill   : #A7F3D0
+    color  : #059669
+    stroke : 4px
+
+deffigure tr_cercle =
+    type   : circle
+    center : (85%, 62%)
+    radius : 8%
+    fill   : #DDD6FE
+    color  : #7C3AED
+    stroke : 4px
+
+# Ça marche aussi sur les formules
+deffigure tr_eq1 =
+    type  : equation
+    expr  : \frac{d}{dx}\, x^2
+    pos   : (74%, 24%)
+    size  : 56px
+
+deffigure tr_eq2 =
+    type  : equation
+    expr  : 2x
+    pos   : (74%, 24%)
+    size  : 56px
+    color : #DC2626
+
+# Tout le chapitre (un groupe peut contenir un groupe)
+defgroup chap3 =
+    items : [t3, soleil, tr_carre, tr_cercle, tr_eq1, tr_eq2]
+
+# ═════════════════════════════════════════════════════════════
+#  4. RÉFÉRENCES DYNAMIQUES
+# ═════════════════════════════════════════════════════════════
+
+deffigure t4 =
+    type    : text
+    content : "4 · Références dynamiques"
     pos     : (50%, 93%)
     style   : titre_chapitre
 
@@ -229,13 +317,17 @@ deffigure r_label =
     font    : 44px
     color   : purple
 
+# Tout le chapitre, pour le faire disparaître d'un coup
+defgroup chap4 =
+    items : [t4, r_origine, r_axe, r_point, r_rayon, r_arc, r_label]
+
 # ═════════════════════════════════════════════════════════════
-#  4. REPÈRES ET GRAPHES
+#  5. REPÈRES ET GRAPHES
 # ═════════════════════════════════════════════════════════════
 
-deffigure t4 =
+deffigure t5 =
     type    : text
-    content : "4 · Repères et graphes"
+    content : "5 · Repères et graphes"
     pos     : (50%, 93%)
     style   : titre_chapitre
 
@@ -325,13 +417,17 @@ deffigure g_nuage =
     color  : #B91C1C
     size   : 6px
 
+# Tout le chapitre, pour le faire disparaître d'un coup
+defgroup chap5 =
+    items : [t5, g_repere, g_sin, g_parab, g_nom_sin, g_nom_parab, g_point, g_wagon, g_stats, g_histo, g_nuage]
+
 # ═════════════════════════════════════════════════════════════
-#  5. TEXTE ET LaTeX
+#  6. TEXTE ET LaTeX
 # ═════════════════════════════════════════════════════════════
 
-deffigure t5 =
+deffigure t6 =
     type    : text
-    content : "5 · Texte et LaTeX"
+    content : "6 · Texte et LaTeX"
     pos     : (50%, 93%)
     style   : titre_chapitre
 
@@ -380,8 +476,12 @@ deffigure l_table =
         $3$ | $6$   | $8$
         $4$ | $24$  | $16$
 
+# Tout le chapitre, pour le faire disparaître d'un coup
+defgroup chap6 =
+    items : [t6, l_texte, l_integrale, l_matrice, l_bloc, l_table]
+
 # ═════════════════════════════════════════════════════════════
-#  6. FIN
+#  7. FIN
 # ═════════════════════════════════════════════════════════════
 
 deffigure fin =
@@ -402,12 +502,12 @@ deffigure fin_sous =
 # ─── 1. Formes et styles ─────────────────────────────────────
 
 0.000 => {
-    start   : [t1 fadein(0.6s), f_rect fadein(0.8s), f_fleche fadein(0.8s)]
-    comment : ["Rectangle, ligne fléchée… avec des styles réutilisables.", "Rectangle, arrowed line… with reusable styles."]
+    start   : [t1 write(0.8s), f_rect draw(1s), f_fleche draw(1s)]
+    comment : ["Rectangle, ligne fléchée… dessinés avec draw, et des styles réutilisables.", "Rectangle, arrowed line… drawn with draw, and reusable styles."]
 }
 
 1.500 => {
-    start   : [f_cercle grow(0.8s), f_poly fadein(0.8s)]
+    start   : [f_cercle grow(0.8s), f_poly draw(1s)]
     comment : ["Cercle transparent (opacity), polygone avec un style hérité (extends).", "Transparent circle (opacity), polygon with an inherited style (extends)."]
 }
 
@@ -417,138 +517,167 @@ deffigure fin_sous =
 }
 
 5.500 => {
-    start   : [f_double fadein(0.6s), f_arc fadein(0.6s), f_tourne fadein(0.6s)]
+    start   : [f_double draw(0.8s), f_arc draw(0.8s), f_tourne fadein(0.6s)]
     comment : ["Double flèche, arc fléché, carré tourné de 30° (rotate).", "Double arrow, arrowed arc, square rotated by 30° (rotate)."]
 }
 
-9.500 => {
-    end : [t1 fadeout(0.6s), f_rect fadeout(0.6s), f_cercle fadeout(0.6s), f_poly fadeout(0.6s), f_halo fadeout(0.6s), f_etoile fadeout(0.6s), f_fleche fadeout(0.6s), f_double fadeout(0.6s), f_arc fadeout(0.6s), f_tourne fadeout(0.6s)]
+9.000 => {
+    end     : [chap1 fadeout(0.8s)]
+    comment : ["Un seul end sur le groupe chap1 fait disparaître tout le chapitre.", "A single end on the chap1 group removes the whole chapter."]
 }
 
 # ─── 2. Animations ───────────────────────────────────────────
 
-10.500 => {
-    start   : [t2 fadein(0.6s), a_carre fadein(1s), a_rond grow(1s), a_texte fadein(1s)]
-    comment : ["Animations d'entrée : fadein, grow.", "Entrance animations: fadein, grow."]
+10.000 => {
+    start   : [t2 write(0.8s), a_carre fadein(1s), a_rond grow(1s), a_texte slidein(up, 1s)]
+    comment : ["Animations d'entrée : fadein, grow, slidein.", "Entrance animations: fadein, grow, slidein."]
 }
 
-12.000 => {
+11.500 => {
     anim    : [a_carre [rotate(90, 1s), scale(1.3, 0.8s), color(to=#DC2626, 0.8s)]]
     comment : ["Animations enchaînées : rotation, puis taille, puis couleur.", "Chained animations: rotation, then size, then color."]
 }
 
 13.000 => {
-    start   : [a_piste fadein(0.5s), a_bille grow(0.4s)]
-    anim    : [a_bille move(to=(90%, 24%), 3s)]
+    start   : [a_piste draw(0.6s), a_bille grow(0.4s)]
+    anim    : [a_bille move(to=(90%, 24%), 2.5s)]
+    comment : ["move(to=…) : la bille démarre et s'arrête en douceur (ease=smooth, par défaut).", "move(to=…): the ball starts and stops smoothly (ease=smooth, the default)."]
 }
 
-15.000 => {
-    comment : ["move : la bille démarre et s'arrête en douceur (ease=smooth, par défaut).", "move: the ball starts and stops smoothly (ease=smooth, the default)."]
+16.000 => {
+    anim    : [a_bille move(left, 80%, 2s, ease=linear), a_rond [scale(1.6, 0.6s, ease=ease_out), scale(1, 0.6s, ease=ease_in)], a_texte [move(up, 18%, 1s), rotate(-15, 0.5s)]]
+    comment : ["move(left, 80%, …) : un déplacement relatif, ici à vitesse constante (ease=linear).", "move(left, 80%, …): a relative move, here at constant speed (ease=linear)."]
 }
 
-16.500 => {
-    anim    : [a_bille move(to=(10%, 24%), 2s, ease=linear), a_rond [scale(1.6, 0.6s, ease=ease_out), scale(1, 0.6s, ease=ease_in)], a_texte [move(to=(80%, 78%), 1s), rotate(-15, 0.5s)]]
-    comment : ["Retour à vitesse constante (ease=linear) ; plusieurs animations en parallèle.", "Back at constant speed (ease=linear); several animations in parallel."]
+19.000 => {
+    end     : [a_carre shrink(1s), a_rond fadeout(1s), a_texte slideout(right, 1s)]
+    comment : ["Animations de sortie : shrink, fadeout, slideout.", "Exit animations: shrink, fadeout, slideout."]
 }
 
-19.500 => {
-    end     : [a_carre shrink(1s), a_rond fadeout(1s), a_texte fadeout(1s)]
-    comment : ["Animations de sortie : shrink, fadeout.", "Exit animations: shrink, fadeout."]
+20.500 => {
+    end : [chap2 fadeout(0.6s)]
 }
 
-21.000 => {
-    end : [t2 fadeout(0.6s), a_piste fadeout(0.6s), a_bille shrink(0.6s)]
-}
-
-# ─── 3. Références dynamiques ────────────────────────────────
+# ─── 3. Groupes et transform ─────────────────────────────────
 
 22.000 => {
-    start   : [t3 fadein(0.6s), r_origine fadein(0.5s), r_axe fadein(0.5s), r_point grow(0.5s)]
+    start   : [t3 write(0.8s), soleil draw(1.5s)]
+    comment : ["defgroup : plusieurs figures forment un seul objet ; pos décale tout le groupe.", "defgroup: several figures form a single object; pos shifts the whole group."]
+}
+
+24.000 => {
+    anim    : [soleil [move(up, 8%, 1s), scale(0.75, 0.8s), rotate(20, 0.5s), rotate(-20, 0.5s)]]
+    comment : ["Le groupe se déplace, rétrécit et tourne autour de son centre, comme une seule figure.", "The group moves, shrinks and rotates around its centre, like a single figure."]
+}
+
+27.000 => {
+    start   : [tr_carre draw(1s), tr_eq1 write(1s)]
+}
+
+28.000 => {
+    anim    : [tr_carre transform(to=tr_cercle, 2s)]
+    comment : ["transform : le carré se déforme en cercle (forme, position, couleurs), qui le remplace.", "transform: the square morphs into the circle (shape, position, colours), which replaces it."]
+}
+
+30.500 => {
+    anim    : [tr_eq1 transform(to=tr_eq2, 1.5s)]
+    comment : ["Ça marche aussi sur les formules : la dérivée de x² devient 2x.", "It also works on formulas: the derivative of x² becomes 2x."]
+}
+
+33.500 => {
+    end : [chap3 fadeout(0.8s)]
+}
+
+# ─── 4. Références dynamiques ────────────────────────────────
+
+35.000 => {
+    start   : [t4 write(0.8s), r_origine fadein(0.5s), r_axe draw(0.6s), r_point grow(0.5s)]
     comment : ["Une figure peut dépendre d'une autre : center(), angle(), offset().", "A figure can depend on another: center(), angle(), offset()."]
 }
 
-23.500 => {
-    start : [r_rayon fadein(0.6s), r_arc fadein(0.6s), r_label fadein(0.6s)]
+36.500 => {
+    start : [r_rayon draw(0.6s), r_arc draw(0.6s), r_label fadein(0.6s)]
 }
 
-25.000 => {
+38.000 => {
     anim    : [r_point [move(to=(50%, 75%), 2.5s), move(to=(18%, 62%), 2s), move(to=(75%, 48%), 2s)]]
     comment : ["Le rayon, l'arc et l'étiquette θ suivent le point, image après image.", "The ray, the arc and the θ label follow the point, frame after frame."]
 }
 
-32.500 => {
-    end : [t3 fadeout(0.6s), r_origine fadeout(0.6s), r_axe fadeout(0.6s), r_point fadeout(0.6s), r_rayon fadeout(0.6s), r_arc fadeout(0.6s), r_label fadeout(0.6s)]
+45.000 => {
+    end : [chap4 fadeout(0.6s)]
 }
 
-# ─── 4. Repères et graphes ───────────────────────────────────
+# ─── 5. Repères et graphes ───────────────────────────────────
 
-33.500 => {
-    start   : [t4 fadein(0.6s), g_repere fadein(1s)]
+46.500 => {
+    start   : [t5 write(0.8s), g_repere draw(1.5s)]
     comment : ["Un repère gradué avec grille, à la même échelle en x et en y.", "A graded coordinate system with a grid, same scale in x and y."]
 }
 
-34.500 => {
-    start : [g_sin fadein(1s), g_nom_sin fadein(1s)]
+48.000 => {
+    start : [g_sin draw(1.5s), g_nom_sin write(1s)]
 }
 
-36.000 => {
-    start   : [g_parab fadein(1s), g_nom_parab fadein(1s), g_point grow(0.5s)]
+49.500 => {
+    start   : [g_parab draw(1.5s), g_nom_parab write(1s), g_point grow(0.5s)]
     comment : ["Des formules quelconques ; g_repere(1, -0.75) place un point dans le repère.", "Any formula; g_repere(1, -0.75) places a point in the coordinate system."]
 }
 
-38.000 => {
+51.500 => {
     start   : [g_wagon grow(0.4s)]
     anim    : [g_wagon follow(path=g_sin, 6s, rotate=tangent, ease=linear)]
     comment : ["follow : le rectangle parcourt la courbe en suivant sa tangente.", "follow: the rectangle travels along the curve, following its tangent."]
 }
 
-44.000 => {
-    start   : [g_stats fadein(0.8s), g_histo grow(0.8s), g_nuage fadein(1s)]
+57.500 => {
+    start   : [g_stats draw(1s), g_histo grow(0.8s), g_nuage fadein(1s)]
     comment : ["Histogramme et nuage de points.", "Histogram and scatter plot."]
 }
 
-48.500 => {
-    end : [t4 fadeout(0.6s), g_repere fadeout(0.6s), g_sin fadeout(0.6s), g_parab fadeout(0.6s), g_nom_sin fadeout(0.6s), g_nom_parab fadeout(0.6s), g_point fadeout(0.6s), g_wagon fadeout(0.6s), g_stats fadeout(0.6s), g_histo fadeout(0.6s), g_nuage fadeout(0.6s)]
+61.000 => {
+    end : [chap5 fadeout(0.6s)]
 }
 
-# ─── 5. Texte et LaTeX ───────────────────────────────────────
+# ─── 6. Texte et LaTeX ───────────────────────────────────────
 
-49.500 => {
-    start   : [t5 fadein(0.6s), l_texte fadein(1s)]
-    comment : ["Du texte avec du vrai LaTeX en ligne.", "Text with real inline LaTeX."]
+62.500 => {
+    start   : [t6 write(0.8s), l_texte write(2s)]
+    comment : ["Du texte avec du vrai LaTeX en ligne, écrit lettre après lettre (write).", "Text with real inline LaTeX, written letter by letter (write)."]
 }
 
-51.500 => {
-    start   : [l_integrale fadein(1s)]
+65.000 => {
+    start   : [l_integrale write(1.2s)]
     comment : ["equation : une formule centrée, bornes et fractions comprises.", "equation: a centered formula, with limits and fractions."]
 }
 
-53.500 => {
-    start   : [l_bloc fadein(1s)]
+67.000 => {
+    start   : [l_bloc write(1.5s)]
     comment : ["latex : un bloc sur plusieurs lignes, ici aligné sur le signe =.", "latex: a multi-line block, here aligned on the = sign."]
 }
 
-55.500 => {
-    start   : [l_table fadein(1s), l_matrice fadein(1s)]
+69.000 => {
+    start   : [l_table draw(1.2s), l_matrice slidein(left, 1s)]
     comment : ["Un tableau et une matrice.", "A table and a matrix."]
 }
 
-57.500 => {
+71.000 => {
     anim : [l_integrale [scale(1.15, 0.4s), scale(1, 0.4s)]]
 }
 
-61.000 => {
-    end : [t5 fadeout(0.8s), l_texte fadeout(0.8s), l_integrale fadeout(0.8s), l_matrice fadeout(0.8s), l_bloc fadeout(0.8s), l_table fadeout(0.8s)]
+74.000 => {
+    end : [chap6 fadeout(0.8s)]
 }
 
-# ─── 6. Fin : destroy libère toutes les figures devenues inutiles ───
+# ─── 7. Fin : destroy libère les figures devenues inutiles ───
+# Détruire un groupe détruit aussi toutes ses figures.
 
-63.000 => {
-    destroy : [f_rect, f_cercle, f_poly, f_halo, f_etoile, f_fleche, f_double, f_arc, f_tourne, t1, a_carre, a_rond, a_texte, a_piste, a_bille, t2, r_origine, r_axe, r_point, r_rayon, r_arc, r_label, t3, g_repere, g_sin, g_parab, g_nom_sin, g_nom_parab, g_point, g_wagon, g_stats, g_histo, g_nuage, t4, l_texte, l_integrale, l_matrice, l_bloc, l_table, t5]
-    start   : [fin fadein(1s), fin_sous fadein(1.5s)]
-    comment : ["destroy libère la mémoire des figures dont on n'a plus besoin.", "destroy frees the memory of figures that are no longer needed."]
+76.000 => {
+    destroy : [chap1, chap2, chap3, chap4, chap5, chap6]
+    start   : [fin write(1.5s), fin_sous fadein(1.5s)]
+    comment : ["destroy sur un groupe libère la mémoire de toutes ses figures.", "destroy on a group frees the memory of all its figures."]
 }
 
-68.000 => {
-    end : [fin fadeout(1s), fin_sous fadeout(1s)]
+81.000 => {
+    end : [fin fadeout(1s), fin_sous slideout(down, 1s)]
 }

@@ -1,6 +1,11 @@
-//! `transform(to=b)` : déformation progressive des formes d'une figure vers celles d'une autre.
+//! `transform(to=b)` : passage progressif des formes d'une figure à celles d'une autre.
 //!
-//! Méthode :
+//! Deux méthodes :
+//! - **texte et équations** (`morph_glyphs`) : les lettres identiques sont reconnues et glissent
+//!   à leur nouvelle place sans se déformer ; les autres apparaissent ou disparaissent en fondu ;
+//! - **formes** (`morph`) : déformation point par point, décrite ci-dessous.
+//!
+//! Méthode de `morph` :
 //! 1. chaque sous-chemin (un contour) est découpé en N points régulièrement espacés ;
 //! 2. les formes, puis les contours, sont associés dans l'ordre ; s'il en manque d'un côté,
 //!    on part (ou on arrive) d'un point au centre de l'autre figure ;
@@ -22,6 +27,178 @@ struct Contour {
     pts: Vec<Pt>,
     closed: bool,
 }
+
+// ─────────────────────────────────────────────
+//  LETTRE PAR LETTRE (texte et équations)
+// ─────────────────────────────────────────────
+
+/// Écart maximal (en part de la taille de la lettre) entre deux contours de la même lettre
+const SAME_GLYPH_TOLERANCE: f32 = 0.01;
+
+/// Points d'un chemin, dans l'ordre (points de contrôle compris)
+fn points(path: &[PathCmd]) -> Vec<Pt> {
+    let mut pts = Vec::with_capacity(path.len());
+    for cmd in path {
+        match *cmd {
+            PathCmd::MoveTo(x, y) | PathCmd::LineTo(x, y) => pts.push((x, y)),
+            PathCmd::CubicTo(a, b, c, d, x, y) => pts.extend([(a, b), (c, d), (x, y)]),
+            PathCmd::Close => {}
+        }
+    }
+    pts
+}
+
+/// Même suite de commandes (MoveTo, LineTo, ...)
+fn same_structure(a: &[PathCmd], b: &[PathCmd]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(p, q)| std::mem::discriminant(p) == std::mem::discriminant(q))
+}
+
+/// Contour ramené à une taille 1, en haut à gauche : ne dépend ni de la position ni de la taille
+fn normalized(shape: &Shape) -> Vec<Pt> {
+    let pts = points(&shape.path);
+    let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+    for &(x, y) in &pts {
+        (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+    }
+    let size = (x1 - x0).max(y1 - y0).max(1e-6);
+    pts.iter().map(|&(x, y)| ((x - x0) / size, (y - y0) / size)).collect()
+}
+
+/// Vrai si deux formes sont le même dessin, quelles que soient leur position et leur taille
+fn same_glyph(a: &Shape, a_pts: &[Pt], b: &Shape, b_pts: &[Pt]) -> bool {
+    same_structure(&a.path, &b.path)
+        && a_pts
+            .iter()
+            .zip(b_pts)
+            .all(|(p, q)| (p.0 - q.0).abs() < SAME_GLYPH_TOLERANCE && (p.1 - q.1).abs() < SAME_GLYPH_TOLERANCE)
+}
+
+/// Associe les lettres identiques de `a` et `b` : paires (indice dans a, indice dans b).
+/// 1. plus longue sous-suite commune : ce qui reste dans le même ordre ;
+/// 2. les lettres restantes identiques sont associées dans l'ordre (un terme passé de l'autre
+///    côté du signe = se déplace au lieu de s'effacer).
+fn match_glyphs(a: &[Shape], b: &[Shape]) -> Vec<(usize, usize)> {
+    let na: Vec<Vec<Pt>> = a.iter().map(normalized).collect();
+    let nb: Vec<Vec<Pt>> = b.iter().map(normalized).collect();
+    let same = |i: usize, j: usize| same_glyph(&a[i], &na[i], &b[j], &nb[j]);
+
+    // lcs[i][j] = longueur de la plus longue sous-suite commune de a[i..] et b[j..]
+    let mut lcs = vec![vec![0u32; b.len() + 1]; a.len() + 1];
+    for i in (0..a.len()).rev() {
+        for j in (0..b.len()).rev() {
+            lcs[i][j] = if same(i, j) { lcs[i + 1][j + 1] + 1 } else { lcs[i + 1][j].max(lcs[i][j + 1]) };
+        }
+    }
+    let mut pairs = Vec::new();
+    let (mut i, mut j) = (0, 0);
+    while i < a.len() && j < b.len() {
+        if same(i, j) && lcs[i][j] == lcs[i + 1][j + 1] + 1 {
+            pairs.push((i, j));
+            i += 1;
+            j += 1;
+        } else if lcs[i + 1][j] >= lcs[i][j + 1] {
+            i += 1;
+        } else {
+            j += 1;
+        }
+    }
+
+    let mut used_a: Vec<bool> = vec![false; a.len()];
+    let mut used_b: Vec<bool> = vec![false; b.len()];
+    for &(i, j) in &pairs {
+        used_a[i] = true;
+        used_b[j] = true;
+    }
+    for i in 0..a.len() {
+        if used_a[i] {
+            continue;
+        }
+        if let Some(j) = (0..b.len()).find(|&j| !used_b[j] && same(i, j)) {
+            pairs.push((i, j));
+            used_a[i] = true;
+            used_b[j] = true;
+        }
+    }
+    pairs
+}
+
+/// Forme à l'opacité multipliée par `k`
+fn faded(shape: &Shape, k: f32) -> Shape {
+    let mut s = shape.clone();
+    if let Some(c) = &mut s.fill {
+        c.a *= k;
+    }
+    if let Some((c, _)) = &mut s.stroke {
+        c.a *= k;
+    }
+    s
+}
+
+/// Formes intermédiaires entre deux textes ou équations : les lettres communes se déplacent,
+/// celles de `a` sans équivalent s'effacent, celles de `b` sans équivalent apparaissent.
+pub fn morph_glyphs(a: &[Shape], b: &[Shape], e: f32) -> Vec<Shape> {
+    let pairs = match_glyphs(a, b);
+    let mut matched_a = vec![false; a.len()];
+    let mut matched_b = vec![false; b.len()];
+    let mut out = Vec::with_capacity(a.len() + b.len());
+
+    for &(i, j) in &pairs {
+        matched_a[i] = true;
+        matched_b[j] = true;
+        // Même structure : chaque point va en ligne droite vers le point correspondant
+        let mix = |p: f32, q: f32| p + (q - p) * e;
+        let path = a[i]
+            .path
+            .iter()
+            .zip(&b[j].path)
+            .map(|(p, q)| match (p.clone(), q.clone()) {
+                (PathCmd::MoveTo(x, y), PathCmd::MoveTo(u, v)) => PathCmd::MoveTo(mix(x, u), mix(y, v)),
+                (PathCmd::LineTo(x, y), PathCmd::LineTo(u, v)) => PathCmd::LineTo(mix(x, u), mix(y, v)),
+                (PathCmd::CubicTo(x1, y1, x2, y2, x, y), PathCmd::CubicTo(u1, v1, u2, v2, u, v)) => {
+                    PathCmd::CubicTo(mix(x1, u1), mix(y1, v1), mix(x2, u2), mix(y2, v2), mix(x, u), mix(y, v))
+                }
+                (other, _) => other,
+            })
+            .collect();
+        let stroke = match (a[i].stroke, b[j].stroke) {
+            (None, None) => None,
+            (x, y) => {
+                let (cx, wx) = x.map(|(c, w)| (Some(c), w)).unwrap_or((None, 0.0));
+                let (cy, wy) = y.map(|(c, w)| (Some(c), w)).unwrap_or((None, 0.0));
+                mix_opt(cx, cy, e).map(|c| (c, mix(wx, wy)))
+            }
+        };
+        out.push(Shape { path, fill: mix_opt(a[i].fill, b[j].fill, e), stroke });
+    }
+    out.extend(a.iter().zip(&matched_a).filter(|(_, m)| !**m).map(|(s, _)| faded(s, 1.0 - e)));
+    out.extend(b.iter().zip(&matched_b).filter(|(_, m)| !**m).map(|(s, _)| faded(s, e)));
+    out
+}
+
+/// Indices dans `shapes` des morceaux identiques à la suite `part`, lettre par lettre.
+/// Toutes les occurrences comptent ; vide si `part` n'y est pas.
+pub fn find_part(shapes: &[Shape], part: &[Shape]) -> Vec<usize> {
+    let mut found = Vec::new();
+    if part.is_empty() {
+        return found;
+    }
+    let ns: Vec<Vec<Pt>> = shapes.iter().map(normalized).collect();
+    let np: Vec<Vec<Pt>> = part.iter().map(normalized).collect();
+    let mut i = 0;
+    while i + part.len() <= shapes.len() {
+        if (0..part.len()).all(|k| same_glyph(&shapes[i + k], &ns[i + k], &part[k], &np[k])) {
+            found.extend(i..i + part.len());
+            i += part.len();
+        } else {
+            i += 1;
+        }
+    }
+    found
+}
+
+// ─────────────────────────────────────────────
+//  FORMES
+// ─────────────────────────────────────────────
 
 /// Formes intermédiaires entre `a` (e = 0) et `b` (e = 1)
 pub fn morph(a: &[Shape], b: &[Shape], e: f32) -> Vec<Shape> {
@@ -211,6 +388,53 @@ mod tests {
         assert!((m[0].fill.unwrap().r - 0.5).abs() < 1e-5);
         // aux extrémités : les points de départ / d'arrivée
         assert!((center(&morph(&a, &b, 1.0)).0 - 105.0).abs() < 0.5);
+    }
+
+    /// Formes d'une formule LaTeX (taille 40, centrée en x)
+    fn formula(tex: &str, x: f32) -> Vec<Shape> {
+        use crate::renderer::typeset::{shapes, Align, Content};
+        shapes(&Content::Math(tex.into()), x, 100.0, 40.0, Align::Center, Rgba::BLACK).unwrap()
+    }
+
+    #[test]
+    fn lettres_communes_reconnues() {
+        let a = formula(r"T(x) = x - rac{x^3}{6}", 300.0);
+        let b = formula(r"T(x) = x - rac{x^3}{6} + rac{x^5}{120}", 300.0);
+        // Tout ce qui existe dans a existe dans b, sauf la barre de fraction si elle diffère
+        let pairs = match_glyphs(&a, &b);
+        assert_eq!(pairs.len(), a.len());
+        let m = morph_glyphs(&a, &b, 0.0);
+        assert_eq!(m.len(), b.len());
+        // Au début : les nouveaux morceaux sont invisibles ; à la fin : tout est là
+        assert_eq!(m.iter().filter(|s| s.fill.is_some_and(|c| c.a == 0.0)).count(), b.len() - a.len());
+        let end = morph_glyphs(&a, &b, 1.0);
+        assert_eq!(end.iter().filter(|s| s.fill.is_some_and(|c| c.a > 0.99)).count(), b.len());
+    }
+
+    #[test]
+    fn un_terme_change_de_cote() {
+        let a = formula(r"a + b = c", 300.0);
+        let b = formula(r"a = c - b", 300.0);
+        // a, b, =, c se retrouvent ; seuls + et - changent
+        assert_eq!(match_glyphs(&a, &b).len(), 4);
+    }
+
+    #[test]
+    fn meme_lettre_a_une_autre_taille() {
+        use crate::renderer::typeset::{shapes, Align, Content};
+        let a = formula("x", 100.0);
+        let b = shapes(&Content::Math("x".into()), 400.0, 300.0, 90.0, Align::Center, Rgba::BLACK).unwrap();
+        assert_eq!(match_glyphs(&a, &b).len(), 1);
+    }
+
+    #[test]
+    fn retrouver_un_terme() {
+        let f = formula(r"x - rac{x^3}{6} + rac{x^5}{120}", 300.0);
+        let part = formula(r"rac{x^5}{120}", 0.0);
+        let found = find_part(&f, &part);
+        assert_eq!(found.len(), part.len());
+        assert!(found.iter().all(|&i| i >= f.len() - part.len()), "{:?}", found);
+        assert!(find_part(&f, &formula("z", 0.0)).is_empty());
     }
 
     #[test]

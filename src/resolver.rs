@@ -39,6 +39,8 @@ pub struct ResolvedDocument {
     pub figures: Vec<ResolvedFigure>,
     /// Triée par timestamp
     pub timeline: Vec<TimelineEvent>,
+    /// Paramètres (`defparam`) : nom et valeur de départ
+    pub params: Vec<(String, f64)>,
 }
 
 pub fn resolve(doc: &Document) -> ResolvedDocument {
@@ -63,6 +65,7 @@ pub fn resolve(doc: &Document) -> ResolvedDocument {
         config: doc.config.clone(),
         figures: figures.into_iter().map(|(_, f)| f).collect(),
         timeline,
+        params: doc.params.iter().map(|p| (p.name.clone(), p.value)).collect(),
     }
 }
 

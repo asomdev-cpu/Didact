@@ -10,6 +10,13 @@
 //    autoplay  "false" pour ne pas démarrer tout seul
 //    controls  "false" pour cacher la barre de contrôles
 //
+//  Voix : si `didact cours.dct --voice` a été lancé, le dossier cours_voix/ (à côté du
+//  .dct) contient les commentaires lus ; ils sont joués dans la langue choisie.
+//
+//  Son : les pistes `audio` sont jouées avec <audio>, chemins relatifs au fichier .dct
+//  (ou à la page pour un fichier écrit dans la page). Les navigateurs bloquent souvent
+//  le son tant que le visiteur n'a pas cliqué : il démarre alors au premier clic sur ▶.
+//
 //  Le moteur (pkg/didact_bg.wasm) est chargé une seule fois pour toute la page.
 //  (Dans une page faite par `didact --export html`, il est inclus dans la page.)
 // ─────────────────────────────────────────────
@@ -100,7 +107,7 @@ class DidactPlayer extends HTMLElement {
     this.$(".play").addEventListener("click", () => this.toggle());
     this.$(".restart").addEventListener("click", () => this.seek(0));
     this.$(".seek").addEventListener("input", (e) => this.seek(parseFloat(e.target.value)));
-    this.$(".lang").addEventListener("change", (e) => { this.currentLang = e.target.value; this.drawn = null; });
+    this.$(".lang").addEventListener("change", (e) => this.setLang(e.target.value));
     this.addEventListener("keydown", (e) => {
       if (e.code === "Space") { e.preventDefault(); this.toggle(); }
       if (e.code === "ArrowRight") this.seek(this.t + 1);
@@ -117,12 +124,13 @@ class DidactPlayer extends HTMLElement {
 
   disconnectedCallback() {
     cancelAnimationFrame(this.raf);
+    this.stopAudio();
   }
 
   attributeChangedCallback(name, oldValue, value) {
     if (!this.isConnected || oldValue === value) return;
     if (name === "src") this.load();
-    if (name === "lang") { this.currentLang = value; this.syncLang(); this.drawn = null; }
+    if (name === "lang") { this.setLang(value); this.syncLang(); }
   }
 
   /** Charge (ou recharge) le fichier .dct */
@@ -130,9 +138,9 @@ class DidactPlayer extends HTMLElement {
     const token = (this.loadToken = {});
     this.showMessage("loading", "Chargement…");
     let source;
+    const src = this.getAttribute("src");
     try {
       this.engine = await initDidact();
-      const src = this.getAttribute("src");
       if (src) {
         const response = await fetch(src);
         if (!response.ok) throw new Error(`Impossible de charger ${src} (HTTP ${response.status})`);
@@ -150,8 +158,11 @@ class DidactPlayer extends HTMLElement {
     if (token !== this.loadToken) return; // un autre chargement a commencé entre-temps
 
     try {
+      this.stopAudio();
       this.player?.free();
       this.player = new this.engine.Player(source);
+      this.setupAudio(src);
+      this.setupVoice(src);
     } catch (e) {
       this.player = null;
       return this.showMessage("error", "Erreurs dans le fichier Didact :\n\n" + (e.message ?? e));
@@ -160,15 +171,135 @@ class DidactPlayer extends HTMLElement {
 
     const ratio = this.player.aspectRatio();
     this.$(".stage").style.aspectRatio = ratio ? String(ratio) : "16 / 9";
-    this.duration = this.player.duration();
-    this.$(".seek").max = String(this.duration || 0.01);
     this.currentLang = this.getAttribute("lang") || this.player.defaultLanguage();
+    this.duration = this.player.realDuration(this.currentLang);
+    this.$(".seek").max = String(this.duration || 0.01);
     this.syncLang();
     this.$(".bar").hidden = this.getAttribute("controls") === "false";
     this.t = 0;
     this.drawn = null;
     this.playing = this.getAttribute("autoplay") !== "false";
     this.updateControls();
+  }
+
+  /** Crée un <audio> par piste. `src` : adresse du .dct (null si écrit dans la page) */
+  setupAudio(src) {
+    const base = new URL(src || ".", document.baseURI);
+    const embedded = globalThis.__DIDACT_AUDIO__ || {}; // page autonome : fichiers inclus
+    this.tracks = JSON.parse(this.player.audioSegments()).map((seg) => {
+      const el = new Audio(embedded[seg.file] || new URL(seg.file, base).href);
+      el.preload = "auto";
+      el.addEventListener("error", () => console.warn("Didact : audio introuvable :", seg.file));
+      return { ...seg, el };
+    });
+  }
+
+  /** Voix : dossier cours_voix/ à côté du .dct (ou inclus dans une page autonome) */
+  async setupVoice(src) {
+    this.voiceFiles = null;
+    const token = this.loadToken;
+    let dir, index;
+    if (globalThis.__DIDACT_VOICE_DIR__) {
+      dir = globalThis.__DIDACT_VOICE_DIR__;
+      index = globalThis.__DIDACT_VOICE_INDEX__ || "";
+    } else if (src) {
+      const name = new URL(src, document.baseURI).pathname.split("/").pop().replace(/\.dct$/i, "");
+      dir = name + "_voix";
+      try {
+        const res = await fetch(new URL(dir + "/index.txt", new URL(src, document.baseURI)));
+        if (!res.ok) return; // pas de voix générées : rien à faire
+        index = await res.text();
+      } catch { return; }
+    } else {
+      return;
+    }
+    if (token !== this.loadToken || !this.player) return;
+    // index.txt : « FR/….wav 3.42 » par ligne (fichier, durée lue)
+    const files = index.split("\n").map((l) => l.trim())
+      .filter((l) => l && !l.startsWith("#") && !l.startsWith("commande "))
+      .map((l) => dir + "/" + l.split(/\s+/)[0]);
+    this.voiceFiles = new Set(files);
+    this.voiceDir = dir;
+    this.voiceSrc = src;
+    // Pauses de l'animation pour laisser finir les phrases trop longues
+    const tl = this.timelineTime();
+    this.player.setVoiceIndex(index);
+    this.t = this.player.toReal(tl, this.currentLang);
+    this.updateDuration();
+    this.updateVoiceLang();
+  }
+
+  /** Temps de la timeline (celui du .dct) correspondant au temps réel this.t */
+  timelineTime() {
+    return this.player ? this.player.toTimeline(this.t, this.currentLang) : this.t;
+  }
+
+  /** Durée réelle (pauses comprises) dans la langue courante */
+  updateDuration() {
+    this.duration = this.player.realDuration(this.currentLang);
+    this.$(".seek").max = String(this.duration || 0.01);
+    this.updateControls();
+  }
+
+  /** Change de langue en restant au même endroit de la timeline */
+  setLang(lang) {
+    if (!this.player || lang === this.currentLang) { this.currentLang = lang; return; }
+    const tl = this.timelineTime();
+    this.currentLang = lang;
+    this.t = this.player.toReal(tl, lang);
+    this.updateDuration();
+    this.drawn = null;
+  }
+
+  /** (Re)crée les pistes de voix de la langue courante */
+  updateVoiceLang() {
+    for (const tr of this.voiceTracks || []) { tr.el.pause(); tr.el.removeAttribute("src"); }
+    this.voiceTracks = [];
+    if (!this.player || !this.voiceFiles) return;
+    const base = new URL(this.voiceSrc || ".", document.baseURI);
+    const embedded = globalThis.__DIDACT_AUDIO__ || {};
+    for (const seg of JSON.parse(this.player.voiceSegments(this.currentLang))) {
+      const file = this.voiceDir + "/" + seg.file;
+      if (!this.voiceFiles.has(file)) continue;
+      const el = new Audio(embedded[file] || new URL(file, base).href);
+      el.preload = "auto";
+      this.voiceTracks.push({ file, volume: 1, start: seg.start, end: null, el });
+    }
+    this.voiceLang = this.currentLang;
+  }
+
+  stopAudio() {
+    for (const tr of [...(this.tracks || []), ...(this.voiceTracks || [])]) {
+      tr.el.pause();
+      tr.el.removeAttribute("src");
+    }
+    this.tracks = [];
+    this.voiceTracks = [];
+  }
+
+  /** Joue / arrête / recale chaque piste selon le temps courant */
+  syncAudio() {
+    if (this.voiceFiles && this.voiceLang !== this.currentLang) this.updateVoiceLang();
+    for (const tr of [...(this.tracks || []), ...(this.voiceTracks || [])]) {
+      // instants de la timeline → temps réel (pauses laissées aux voix)
+      const start = this.player.toReal(tr.start, this.currentLang);
+      const end = tr.end === null ? null : this.player.toReal(tr.end, this.currentLang);
+      const active = this.playing && this.t >= start && (end === null || this.t < end);
+      if (!active) {
+        if (!tr.el.paused) tr.el.pause();
+        continue;
+      }
+      const want = this.t - start;
+      tr.el.volume = Math.min(1, Math.max(0, tr.volume));
+      if (tr.el.paused) {
+        if (want < (tr.el.duration || Infinity)) {
+          tr.el.currentTime = want;
+          tr.el.play().catch(() => {}); // bloqué tant que le visiteur n'a pas cliqué
+        }
+      } else if (Math.abs(tr.el.currentTime - want) > 0.3) {
+        tr.el.currentTime = want; // saut dans la barre de lecture
+      }
+    }
   }
 
   /** Liste des langues dans le menu (seulement s'il y en a plusieurs) */
@@ -225,6 +356,7 @@ class DidactPlayer extends HTMLElement {
       }
       this.updateControls();
     }
+    this.syncAudio();
     this.draw();
   }
 
@@ -241,10 +373,11 @@ class DidactPlayer extends HTMLElement {
       this.canvas.width = w;
       this.canvas.height = h;
     }
-    const pixels = this.player.render(this.t, w, h);
+    const tl = this.timelineTime(); // this.t est le temps réel (pauses comprises)
+    const pixels = this.player.render(tl, w, h);
     const image = new ImageData(new Uint8ClampedArray(pixels.buffer, pixels.byteOffset, pixels.length), w, h);
     this.ctx.putImageData(image, 0, 0);
-    this.$(".subtitle").textContent = this.player.comment(this.t, this.currentLang) ?? "";
+    this.$(".subtitle").textContent = this.player.comment(tl, this.currentLang) ?? "";
     for (const warning of this.player.takeWarnings()) console.warn("Didact :", warning);
   }
 }

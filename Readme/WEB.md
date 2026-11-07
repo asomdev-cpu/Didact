@@ -159,5 +159,6 @@ Produit un fichier `.html` qui contient tout (le cours, le lecteur et le moteur)
 
 ## 6. Limites actuelles
 
-- L'audio (`start : [audio ...]`) n'est pas encore joué (Phase 5).
+- Voix : si `didact cours.dct --voice` a été lancé, mettre le dossier `cours_voix/` à côté du `.dct` sur le site ; la voix suit la langue choisie.
+- Son : les navigateurs bloquent souvent le son tant que le visiteur n'a pas cliqué ; il démarre alors au premier clic sur ▶. Les fichiers audio sont cherchés à côté du `.dct` (ou de la page pour un fichier écrit dans la page) ; la page autonome (`--export html`) les inclut.
 - `raw.matplotlib` n'existe pas sur le web (pas de Python dans le navigateur).

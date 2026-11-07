@@ -1,0 +1,19 @@
+# ═════════════════════════════════════════════════════════════
+#  Voix de synthèse pour `didact cours.dct --voice`
+#  Une ligne par langue :  LANGUE : commande
+#
+#  Dans la commande :
+#    {out}        fichier .wav à écrire (obligatoire)
+#    {text}       la phrase          {text_file}  fichier contenant la phrase
+#    {lang}       la langue          (la phrase est aussi envoyée sur l'entrée standard)
+#
+#  Piper (gratuit, hors-ligne, tourne sur le processeur) — à installer une fois :
+#    pip install piper-tts
+#    python -m piper.download_voices fr_FR-siwis-medium en_US-lessac-medium --data-dir voix
+#  (les voix sont rangées dans le dossier voix/ du projet)
+#
+#  Autre moteur (Kokoro, …) : il suffit de changer la commande.
+# ═════════════════════════════════════════════════════════════
+
+FR : python -m piper -m fr_FR-siwis-medium --data-dir voix -f {out}
+EN : python -m piper -m en_US-lessac-medium --data-dir voix -f {out}

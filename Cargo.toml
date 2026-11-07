@@ -32,4 +32,6 @@ wasm-bindgen = "=0.2.129"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 eframe = "0.37"
 flate2 = "1"
+cpal = "0.16"
+symphonia = { version = "0.5", features = ["all"] }
 base64 = "0.22"

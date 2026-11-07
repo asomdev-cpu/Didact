@@ -192,6 +192,9 @@ Définit les objets visuels et les styles réutilisables. **Aucune notion de tem
 | `defstyle` | Un style réutilisable |
 | `deffigure` | Une figure (objet visuel) |
 | `defgroup` | Un groupe de figures |
+| `defparam` | Un paramètre : un nombre qui évolue dans le temps (§12) |
+| `defmodel` | Un modèle de figure, avec des arguments (§5.2) |
+| `defrepeat` | Plusieurs figures créées à partir d'un modèle, plus leur groupe (§5.2) |
 
 Le préfixe `def` évite l'ambiguïté avec les noms de propriétés :
 
@@ -202,6 +205,39 @@ deffigure ma_ligne =
 defstyle trait_fin =         # ← "defstyle" est un mot-clé de définition
     color : red
 ```
+
+### 5.2 Modèles et répétitions
+
+Un **modèle** évite de réécrire des figures presque identiques. Ses lignes sont indentées sous `defmodel`. Dans ces lignes, `@nom` est remplacé par l'argument, et `@(calcul)` par le résultat du calcul (les arguments doivent alors être des nombres ; mêmes opérations que `expr`).
+
+```
+defmodel approx(formule, couleur) =
+    type  : plot
+    expr  : @formule
+    axes  : repere
+    color : @couleur
+    style : courbe
+
+deffigure t1 = approx(x, #DC2626)
+deffigure t3 = approx("x - x^3/6", #EA580C)
+```
+
+Un argument contenant une virgule ou commençant par une espace s'écrit entre guillemets ; les guillemets sont retirés. Les parenthèses protègent aussi les virgules : `repere(1, 2)` est un seul argument.
+
+Une **répétition** crée une figure par valeur de `i`, puis un groupe qui les contient toutes :
+
+```
+defmodel barre(i, h) =
+    type   : polygon
+    points : [repere(@(i*h), 0), repere(@((i+1)*h), 0), repere(@((i+1)*h), 1), repere(@(i*h), 1)]
+    fill   : blue
+
+defrepeat barres = barre(@i, 0.5) for i in 0..7
+```
+
+Crée `barres_0` … `barres_7` (bornes incluses, entiers ≥ 0, 1000 figures au plus) et le groupe `barres`. On anime l'ensemble (`start : [barres draw(2s)]`) ou une seule figure (`anim : [barres_5 color(to=red, 1s)]`).
+
+Un modèle doit être défini plus haut que son utilisation. Les erreurs d'une figure créée par un modèle indiquent la ligne de l'appel. `defmodel` et `defrepeat` ne s'utilisent qu'en section `[figures]`.
 
 ---
 
@@ -433,6 +469,8 @@ deffigure mon_triangle =
     fill   : yellow
 ```
 
+Les points peuvent aussi être dans un repère : `points : [repere(0, 0), repere(1, 0), repere(1, 2)]`.
+
 #### `arc`
 
 ```
@@ -491,7 +529,7 @@ deffigure mon_eq =
     color : black
 ```
 
-Le contenu de `expr` est du LaTeX en mode mathématique, lu tel quel jusqu'à la fin de la ligne (pas de guillemets), affiché en formule centrée (bornes d'intégrales et de sommes au-dessus et en dessous). `size` : taille (défaut 40px).
+Le contenu de `expr` est du LaTeX en mode mathématique, lu tel quel jusqu'à la fin de la ligne (pas de guillemets), affiché en formule centrée (bornes d'intégrales et de sommes au-dessus et en dessous). `size` : taille (défaut 40px). `align` : `center` (défaut), `left` ou `right` par rapport à `pos` ; avec `left`, le début d'une formule qui s'allonge par `transform` reste immobile.
 
 #### `latex`
 
@@ -653,7 +691,7 @@ Un groupe se déplace, s'anime et apparaît/disparaît comme un seul objet.
 
 - **`items`** (obligatoire) : les figures du groupe, définies **avant** lui. Un groupe peut contenir d'autres groupes.
 - **`pos`** (optionnel) : **décalage** appliqué à toutes ses figures, en % (x de la largeur, y de la hauteur, vers le haut). `(10%, 0%)` = tout 10 % plus à droite ; `(-5%, 0%)` est permis. Sans `pos`, les figures restent où elles sont définies.
-- **`start` / `end` / `destroy`** d'un groupe s'appliquent à toutes ses figures. On peut toujours démarrer une figure du groupe seule.
+- **`start` / `end` / `destroy`** d'un groupe s'appliquent à toutes ses figures. On peut toujours démarrer une figure du groupe seule. Un `end` de groupe ne touche pas les figures déjà cachées (elles ne réapparaissent pas pour sa sortie). Pratique : un groupe par chapitre, puis `end : [chapitre fadeout(1s)]`.
 - **Animations** (`move`, `rotate`, `scale`, `fadein`, `draw`, ...) : appliquées à l'ensemble, autour du **centre de l'ensemble** des figures affichées. `draw` et `write` révèlent les figures l'une après l'autre.
 - **Références** : `center(groupe)` = centre de l'ensemble ; `center(figure)` suit le groupe pour les figures définies **après** le groupe.
 - Une figure peut être dans plusieurs groupes : les effets s'additionnent (provisoire, cf. §15).
@@ -726,6 +764,7 @@ anim  : [a fadein(1s), b move(to=center(a), 1s)]  # séparées par une virgule :
 | `move(to=pos, d)` | le **centre** de la figure va vers `pos` : `(x%, y%)` ou `center(fig)` |
 | `color(to=couleur, d)` | la couleur du **trait** (`color`) change ; `fill` ne change pas |
 | `scale(f, d)` | la taille va vers `f` × la taille d'origine (`scale(2)` deux fois = toujours 2) |
+| `to(valeur, d)` | un **paramètre** va vers `valeur` (§12) ; ne s'applique pas à une figure |
 | `rotate(angle, d)` | tourne **de** `angle` degrés autour du centre (positif = sens trigonométrique), s'additionne |
 
 | `follow(path=fig, d)` | le **centre** parcourt le contour de `fig` (courbe, ligne, arc, cercle, ...) du début à la fin, à vitesse régulière ; `rotate=tangent` : la figure s'oriente selon la tangente |
@@ -734,7 +773,8 @@ anim  : [a fadein(1s), b move(to=center(a), 1s)]  # séparées par une virgule :
 | `draw(d)` | le contour se trace, puis la figure se remplit en fondu (les morceaux presque en même temps) |
 | `write(d)` | pareil, morceau par morceau, comme une écriture (texte, équations : lettre après lettre) |
 | `move(dir, dist%, d)` | se déplace de `dist` % dans la direction `up` / `down` / `left` / `right` (% de la largeur ou de la hauteur) |
-| `transform(to=b, d)` | les formes se déforment vers celles de `b` (position, forme, couleurs) ; à la fin, la figure est cachée et `b` est affichée à sa place. `b` doit être définie (pas forcément démarrée) |
+| `transform(to=b, d)` | les formes se déforment vers celles de `b` (position, forme, couleurs) ; à la fin, la figure est cachée et `b` est affichée à sa place. `b` doit être définie (pas forcément démarrée). **Entre deux textes ou équations**, c'est lettre par lettre : les lettres communes glissent à leur nouvelle place sans se déformer, les autres apparaissent ou disparaissent en fondu |
+| `color(to=c, d, part="...")` | seul ce morceau d'un texte ou d'une équation change de couleur. Dans une équation, `part` est du LaTeX (`part="\frac{x^3}{3!}"`) ; dans un texte, du texte avec `$...$`. Toutes les occurrences changent. Un morceau introuvable est une erreur de compilation |
 
 Les apparitions et disparitions (`fadein`, `slidein`, `grow`, `draw`, `write`, `fadeout`, `slideout`, `shrink`, `transform`) ne comptent plus après un nouveau `start` de la figure.
 
@@ -802,6 +842,32 @@ deffigure rectangle =
     rotate : auto_tangent(courbe_sin)
 ```
 
+### Paramètres : `defparam`
+
+Un paramètre est un nombre nommé qui évolue dans le temps. Tout ce qui l'utilise est recalculé à chaque image.
+
+```
+defparam k = 1                 # valeur de départ (obligatoire)
+
+deffigure onde =
+    type : plot
+    expr : sin(k*x)            # dans une formule
+    axes : repere
+
+deffigure point =
+    type   : circle
+    center : repere(a, a^2)    # dans des coordonnées de repère
+    radius : 1%
+
+2.000 => {
+    anim : [k to(3, 2s)]       # k va de sa valeur actuelle à 3 en 2 s
+}
+```
+
+- **Animation :** seule `to(valeur, durée)` s'applique à un paramètre (avec `ease=...` si besoin, enchaînable). Un paramètre garde sa valeur à la fin. `start`, `end` et `destroy` ne le concernent pas.
+- **Où l'utiliser :** `expr` d'un `plot`, et coordonnées d'un repère (`repere(a - 1, sin(a))`, aussi dans `move(to=...)` et les `points` d'un `polygon`). Les coordonnées acceptent les mêmes opérations et fonctions que `expr`, sans `x`. Les autres propriétés (`radius`, `to_angle`, `equation`, ...) ne prennent pas encore de paramètre.
+- **Nom :** lettres, chiffres et `_`, sans les noms réservés des formules (`x`, `e`, `pi`, `sin`, ...). Comme tout élément, un paramètre doit être défini plus haut que ce qui l'utilise.
+
 ---
 
 ## 13. Audio et commentaires multilingues
@@ -818,7 +884,33 @@ deffigure rectangle =
 }
 ```
 
-### 13.2 Commentaires multilingues
+- Le chemin est relatif au fichier `.dct`. Formats : mp3, wav, ogg, flac, m4a.
+- `volume` : 1 par défaut (0.3 = plus bas).
+- Une piste joue de son `start` jusqu'à son `end` (ou la fin de la timeline). Un nouveau `start` du même fichier la relance depuis le début.
+- Le son suit la lecture : pause, saut dans la barre de lecture, retour en arrière.
+- Joué dans la fenêtre, sur le web (`<audio>`), mixé dans l'export MP4 et inclus dans la page HTML autonome.
+
+### 13.2 Voix : les commentaires lus à voix haute
+
+```
+didact cours.dct --voice
+```
+
+Chaque `comment` est lu par un programme de synthèse vocale **choisi par l'utilisateur** (Piper, Kokoro, …), décrit dans `didact-voix.txt` à côté du `.dct` (une ligne par langue) :
+
+```
+FR : python -m piper -m fr_FR-siwis-medium --data-dir voix -f {out}
+EN : python -m piper -m en_US-lessac-medium --data-dir voix -f {out}
+```
+
+- `{out}` = fichier .wav à écrire (obligatoire) ; aussi `{text}`, `{text_file}`, `{lang}`. La phrase est envoyée sur l'entrée standard.
+- Les fichiers vont dans `cours_voix/` (un par phrase et par langue). Relancer `--voice` ne refait que les phrases modifiées (ou toutes, si la commande d'une langue a changé).
+- Les maths sont prononcées simplement : `$x^2$` → « x au carré », `\frac{a}{b}` → « a sur b », `\sqrt{2}` → « racine de 2 » ; le reste du LaTeX est retiré.
+- **Phrase trop longue** : si une phrase lue dure plus longtemps que l'écart avant le commentaire suivant, **l'animation attend** juste avant ce commentaire que la phrase soit finie (+ 0,25 s de respiration), puis reprend. Rien n'est coupé, image et voix restent synchronisées ; la vidéo dure un peu plus longtemps. `--voice` liste chaque phrase concernée (ligne, durée lue, écart, attente ajoutée), puis le total par langue.
+- Ensuite, la voix de la langue choisie est jouée **partout** : fenêtre (elle suit le menu de langue), web (si `cours_voix/` est à côté du `.dct`), `--export mp4`, `--export html` (incluse dans la page).
+- `--export audio` : le son seul (pistes audio + voix) en MP3, le « podcast ».
+
+### 13.3 Commentaires multilingues
 
 L'ordre des traductions correspond à l'ordre déclaré dans `languages` du `[config]` :
 
@@ -827,7 +919,7 @@ L'ordre des traductions correspond à l'ordre déclaré dans `languages` du `[co
 comment : ["la barre descend", "de balk daalt", "the bar goes down"]
 ```
 
-### 13.3 Sélection de la langue au rendu
+### 13.4 Sélection de la langue au rendu
 
 La langue choisie est passée en paramètre au compilateur ou à l'embarquement.
 
@@ -946,4 +1038,4 @@ On a décidé que les positions étaient en pourcentages. Mais peut-on aussi uti
 
 ### Détection des erreurs
 
-Le compilateur produit des erreurs claires, mais on n'a pas formalisé la liste exhaustive ni le format des messages.
+Le compilateur produit des erreurs claires, mais on n'a pas formalisé la liste exhaustive ni le format des messages.

@@ -19,6 +19,11 @@ Options :
   --export html           page web autonome (un seul fichier, s'ouvre sans serveur)
       -o <fichier>          fichier de sortie (défaut : <nom>.html)
       --engine <dossier>    dossier du moteur compilé (défaut : web/pkg)
+  --export audio          le son seul (pistes audio et voix), en MP3 : le « podcast » (nécessite ffmpeg)
+      -o <fichier>          fichier de sortie (défaut : <nom>.mp3, ou <nom>_<LANG>.mp3 avec --lang)
+  --voice                 fait lire les commentaires par une voix de synthèse (voir didact-voix.txt) ;
+                          les phrases sont ensuite jouées partout (fenêtre, web, MP4, HTML)
+      --voice-config <f>    fichier de configuration (défaut : didact-voix.txt à côté du .dct)
   --lang <XX>             langue des commentaires (ex: --lang EN), sinon default_lang
   --debug                 affiche aussi les tokens et l'AST complets";
 
@@ -37,6 +42,8 @@ fn main() {
     let mut subtitles = true;
     let mut ffmpeg = String::from("ffmpeg");
     let mut engine: Option<String> = None;
+    let mut voice = false;
+    let mut voice_config: Option<String> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -89,6 +96,11 @@ fn main() {
                 i += 1;
                 ffmpeg = args.get(i).cloned().unwrap_or_else(|| fail("--ffmpeg attend un chemin"));
             }
+            "--voice" => voice = true,
+            "--voice-config" => {
+                i += 1;
+                voice_config = Some(args.get(i).cloned().unwrap_or_else(|| fail("--voice-config attend un fichier")));
+            }
             "--engine" => {
                 i += 1;
                 engine = Some(args.get(i).cloned().unwrap_or_else(|| fail("--engine attend un dossier")));
@@ -137,17 +149,22 @@ fn main() {
     let timeline = runtime::Timeline::new(&resolved);
 
     // ── Sortie ──
-    if summary {
+    let source = std::path::Path::new(&filename);
+    let base_dir = source.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+    if voice {
+        generate_voices(&timeline, source, voice_config.as_deref());
+    } else if summary {
         print_summary(&resolved, &timeline, lang.as_deref());
     } else if let Some(format) = export {
-        let source = std::path::Path::new(&filename);
+        // Voix de la langue choisie (si elles ont été générées)
+        let lang_name = timeline.languages().get(timeline.lang_index(lang.as_deref())).cloned().unwrap_or_default();
+        let voice = output::speech::plan(&timeline, source, &lang_name);
         match format.as_str() {
             "mp4" => {
                 let output = out
                     .map(std::path::PathBuf::from)
                     .unwrap_or_else(|| output::video::default_output(source, lang.as_deref(), "mp4"));
-                let base_dir = source.parent().map(|p| p.to_path_buf()).unwrap_or_default();
-                let opts = output::video::VideoOptions { output, fps, height, lang, subtitles, ffmpeg, base_dir };
+                let opts = output::video::VideoOptions { output, fps, height, lang, subtitles, ffmpeg, base_dir, voice };
                 export_mp4(&resolved, &timeline, &opts);
             }
             "html" => {
@@ -161,6 +178,11 @@ fn main() {
                     lang,
                     engine: engine.map(std::path::PathBuf::from),
                     ratio: w as f64 / h as f64,
+                    audio: audio_files(&timeline, source),
+                    voice_dir: Some(output::speech::voice_dir(source)).filter(|d| d.is_dir()).and_then(|d| {
+                        let index = std::fs::read_to_string(d.join("index.txt")).ok()?;
+                        Some((d.file_name()?.to_string_lossy().to_string(), index))
+                    }),
                 };
                 match output::html::export(&content, &opts) {
                     Ok(r) => println!(
@@ -172,7 +194,24 @@ fn main() {
                     Err(e) => fail(&format!("✗ Export HTML : {}", e)),
                 }
             }
-            other => fail(&format!("format d'export inconnu '{}' (mp4, html)", other)),
+            "audio" => {
+                let output = out
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| output::video::default_output(source, lang.as_deref(), "mp3"));
+                let mut segments = output::speech::real_time(&timeline.audio_segments(), &voice.holds);
+                segments.extend(output::speech::real_time(&voice.segments, &voice.holds));
+                let duration = timeline.duration() + voice.holds.extra();
+                match output::video::export_audio(&segments, duration, &base_dir, &output, &ffmpeg) {
+                    Ok(()) => println!(
+                        "✓ Son enregistré dans {} ({:.1}s, {} piste(s))",
+                        output.display(),
+                        duration,
+                        segments.len()
+                    ),
+                    Err(e) => fail(&format!("✗ Export audio : {}", e)),
+                }
+            }
+            other => fail(&format!("format d'export inconnu '{}' (mp4, html, audio)", other)),
         }
     } else if let Some((t, path)) = png {
         export_png(&resolved, &timeline, t, &path, lang.as_deref());
@@ -181,7 +220,10 @@ fn main() {
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or(filename.clone());
-        if let Err(e) = output::window::run(timeline, resolved.config.clone(), lang, &title) {
+        // Voix de toutes les langues (on peut changer de langue pendant la lecture)
+        let voices: Vec<output::speech::VoicePlan> =
+            timeline.languages().iter().map(|l| output::speech::plan(&timeline, source, l)).collect();
+        if let Err(e) = output::window::run(timeline, resolved.config.clone(), lang, &title, source, voices) {
             fail(&format!("✗ Impossible d'ouvrir la fenêtre : {}", e));
         }
     }
@@ -198,6 +240,51 @@ fn export_png(resolved: &resolver::ResolvedDocument, timeline: &runtime::Timelin
     }
     backend.save_png(path).unwrap_or_else(|e| fail(&format!("✗ Écriture de '{}' impossible : {}", path, e)));
     println!("✓ Image t={:.3}s enregistrée dans {} ({}×{})", t, path, w, h);
+}
+
+/// Génère les voix (--voice), avec la progression dans la console
+fn generate_voices(timeline: &runtime::Timeline, source: &std::path::Path, config: Option<&str>) {
+    use std::io::Write;
+    let cfg_path = output::speech::find_config(config.map(std::path::Path::new), source).unwrap_or_else(|e| fail(&format!("✗ Voix : {}", e)));
+    let cfg = output::speech::read_config(&cfg_path).unwrap_or_else(|e| fail(&format!("✗ Voix : {}", e)));
+    println!("Voix : configuration {}", cfg_path.display());
+    let result = output::speech::generate(timeline, source, &cfg, |done, total, text| {
+        let short: String = text.chars().take(60).collect();
+        print!("\r\x1b[K  phrase {}/{} : {}", done + 1, total, short);
+        let _ = std::io::stdout().flush();
+    });
+    println!("\r\x1b[K");
+    match result {
+        Ok(r) => {
+            for l in &r.skipped_langs {
+                eprintln!("Attention : pas de commande pour la langue {} dans {}", l, cfg_path.display());
+            }
+            for w in &r.warnings {
+                eprintln!("Attention : {}", w);
+            }
+            println!(
+                "✓ Voix dans {} : {} phrase(s) générée(s), {} déjà prête(s)",
+                r.dir.display(),
+                r.generated,
+                r.reused
+            );
+        }
+        Err(e) => fail(&format!("✗ Voix : {}", e)),
+    }
+}
+
+/// Fichiers audio utilisés par la timeline, voix comprises :
+/// (nom tel qu'il est cherché, chemin à côté du .dct)
+fn audio_files(timeline: &runtime::Timeline, source: &std::path::Path) -> Vec<(String, std::path::PathBuf)> {
+    let base = source.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+    let mut files: Vec<(String, std::path::PathBuf)> = Vec::new();
+    let voices = timeline.languages().iter().flat_map(|l| output::speech::plan(timeline, source, l).segments);
+    for seg in timeline.audio_segments().into_iter().chain(voices) {
+        if !files.iter().any(|(f, _)| *f == seg.file) {
+            files.push((seg.file.clone(), base.join(&seg.file)));
+        }
+    }
+    files
 }
 
 /// Exporte la vidéo MP4, avec une barre de progression dans la console

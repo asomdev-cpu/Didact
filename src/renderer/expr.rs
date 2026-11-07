@@ -6,25 +6,31 @@
 //! - nombres, `x`, constantes `pi` et `e` ;
 //! - `+ - * / ^` (puissance, associative à droite), parenthèses, moins unaire ;
 //! - multiplication implicite : `2x`, `3(x+1)`, `2sin(x)`, `(x+1)(x-1)` ;
-//! - fonctions : sin cos tan asin acos atan sinh cosh tanh exp ln log sqrt abs floor ceil.
+//! - fonctions : sin cos tan asin acos atan sinh cosh tanh exp ln log sqrt abs floor ceil ;
+//! - paramètres (`defparam`) : leur valeur est donnée à chaque évaluation.
+
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub enum Expr {
     Num(f64),
     X,
+    /// Paramètre (`defparam`), lu dans `vars` à l'évaluation
+    Var(String),
     Neg(Box<Expr>),
     Bin(char, Box<Expr>, Box<Expr>),
     Call(fn(f64) -> f64, Box<Expr>),
 }
 
 impl Expr {
-    pub fn eval(&self, x: f64) -> f64 {
+    pub fn eval(&self, x: f64, vars: &HashMap<String, f64>) -> f64 {
         match self {
             Expr::Num(n) => *n,
             Expr::X => x,
-            Expr::Neg(e) => -e.eval(x),
+            Expr::Var(name) => vars.get(name).copied().unwrap_or(f64::NAN),
+            Expr::Neg(e) => -e.eval(x, vars),
             Expr::Bin(op, a, b) => {
-                let (a, b) = (a.eval(x), b.eval(x));
+                let (a, b) = (a.eval(x, vars), b.eval(x, vars));
                 match op {
                     '+' => a + b,
                     '-' => a - b,
@@ -33,15 +39,43 @@ impl Expr {
                     _ => a.powf(b),
                 }
             }
-            Expr::Call(f, e) => f(e.eval(x)),
+            Expr::Call(f, e) => f(e.eval(x, vars)),
+        }
+    }
+
+    /// Paramètres utilisés par l'expression
+    pub fn vars(&self, out: &mut Vec<String>) {
+        match self {
+            Expr::Var(name) if !out.contains(name) => out.push(name.clone()),
+            Expr::Neg(e) | Expr::Call(_, e) => e.vars(out),
+            Expr::Bin(_, a, b) => {
+                a.vars(out);
+                b.vars(out);
+            }
+            _ => {}
+        }
+    }
+
+    /// Vrai si l'expression dépend de `x`
+    pub fn uses_x(&self) -> bool {
+        match self {
+            Expr::X => true,
+            Expr::Neg(e) | Expr::Call(_, e) => e.uses_x(),
+            Expr::Bin(_, a, b) => a.uses_x() || b.uses_x(),
+            _ => false,
         }
     }
 }
 
 /// Lit une expression ; l'erreur explique ce qui ne va pas
 pub fn parse(src: &str) -> Result<Expr, String> {
+    parse_with(src, &[])
+}
+
+/// Comme `parse`, en reconnaissant aussi les noms de paramètres `params`
+pub fn parse_with(src: &str, params: &[String]) -> Result<Expr, String> {
     let chars: Vec<char> = src.chars().filter(|c| !c.is_whitespace()).collect();
-    let mut p = P { c: &chars, i: 0 };
+    let mut p = P { c: &chars, i: 0, params };
     let e = p.sum()?;
     if p.i < chars.len() {
         return Err(format!("expression '{}' : caractère inattendu '{}'", src, chars[p.i]));
@@ -55,9 +89,15 @@ const NAMES: &[&str] = &[
     "sqrt", "abs", "floor", "ceil", "x", "pi", "e",
 ];
 
+/// Noms réservés par les expressions : un paramètre ne peut pas s'appeler ainsi
+pub fn is_reserved(name: &str) -> bool {
+    NAMES.contains(&name)
+}
+
 struct P<'a> {
     c: &'a [char],
     i: usize,
+    params: &'a [String],
 }
 
 impl P<'_> {
@@ -85,7 +125,7 @@ impl P<'_> {
                     e = Expr::Bin(op, Box::new(e), Box::new(self.unary()?));
                 }
                 // Multiplication implicite : 2x, 2(x+1), 2sin(x), (x)(x)
-                Some(c) if c.is_ascii_alphabetic() || c == '(' => {
+                Some(c) if c.is_ascii_alphabetic() || c == '_' || c == '(' => {
                     e = Expr::Bin('*', Box::new(e), Box::new(self.power()?));
                 }
                 _ => return Ok(e),
@@ -134,14 +174,24 @@ impl P<'_> {
                 let s: String = self.c[start..self.i].iter().collect();
                 s.parse().map(Expr::Num).map_err(|_| format!("nombre invalide '{}'", s))
             }
-            Some(c) if c.is_ascii_alphabetic() => {
-                // Plus long nom connu au début : « sinx » → sin, « xsin » → x puis sin
+            Some(c) if c.is_ascii_alphabetic() || c == '_' => {
+                // Un paramètre écrit en entier (il peut contenir des chiffres et des _)
+                let word: String =
+                    self.c[self.i..].iter().take_while(|c| c.is_ascii_alphanumeric() || **c == '_').collect();
+                if self.params.contains(&word) {
+                    self.i += word.chars().count();
+                    return Ok(Expr::Var(word));
+                }
+                // Plus long nom connu au début : « sinx » → sin, « xsin » → x puis sin, « kx » → k puis x
                 let rest: String = self.c[self.i..].iter().take_while(|c| c.is_ascii_alphabetic()).collect();
-                let known = NAMES.iter().filter(|n| rest.starts_with(**n)).max_by_key(|n| n.len());
+                let builtin = NAMES.iter().copied();
+                let params = self.params.iter().map(|p| p.as_str());
+                let known = builtin.chain(params).filter(|n| rest.starts_with(n)).max_by_key(|n| n.len());
                 match known {
                     Some(name) => {
                         self.i += name.len();
-                        self.name(name)
+                        let name = name.to_string();
+                        self.name(&name)
                     }
                     None => Err(format!("nom inconnu '{}' (variable : x ; constantes : pi, e)", rest)),
                 }
@@ -182,6 +232,7 @@ impl P<'_> {
             "x" => Ok(Expr::X),
             "pi" => Ok(Expr::Num(std::f64::consts::PI)),
             "e" => Ok(Expr::Num(std::f64::consts::E)),
+            _ if self.params.iter().any(|p| p == name) => Ok(Expr::Var(name.to_string())),
             _ => Err(format!("nom inconnu '{}' (variable : x ; constantes : pi, e)", name)),
         }
     }
@@ -192,7 +243,7 @@ mod tests {
     use super::*;
 
     fn f(src: &str, x: f64) -> f64 {
-        parse(src).unwrap().eval(x)
+        parse(src).unwrap().eval(x, &HashMap::new())
     }
 
     #[test]
@@ -207,6 +258,25 @@ mod tests {
         assert!((f("sin(pi/2)", 0.0) - 1.0).abs() < 1e-12);
         assert!((f("2sin(x)", std::f64::consts::FRAC_PI_2) - 2.0).abs() < 1e-12);
         assert!((f("exp(-x/3)", 0.0) - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn parametres() {
+        let names = vec!["k".to_string(), "a_1".to_string()];
+        let vars: HashMap<String, f64> = [("k".to_string(), 3.0), ("a_1".to_string(), 2.0)].into();
+        let f = |src: &str, x: f64| parse_with(src, &names).unwrap().eval(x, &vars);
+        assert_eq!(f("kx", 2.0), 6.0); // multiplication implicite
+        assert_eq!(f("2k + a_1", 0.0), 8.0);
+        assert_eq!(f("x^k", 2.0), 8.0);
+        assert!((f("sin(k*x)", 0.5) - 1.5f64.sin()).abs() < 1e-12);
+        assert_eq!(f("a_1*k", 0.0), 6.0);
+        let mut used = Vec::new();
+        parse_with("sin(kx)", &names).unwrap().vars(&mut used);
+        assert_eq!(used, ["k"]);
+        assert!(parse_with("sin(kx)", &names).unwrap().uses_x());
+        assert!(!parse_with("sin(k)", &names).unwrap().uses_x());
+        // sans le paramètre déclaré : nom inconnu
+        assert!(parse("k + 1").is_err());
     }
 
     #[test]

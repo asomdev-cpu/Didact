@@ -1,0 +1,51 @@
+# Démo du son : une note de fond, et un « bip » à chaque apparition.
+# didact demo_audio.dct   (les fichiers .wav sont à côté du .dct)
+
+[config]
+window : [16:9]
+
+[figures]
+
+deffigure titre =
+    type    : text
+    content : "Le son suit la lecture : pause, saut, retour en arrière"
+    pos     : (50%, 85%)
+    font    : 40px
+
+deffigure a =
+    type   : circle
+    center : (25%, 45%)
+    radius : 10%
+    fill   : #93C5FD
+    color  : #1D4ED8
+    stroke : 4px
+
+deffigure b =
+    type   : circle
+    center : (50%, 45%)
+    radius : 10%
+    fill   : #FDE68A
+    color  : #B45309
+    stroke : 4px
+
+deffigure c =
+    type   : circle
+    center : (75%, 45%)
+    radius : 10%
+    fill   : #FCA5A5
+    color  : #B91C1C
+    stroke : 4px
+
+[timeline]
+0.000 => {
+    start   : [titre write(1s), audio fond.wav volume=0.4]
+    comment : ["Note de fond (volume 0.4)."]
+}
+2.000 => { start : [a grow(0.5s), audio bip.wav] }
+4.000 => { start : [b grow(0.5s), audio bip.wav] }
+6.000 => { start : [c grow(0.5s), audio bip.wav] }
+9.000 => {
+    end     : [audio fond.wav]
+    comment : ["end : [audio fond.wav] arrête la note."]
+}
+11.000 => { end : [a fadeout(1s), b fadeout(1s), c fadeout(1s)] }

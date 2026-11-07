@@ -15,7 +15,8 @@
 use crate::ast::{Config, WindowConfig};
 use crate::renderer::{self, skia::SkiaBackend, Scene};
 use crate::runtime::Timeline;
-use std::collections::HashSet;
+use crate::voice::{self, Holds};
+use std::collections::{HashMap, HashSet};
 use wasm_bindgen::prelude::*;
 
 /// Un fichier Didact chargé, prêt à être joué
@@ -27,6 +28,8 @@ pub struct Player {
     /// Avertissements pas encore lus par JavaScript (figures non dessinables, ...)
     pending_warnings: Vec<String>,
     seen_warnings: HashSet<String>,
+    /// Pauses de l'animation par langue, pour laisser finir les voix (vide sans voix)
+    holds: HashMap<String, Holds>,
 }
 
 #[wasm_bindgen]
@@ -42,6 +45,7 @@ impl Player {
             backend: None,
             pending_warnings: Vec::new(),
             seen_warnings: HashSet::new(),
+            holds: HashMap::new(),
         })
     }
 
@@ -105,9 +109,120 @@ impl Player {
         self.timeline.frame_at(t, lang.as_deref()).comment.map(|s| s.to_string())
     }
 
+    /// Pistes audio, en JSON : `[{"file": "musique.mp3", "volume": 0.5, "start": 2, "end": 8}, ...]`
+    /// (`end` vaut null si la piste joue jusqu'à la fin). Le lecteur web les joue avec `<audio>`.
+    #[wasm_bindgen(js_name = audioSegments)]
+    pub fn audio_segments(&self) -> String {
+        let items: Vec<String> = self
+            .timeline
+            .audio_segments()
+            .iter()
+            .map(|s| {
+                format!(
+                    "{{\"file\":{},\"volume\":{},\"start\":{},\"end\":{}}}",
+                    json_string(&s.file),
+                    s.volume,
+                    s.start,
+                    s.end.map(|e| e.to_string()).unwrap_or("null".to_string())
+                )
+            })
+            .collect();
+        format!("[{}]", items.join(","))
+    }
+
+    /// Voix d'une langue, en JSON : `[{"file": "FR/3f2a….wav", "start": 1.5}, ...]`.
+    /// Les fichiers sont relatifs au dossier des voix (`cours_voix/`, créé par `didact --voice`).
+    #[wasm_bindgen(js_name = voiceSegments)]
+    pub fn voice_segments(&self, lang: Option<String>) -> String {
+        let index = self.timeline.lang_index(lang.as_deref());
+        let lang = self.timeline.languages().get(index).cloned().unwrap_or_default();
+        let items: Vec<String> = voice::lines(&self.timeline, &lang)
+            .iter()
+            .map(|l| format!("{{\"file\":{},\"start\":{}}}", json_string(&l.file), l.t))
+            .collect();
+        format!("[{}]", items.join(","))
+    }
+
+    /// Donne le contenu de `cours_voix/index.txt` (lignes « FR/….wav 3.42 ») :
+    /// calcule les pauses de l'animation pour laisser finir les phrases trop longues.
+    #[wasm_bindgen(js_name = setVoiceIndex)]
+    pub fn set_voice_index(&mut self, index: &str) {
+        let durations: HashMap<&str, f64> = index
+            .lines()
+            .filter(|l| !l.starts_with('#') && !l.starts_with("commande "))
+            .filter_map(|l| {
+                let mut p = l.split_whitespace();
+                Some((p.next()?, p.next()?.parse().ok()?))
+            })
+            .collect();
+        self.holds = self
+            .timeline
+            .languages()
+            .iter()
+            .map(|lang| {
+                let lines = voice::lines(&self.timeline, lang);
+                (lang.clone(), Holds::new(&lines, |f| durations.get(f).copied()))
+            })
+            .collect();
+    }
+
+    fn holds_of(&self, lang: Option<String>) -> Holds {
+        let index = self.timeline.lang_index(lang.as_deref());
+        let lang = self.timeline.languages().get(index).cloned().unwrap_or_default();
+        self.holds.get(&lang).cloned().unwrap_or_default()
+    }
+
+    /// Durée réelle (pauses comprises) dans la langue `lang`
+    #[wasm_bindgen(js_name = realDuration)]
+    pub fn real_duration(&self, lang: Option<String>) -> f64 {
+        self.timeline.duration() + self.holds_of(lang).extra()
+    }
+
+    /// Temps réel → temps de la timeline (à donner à `render` et `comment`)
+    #[wasm_bindgen(js_name = toTimeline)]
+    pub fn to_timeline(&self, real: f64, lang: Option<String>) -> f64 {
+        self.holds_of(lang).to_timeline(real)
+    }
+
+    /// Temps de la timeline → temps réel (début des pistes audio)
+    #[wasm_bindgen(js_name = toReal)]
+    pub fn to_real(&self, t: f64, lang: Option<String>) -> f64 {
+        self.holds_of(lang).to_real(t)
+    }
+
     /// Avertissements apparus depuis le dernier appel (chaque message une seule fois)
     #[wasm_bindgen(js_name = takeWarnings)]
     pub fn take_warnings(&mut self) -> Vec<String> {
         std::mem::take(&mut self.pending_warnings)
+    }
+}
+
+/// Chaîne JSON entre guillemets
+fn json_string(s: &str) -> String {
+    let mut out = String::from("\"");
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pistes_en_json() {
+        let p = Player::new(
+            "[figures]\n[timeline]\n1.000 => { start : [audio musique.mp3 volume=0.5] }\n3.000 => { end : [audio musique.mp3] }",
+        )
+        .unwrap_or_else(|_| panic!("chargement"));
+        assert_eq!(p.audio_segments(), r#"[{"file":"musique.mp3","volume":0.5,"start":1,"end":3}]"#);
+        assert_eq!(json_string("x\"y"), r#""x\"y""#);
     }
 }

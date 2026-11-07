@@ -46,7 +46,7 @@ pub trait RenderBackend {
 /// Retourne les problèmes rencontrés : (figure, raison) pour les figures visibles
 /// non dessinables.
 pub fn render_frame(frame: &Frame, scene: &Scene, backend: &mut dyn RenderBackend) -> Vec<(String, String)> {
-    let mut refs = Refs::new();
+    let mut refs = Refs::with_params(frame.params.clone());
     let mut shapes_by_name: HashMap<String, Vec<Shape>> = HashMap::new();
     let mut problems = Vec::new();
     let visible: HashMap<&str, bool> = frame.states.iter().map(|s| (s.fig.name.as_str(), s.visible)).collect();
@@ -81,8 +81,12 @@ pub fn render_frame(frame: &Frame, scene: &Scene, backend: &mut dyn RenderBacken
                 }
                 let e = a.progress(frame.t) as f32;
                 let target = shapes_by_name.get(to).cloned().unwrap_or_default();
+                let typeset = |name: &str| {
+                    frame.states.iter().any(|s| s.fig.name == name && is_typeset(&s.fig.ftype))
+                };
+                let glyphs = typeset(&st.fig.name) && typeset(to);
                 if let Some(shapes) = shapes_by_name.get_mut(&st.fig.name) {
-                    *shapes = morph::morph(shapes, &target, e);
+                    *shapes = if glyphs { morph::morph_glyphs(shapes, &target, e) } else { morph::morph(shapes, &target, e) };
                 }
             }
         }
@@ -98,6 +102,11 @@ pub fn render_frame(frame: &Frame, scene: &Scene, backend: &mut dyn RenderBacken
         }
     }
     problems
+}
+
+/// Figures composées par le moteur de texte : leurs formes sont des lettres
+pub fn is_typeset(ftype: &str) -> bool {
+    matches!(ftype, "text" | "equation" | "latex" | "raw.latex" | "table")
 }
 
 /// Effet cumulé des animations d'une figure (ou d'un groupe) à l'instant t
@@ -184,7 +193,7 @@ fn compute_effect(
             }
             AnimKind::Draw => fx.reveal = Some((reveal::Mode::Draw, e)),
             AnimKind::Write => fx.reveal = Some((reveal::Mode::Write, e)),
-            AnimKind::Color { .. } | AnimKind::Transform { .. } => {}
+            AnimKind::Color { .. } | AnimKind::Transform { .. } | AnimKind::To(_) => {}
         }
     }
     fx.scale = size_factor * appear;
@@ -267,6 +276,7 @@ fn build_figure(st: &FigureState, t: f64, scene: &Scene, refs: &Refs) -> Result<
 
     // ── Formes de base ──
     let mut shapes = geometry::figure_shapes(fig, scene, refs)?;
+    color_parts(st, t, &mut shapes)?;
     let base_center = bbox_center(&shapes);
 
     // ── Animations ──
@@ -393,7 +403,7 @@ fn build_group(
 
 /// Couleur du trait après les animations color(...), en "#RRGGBBAA" ; None si aucune
 fn animated_color(st: &FigureState, t: f64) -> Result<Option<String>, String> {
-    let color_anims: Vec<_> = st.anims.iter().filter(|a| matches!(a.kind, AnimKind::Color { .. })).collect();
+    let color_anims: Vec<_> = st.anims.iter().filter(|a| matches!(a.kind, AnimKind::Color { part: None, .. })).collect();
     if color_anims.is_empty() {
         return Ok(None);
     }
@@ -402,7 +412,7 @@ fn animated_color(st: &FigureState, t: f64) -> Result<Option<String>, String> {
         None => Rgba::BLACK,
     };
     for a in color_anims {
-        if let AnimKind::Color { to } = &a.kind {
+        if let AnimKind::Color { to, .. } = &a.kind {
             let target = geometry::parse_color(to)?.unwrap_or(Rgba { a: 0.0, ..c });
             let e = a.progress(t) as f32;
             c = Rgba {
@@ -415,6 +425,32 @@ fn animated_color(st: &FigureState, t: f64) -> Result<Option<String>, String> {
     }
     let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     Ok(Some(format!("#{:02X}{:02X}{:02X}{:02X}", byte(c.r), byte(c.g), byte(c.b), byte(c.a))))
+}
+
+/// color(to=..., part="...") : recolore les morceaux d'un texte ou d'une équation
+fn color_parts(st: &FigureState, t: f64, shapes: &mut [Shape]) -> Result<(), String> {
+    for a in &st.anims {
+        let AnimKind::Color { to, part: Some(part) } = &a.kind else { continue };
+        let target = geometry::parse_color(to)?.ok_or_else(|| format!("color : couleur '{}' invalide pour part", to))?;
+        let content = typeset::part_content(&st.fig.ftype, part);
+        let needle = typeset::shapes(&content, 0.0, 0.0, 40.0, typeset::Align::Center, Rgba::BLACK)?;
+        let e = a.progress(t) as f32;
+        let mix = |c: Rgba| Rgba {
+            r: c.r + (target.r - c.r) * e,
+            g: c.g + (target.g - c.g) * e,
+            b: c.b + (target.b - c.b) * e,
+            a: c.a + (target.a - c.a) * e,
+        };
+        for i in morph::find_part(shapes, &needle) {
+            if let Some(c) = &mut shapes[i].fill {
+                *c = mix(*c);
+            }
+            if let Some((c, _)) = &mut shapes[i].stroke {
+                *c = mix(*c);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Géométrie publiée pour les références : centre, angle, boîte, point d'étiquette

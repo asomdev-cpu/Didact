@@ -2,7 +2,7 @@
 
 > Langage de description d'animations éducatives — style 3Blue1Brown, accessible à tous, embarquable partout.
 
-**Statut :** prototype en cours de développement — parser fonctionnel, renderer à venir.
+**Statut :** prototype fonctionnel — fenêtre, export MP4, HTML et audio, voix de synthèse.
 
 ---
 
@@ -83,6 +83,8 @@ Exports :
 cargo run --release -- cours.dct --export mp4            # vidéo (nécessite ffmpeg)
 cargo run --release -- cours.dct --export mp4 --lang EN  # sous-titres anglais → cours_EN.mp4
 cargo run --release -- cours.dct --export html           # page autonome (nécessite web/pkg, voir Readme/WEB.md)
+cargo run --release -- cours.dct --voice                 # commentaires lus par une voix de synthèse (voir didact-voix.txt)
+cargo run --release -- cours.dct --export audio          # le son seul en MP3 (« podcast »)
 ```
 
 Toutes les options : `cargo run -- --help`.
@@ -121,4 +123,4 @@ Le projet est aux tout débuts. Pour contribuer :
 
 ## Licence
 
-MIT — voir [LICENSE](LICENSE).
+MIT — voir [LICENSE](LICENSE).

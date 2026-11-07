@@ -375,6 +375,15 @@ pub fn measure(content: &Content, size: f32) -> Result<(f32, f32), String> {
     Ok((ts.width * k, ts.height * k))
 }
 
+/// Contenu à chercher pour `part="..."` : une formule dans une équation ou un bloc LaTeX,
+/// du texte (avec `$...$`) ailleurs
+pub fn part_content(ftype: &str, part: &str) -> Content {
+    match ftype {
+        "equation" | "latex" | "raw.latex" => Content::Math(part.to_string()),
+        _ => Content::Text(part.to_string()),
+    }
+}
+
 /// Vérifie qu'un contenu se compose (pour le validateur)
 pub fn check(content: &Content) -> Result<(), String> {
     typeset(content, Align::Center).map(|_| ())
