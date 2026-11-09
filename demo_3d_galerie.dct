@@ -1,0 +1,92 @@
+# ─────────────────────────────────────────────
+#  3D : galerie (surface paramétrée, palettes, courbe, sphère, champ, paramètre animé)
+#  didact demo_3d_galerie.dct
+# ─────────────────────────────────────────────
+
+[config]
+window     : [16:9]
+background : white
+
+[figures]
+
+defparam k = 1
+
+deffigure espace =
+    type   : scene3d
+    xrange : [-4, 4]
+    yrange : [-4, 4]
+    zrange : [-2, 3]
+    camera : (28, -60)
+    axes   : box
+    floor  : 8
+
+deffigure tore =
+    type     : surface
+    scene    : espace
+    expr     : (cos(u)*(1.5 + 0.5*cos(v)) - 2, sin(u)*(1.5 + 0.5*cos(v)) + 1.5, 0.5*sin(v))
+    urange   : [0, 6.2832]
+    vrange   : [0, 6.2832]
+    colormap : viridis
+    color_by : z
+    grid     : (24, 12)
+    color    : #FFFFFF60
+
+deffigure onde =
+    type     : surface
+    scene    : espace
+    expr     : 0.6*sin(k*x)*cos(k*y)
+    xrange   : [0.5, 3.8]
+    yrange   : [-3.8, 0.5]
+    colormap : coolwarm
+    resolution : 40
+
+deffigure onde2 =
+    type     : surface
+    scene    : espace
+    expr     : 0.15*(x - 2.15)^2 - 0.15*(y + 1.65)^2
+    xrange   : [0.5, 3.8]
+    yrange   : [-3.8, 0.5]
+    colormap : coolwarm
+    resolution : 40
+
+deffigure helice =
+    type    : curve3d
+    scene   : espace
+    expr    : (-2.5 + 0.8*cos(t), -2.5 + 0.8*sin(t), -1.8 + t/4)
+    t       : [0, 18]
+    color   : #E11D48
+    stroke  : 4px
+
+deffigure boule =
+    type   : sphere
+    scene  : espace
+    center : espace(2.5, 2.5, 0.8)
+    radius : 0.9
+    fill   : #F59E0B
+
+deffigure vent =
+    type      : field
+    scene     : espace
+    expr      : (-y, x, 0.3)
+    xrange    : [-1, 1]
+    yrange    : [-1, 1]
+    zrange    : [1.8, 2.6]
+    density   : (4, 4, 2)
+    colormap  : plasma
+
+deffigure point =
+    type   : circle
+    center : espace(2.5, 2.5, 1.9)
+    radius : 0.6%
+    fill   : black
+
+deffigure etiquette =
+    type    : equation
+    expr    : x^2+y^2+z^2=r^2
+    pos     : offset(boule, 1%)
+    size    : 30px
+
+[timeline]
+0.000 => { start : [espace, tore draw(2s), onde fadein(1s), helice draw(2s), boule grow(1s), vent fadein(1s), point, etiquette] }
+2.000 => { anim : [k to(2.5, 3s), boule move(to=espace(2.5, 2.5, 1.5), 2s), tore rotate3d(180, axis=z, 3s)] }
+5.500 => { anim : [onde transform(to=onde2, 2s)] }

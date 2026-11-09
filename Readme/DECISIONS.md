@@ -464,6 +464,48 @@ Cette section liste les choix importants qui ont été tranchés. Chaque décisi
 - Aucune dépendance en plus : un regard sur la date du fichier suffit. On attend que le fichier soit stable, car les éditeurs écrivent parfois en deux temps
 - Le son n'est redécodé que si ses pistes ont changé
 
+### Temps absolus gardés, décalage par `didact shift`
+
+**Décision :** les timestamps restent absolus. Pour insérer ou retirer du temps au milieu, `didact shift cours.dct 16 +2` réécrit tous les blocs à partir de 16 s.
+
+**Raisonnement :**
+- Le problème réel était d'insérer quelque chose au milieu : il fallait décaler tous les blocs suivants à la main
+- Les temps absolus restent lisibles : on voit dans le fichier à quel instant tombe chaque bloc
+- Des temps relatifs (`+2` partout) ou une suite d'étapes rendaient le chevauchement d'animations moins direct et l'instant d'un bloc moins visible
+- Un geste explicite : Didact ne devine pas si une modification d'un timestamp doit entraîner la suite
+
+**Écartés pour l'instant :** blocs relatifs à convertir ensuite (`+2`, `didact format`), extension d'éditeur.
+
+### Moteur 3D : projection triée plutôt que tampon de profondeur
+
+**Décision :** les objets 3D sont découpés en petits morceaux (faces, segments, points) projetés par la caméra et triés du plus loin au plus proche, puis dessinés par le moteur 2D existant.
+
+**Raisonnement :**
+- Le style visé (quadrillages translucides, trajectoires lumineuses) repose sur la transparence et l'anti-crénelage : c'est le point fort du tri, le point faible d'un tampon de profondeur
+- Le rendu, la fenêtre, le web, le MP4 et la page HTML ne changent pas : la 3D produit des formes 2D
+- Toutes les animations, les paramètres et les références marchent aussi en 3D, sans moteur parallèle
+- Même méthode que le rendu par défaut de Manim
+
+**Limite assumée :** deux grandes faces qui se coupent peuvent être mal ordonnées par endroits ; on découpe finement pour l'éviter.
+
+### Une scène 3D est une figure, les objets s'y rattachent
+
+**Décision :** `type : scene3d` porte la caméra ; les objets ont `scene : nom`. Les points s'écrivent `espace(x, y, z)` (comme `repere(x, y)` en 2D) ou `surface(a, b)` (posé sur une surface).
+
+**Raisonnement :** même logique que les repères 2D ; plusieurs scènes possibles côte à côte ; la caméra se règle et s'anime avec des paramètres, sans syntaxe nouvelle. Les figures 2D acceptent les points 3D : une équation suit un point de la scène.
+
+### `iterate` : une récurrence générale, les optimiseurs en raccourcis
+
+**Décision :** `vars`, `init`, `update` décrivent n'importe quelle suite ; `method : gd | momentum | nesterov | rmsprop | adam | newton` en sont des raccourcis. Avec `on : surface`, les dérivées (`dx`, `dy`, `hxx`, ...) sont calculées par Didact.
+
+**Raisonnement :** le but est de tout pouvoir animer : une méthode qui n'existe pas encore s'écrit en une ligne. Les méthodes courantes restent simples à utiliser.
+
+### Halo (`glow`) calculé une fois par image
+
+**Décision :** les formes sont dessinées nettes dans l'ordre ; les halos de toute l'image sont floutés en une seule fois puis ajoutés (comme le « bloom » d'un moteur 3D).
+
+**Raisonnement :** une trajectoire en tube compte des milliers de morceaux ; un flou par morceau coûtait 1,1 s par image, une seule passe 0,2 s.
+
 ### Licence MIT
 
 **Décision :** Le projet est sous licence MIT.
@@ -581,6 +623,8 @@ Idées qui ont été discutées et rejetées explicitement.
 ## Changelog des versions du langage
 
 ### v0.2 (en cours)
+- 3D : `scene3d` (caméra animable, perspective/ortho, lumière, repère), `surface` (explicite ou paramétrée, palettes, grille, découpe), `curve3d`, solides (`cube`, `box`, `sphere`, `cylinder`, `cone`, `plane`, `polyhedron`), `arrow` et `field` en 2D et 3D, `iterate` (récurrence générale + 6 optimiseurs), animations `rotate3d` et `fill`, `transform` entre surfaces, halo `glow`, caméra à la souris dans la fenêtre ; démos `demo_3d_*.dct` et `demo_champs_2d.dct`
+- `didact shift` : décaler les blocs à partir d'un instant (`src/shift.rs`)
 - `defmodel` / `defrepeat` (`@nom`, `@(calcul)`) ; points de `polygon` dans un repère ; `demo_modeles.dct`
 - Rechargement à chaud de la fenêtre à chaque sauvegarde (`src/output/reload.rs`)
 - `transform` lettre par lettre entre textes et équations ; `color(..., part="...")` ; `align` sur `equation` ; `demo_equations.dct`

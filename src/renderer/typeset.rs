@@ -336,7 +336,7 @@ pub fn place(ts: &Typeset, x: f32, y: f32, size: f32, align: Align, color: Rgba)
 
     ts.paths
         .iter()
-        .map(|p| Shape {
+        .map(|p| Shape { glow: 0.0,
             path: p
                 .cmds
                 .iter()

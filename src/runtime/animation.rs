@@ -114,6 +114,10 @@ pub enum AnimKind {
     Follow { path: String, tangent: bool },
     /// Un paramètre (`defparam`) va vers cette valeur
     To(f64),
+    /// Tourne en 3D de cet angle (degrés) autour d'un axe passant par le centre de la figure
+    Rotate3d { axis: [f64; 3], angle: f64 },
+    /// La couleur de remplissage va vers `to`
+    Fill { to: String },
 }
 
 impl AnimKind {
@@ -237,6 +241,33 @@ pub fn parse_call(call: &AnimCall) -> Result<(AnimKind, f64, Ease), String> {
             };
             AnimKind::Follow { path, tangent }
         }
+        "rotate3d" => {
+            const FORM: &str = "rotate3d(90, axis=z, durée) ; axis = x, y, z ou (a, b, c)";
+            let angle = parse_number(positional.first(), &format!("rotate3d attend un angle en degrés : {}", FORM))?;
+            let axis = match named_value("axis").as_deref().map(|a| a.trim()) {
+                None | Some("z") => [0.0, 0.0, 1.0],
+                Some("x") => [1.0, 0.0, 0.0],
+                Some("y") => [0.0, 1.0, 0.0],
+                Some(v) => {
+                    let parts: Vec<f64> = v
+                        .trim_start_matches('(')
+                        .trim_end_matches(')')
+                        .split(',')
+                        .map(|p| p.trim().parse::<f64>())
+                        .collect::<Result<_, _>>()
+                        .map_err(|_| format!("rotate3d : axe '{}' invalide : {}", v, FORM))?;
+                    match parts[..] {
+                        [a, b, c] if a * a + b * b + c * c > 0.0 => [a, b, c],
+                        _ => return Err(format!("rotate3d : axe '{}' invalide : {}", v, FORM)),
+                    }
+                }
+            };
+            AnimKind::Rotate3d { axis, angle }
+        }
+        "fill" => match named_value("to") {
+            Some(to) => AnimKind::Fill { to },
+            None => return Err("fill attend une couleur : fill(to=red, durée)".to_string()),
+        },
         "to" => AnimKind::To(parse_number(positional.first(), "to attend une valeur : to(3, durée)")?),
         "rotate" => AnimKind::Rotate(parse_number(
             positional.first(),
@@ -312,6 +343,16 @@ mod tests {
         );
         assert!(parse_call(&call("follow", &["path=c", "speed=1cm/s"])).unwrap_err().contains("durée"));
         assert_eq!(parse_call(&call("draw", &["1s"])).unwrap().0, AnimKind::Draw);
+        assert_eq!(
+            parse_call(&call("rotate3d", &["90", "axis=x", "2s"])).unwrap().0,
+            AnimKind::Rotate3d { axis: [1.0, 0.0, 0.0], angle: 90.0 }
+        );
+        assert_eq!(
+            parse_call(&call("rotate3d", &["45", "axis=(1,0,1)", "2s"])).unwrap().0,
+            AnimKind::Rotate3d { axis: [1.0, 0.0, 1.0], angle: 45.0 }
+        );
+        assert!(parse_call(&call("rotate3d", &["45", "axis=w", "2s"])).is_err());
+        assert_eq!(parse_call(&call("fill", &["to=red", "1s"])).unwrap().0, AnimKind::Fill { to: "red".into() });
         assert!(parse_call(&call("write", &[])).unwrap_err().contains("durée manquante"));
     }
 

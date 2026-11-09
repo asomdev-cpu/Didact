@@ -23,6 +23,7 @@ pub mod morph;
 pub mod reveal;
 pub mod skia;
 pub mod text;
+pub mod three;
 pub mod typeset;
 
 pub use geometry::{Rgba, Scene, Shape};
@@ -40,6 +41,31 @@ pub trait RenderBackend {
     fn clear(&mut self, color: Rgba);
     /// Dessine une forme (remplissage puis trait)
     fn draw(&mut self, shape: &Shape);
+    /// Ajoute le halo lumineux (de ce rayon, en pixels) de ces formes, déjà dessinées nettes.
+    /// Par défaut : pas de halo.
+    fn draw_glow(&mut self, _shapes: &[Shape], _radius: f32) {}
+}
+
+/// Dessine des formes nettes, dans l'ordre ; garde de côté celles qui ont un halo
+fn draw_shapes<'a>(backend: &mut dyn RenderBackend, shapes: &'a [Shape], glowing: &mut Vec<&'a Shape>) {
+    for s in shapes {
+        backend.draw(s);
+        if s.glow > 0.0 {
+            glowing.push(s);
+        }
+    }
+}
+
+/// Halos de toute l'image, ajoutés à la fin (comme le « bloom » d'un moteur 3D) :
+/// un seul flou par rayon, quel que soit le nombre de formes
+fn draw_glows(backend: &mut dyn RenderBackend, glowing: &[&Shape]) {
+    let mut radii: Vec<f32> = glowing.iter().map(|s| s.glow).collect();
+    radii.sort_by(f32::total_cmp);
+    radii.dedup();
+    for r in radii {
+        let batch: Vec<Shape> = glowing.iter().filter(|s| s.glow == r).map(|s| (*s).clone()).collect();
+        backend.draw_glow(&batch, r);
+    }
 }
 
 /// Dessine une frame complète.
@@ -48,17 +74,27 @@ pub trait RenderBackend {
 pub fn render_frame(frame: &Frame, scene: &Scene, backend: &mut dyn RenderBackend) -> Vec<(String, String)> {
     let mut refs = Refs::with_params(frame.params.clone());
     let mut shapes_by_name: HashMap<String, Vec<Shape>> = HashMap::new();
+    // Objets 3D (morceaux en coordonnées de leur scène), et repère de chaque scène
+    let mut objs: HashMap<String, three::Obj> = HashMap::new();
     let mut problems = Vec::new();
     let visible: HashMap<&str, bool> = frame.states.iter().map(|s| (s.fig.name.as_str(), s.visible)).collect();
 
     // 1. Calcul, dans l'ordre de définition (un groupe est défini après ses figures)
     for st in &frame.states {
+        let name = st.fig.name.clone();
         let result = if st.fig.ftype == "group" {
-            build_group(st, frame.t, scene, &mut refs, &mut shapes_by_name, &visible)
+            build_group(st, frame.t, scene, &mut refs, &mut shapes_by_name, &visible, &mut objs)
+        } else if st.fig.ftype == "scene3d" {
+            build_scene3d(st, frame.t, scene, &mut refs, &mut objs)
+        } else if three::is_3d(st.fig, &refs) {
+            build_object3d(st, frame.t, scene, &mut refs, &mut objs)
         } else {
             build_figure(st, frame.t, scene, &refs).map(|(shapes, geom)| {
-                refs.insert(st.fig.name.clone(), geom);
-                shapes_by_name.insert(st.fig.name.clone(), shapes);
+                refs.insert(name.clone(), geom);
+                shapes_by_name.insert(name.clone(), shapes);
+                if st.fig.ftype == "plot" {
+                    three::register_plot(st.fig, &mut refs);
+                }
             })
         };
         if let Err(reason) = result {
@@ -80,6 +116,36 @@ pub fn render_frame(frame: &Frame, scene: &Scene, backend: &mut dyn RenderBacken
                     continue;
                 }
                 let e = a.progress(frame.t) as f32;
+                // Entre deux surfaces : la surface se déforme point par point
+                let target_state = frame.states.iter().find(|s| s.fig.name == *to);
+                if let (Some(src), Some(dst)) = (objs.get(&st.fig.name), target_state) {
+                    if st.fig.ftype == "surface" && dst.fig.ftype == "surface" {
+                        if let Some(space) = refs.spaces.get(&src.scene) {
+                            let morphed = three::morph_surfaces(st.fig, dst.fig, e as f64, space, scene, &refs).and_then(|mut items| {
+                                let c0 = three::Obj { items: items.clone(), ..Default::default() }.center();
+                                three::effect(st, frame.t, c0, three::span_of(space), &refs)?.apply(&mut items);
+                                Ok(items)
+                            });
+                            match morphed {
+                                Ok(items) => {
+                                    if let Some(o) = objs.get_mut(&st.fig.name) {
+                                        o.items = items;
+                                    }
+                                }
+                                Err(reason) => problems.push((st.fig.name.clone(), reason)),
+                            }
+                            continue;
+                        }
+                    }
+                }
+                // Entre objets 3D : les morceaux glissent (ou fondu enchaîné)
+                if let (Some(src), Some(dst)) = (objs.get(&st.fig.name), objs.get(to)) {
+                    let items = three::morph(&src.items, &dst.items, e);
+                    if let Some(o) = objs.get_mut(&st.fig.name) {
+                        o.items = items;
+                    }
+                    continue;
+                }
                 let target = shapes_by_name.get(to).cloned().unwrap_or_default();
                 let typeset = |name: &str| {
                     frame.states.iter().any(|s| s.fig.name == name && is_typeset(&s.fig.ftype))
@@ -92,16 +158,107 @@ pub fn render_frame(frame: &Frame, scene: &Scene, backend: &mut dyn RenderBacken
         }
     }
 
-    // 3. Dessin, dans l'ordre des layers
+    // 3. Chaque scène 3D : morceaux de ses objets visibles (et son repère si elle l'est),
+    //    projetés et triés du plus loin au plus proche
+    let mut composed: HashMap<String, Vec<Shape>> = HashMap::new();
+    for (scene_name, space) in &refs.spaces {
+        let mut items: Vec<&three::Item> = Vec::new();
+        for (name, obj) in &objs {
+            let shown = visible.get(name.as_str()) == Some(&true);
+            if obj.scene == *scene_name && shown {
+                items.extend(obj.items.iter());
+            }
+        }
+        composed.insert(scene_name.clone(), three::compose(space, &items));
+    }
+
+    // 4. Dessin, dans l'ordre des layers. Une scène 3D est dessinée une seule fois,
+    //    à la place de la première de ses figures (elle-même ou un de ses objets)
     backend.clear(scene.background);
+    let mut drawn3d: Vec<Vec<Shape>> = Vec::new();
     for fig in &frame.visible {
-        if let Some(shapes) = shapes_by_name.get(&fig.name) {
-            for shape in shapes {
-                backend.draw(shape);
+        let scene3d = objs.get(&fig.name).map(|o| o.scene.clone());
+        if let Some(shapes) = scene3d.and_then(|s| composed.remove(&s)) {
+            drawn3d.push(shapes);
+        }
+    }
+    let mut glowing: Vec<&Shape> = Vec::new();
+    let mut next3d = drawn3d.iter();
+    let mut seen_scenes: Vec<String> = Vec::new();
+    for fig in &frame.visible {
+        match objs.get(&fig.name).map(|o| o.scene.clone()) {
+            Some(sc) => {
+                if !seen_scenes.contains(&sc) {
+                    seen_scenes.push(sc);
+                    if let Some(shapes) = next3d.next() {
+                        draw_shapes(backend, shapes, &mut glowing);
+                    }
+                }
+            }
+            None => {
+                if let Some(shapes) = shapes_by_name.get(&fig.name) {
+                    draw_shapes(backend, shapes, &mut glowing);
+                }
             }
         }
     }
+    draw_glows(backend, &glowing);
     problems
+}
+
+/// Scène 3D : caméra à l'instant t, repère (avec les animations de la scène : fondu, dessin)
+fn build_scene3d(
+    st: &FigureState,
+    t: f64,
+    scene: &Scene,
+    refs: &mut Refs,
+    objs: &mut HashMap<String, three::Obj>,
+) -> Result<(), String> {
+    let fig = with_animated_colors(st, t)?;
+    let fig = fig.as_ref().unwrap_or(st.fig);
+    let (space, mut axes) = three::build_space(fig, scene, refs)?;
+    let fx = three::effect(st, t, axes.center(), three::span_of(&space), refs)?;
+    // La scène ne bouge pas : seuls le fondu et le dessin progressif s'appliquent à son repère
+    let only_look = three::Effect3::look_only(&fx);
+    only_look.apply(&mut axes.items);
+    let geom = three::screen_geom(&space, &axes, axes.center());
+    refs.insert(st.fig.name.clone(), geom);
+    refs.spaces.insert(st.fig.name.clone(), space);
+    objs.insert(st.fig.name.clone(), axes);
+    Ok(())
+}
+
+/// Objet 3D : morceaux, animations, et ce qu'il publie pour les références
+fn build_object3d(
+    st: &FigureState,
+    t: f64,
+    scene: &Scene,
+    refs: &mut Refs,
+    objs: &mut HashMap<String, three::Obj>,
+) -> Result<(), String> {
+    let fig = with_animated_colors(st, t)?;
+    let fig = fig.as_ref().unwrap_or(st.fig);
+    let scene_name = three::scene_of(fig, refs).ok_or("objet 3D sans scène : ajouter `scene : nom_de_la_scene`")?;
+    let space = refs.spaces.get(&scene_name).cloned().ok_or_else(|| format!("la scène '{}' n'a pas pu être calculée", scene_name))?;
+    let (mut obj, surface) = three::build_object(fig, &space, &scene_name, scene, refs)?;
+    let c0 = obj.center();
+    let fx = three::effect(st, t, c0, three::span_of(&space), refs)?;
+    fx.apply(&mut obj.items);
+    obj.path = obj.path.iter().map(|p| fx.map(*p)).collect();
+    let center = fx.map(c0);
+
+    let name = st.fig.name.clone();
+    if let Some(s) = surface {
+        refs.surfaces.insert(name.clone(), s);
+    }
+    if obj.path.len() >= 2 {
+        refs.paths3.insert(name.clone(), obj.path.clone());
+    }
+    refs.centers3.insert(name.clone(), center);
+    refs.scene_of.insert(name.clone(), scene_name);
+    refs.insert(name.clone(), three::screen_geom(&space, &obj, center));
+    objs.insert(name, obj);
+    Ok(())
 }
 
 /// Figures composées par le moteur de texte : leurs formes sont des lettres
@@ -193,7 +350,15 @@ fn compute_effect(
             }
             AnimKind::Draw => fx.reveal = Some((reveal::Mode::Draw, e)),
             AnimKind::Write => fx.reveal = Some((reveal::Mode::Write, e)),
-            AnimKind::Color { .. } | AnimKind::Transform { .. } | AnimKind::To(_) => {}
+            // rotate3d autour de z : une rotation dans le plan de l'écran
+            AnimKind::Rotate3d { axis, angle } if axis[0] == 0.0 && axis[1] == 0.0 => {
+                fx.rotation += (*angle * axis[2].signum()) as f32 * e
+            }
+            AnimKind::Color { .. }
+            | AnimKind::Fill { .. }
+            | AnimKind::Transform { .. }
+            | AnimKind::To(_)
+            | AnimKind::Rotate3d { .. } => {}
         }
     }
     fx.scale = size_factor * appear;
@@ -263,16 +428,8 @@ fn reveal_line(scene: &Scene) -> f32 {
 /// Calcule les formes animées d'une figure et sa géométrie
 fn build_figure(st: &FigureState, t: f64, scene: &Scene, refs: &Refs) -> Result<(Vec<Shape>, Geom), String> {
     // ── Couleur animée : on remplace `color` avant de construire les formes ──
-    let fig_with_color;
-    let fig: &ResolvedFigure = match animated_color(st, t)? {
-        Some(color) => {
-            let mut f = st.fig.clone();
-            f.properties.insert("color".to_string(), PropValue::Single(color));
-            fig_with_color = f;
-            &fig_with_color
-        }
-        None => st.fig,
-    };
+    let fig_with_color = with_animated_colors(st, t)?;
+    let fig: &ResolvedFigure = fig_with_color.as_ref().unwrap_or(st.fig);
 
     // ── Formes de base ──
     let mut shapes = geometry::figure_shapes(fig, scene, refs)?;
@@ -316,6 +473,11 @@ fn build_figure(st: &FigureState, t: f64, scene: &Scene, refs: &Refs) -> Result<
         let n = shapes.len();
         shapes = reveal::reveal(shapes, mode, e, 0, n, reveal_line(scene));
     }
+    // Halo : glow : 10px
+    if let Some(v) = fig.properties.get("glow") {
+        let g = geometry::length(v, scene, scene.width.min(scene.height)).map_err(|e| format!("glow : {}", e))?;
+        shapes.iter_mut().for_each(|s| s.glow = g);
+    }
     Ok((shapes, geom))
 }
 
@@ -329,8 +491,50 @@ fn build_group(
     refs: &mut Refs,
     shapes_by_name: &mut HashMap<String, Vec<Shape>>,
     visible: &HashMap<&str, bool>,
+    objs: &mut HashMap<String, three::Obj>,
 ) -> Result<(), String> {
+    // Membres 3D : l'effet du groupe s'applique en 3D, autour du centre de l'ensemble
+    let members3: Vec<&String> = st.members.iter().filter(|m| objs.contains_key(*m) && refs.centers3.contains_key(*m)).collect();
+    if let Some(first) = members3.first() {
+        let scene_name = objs[*first].scene.clone();
+        if let Some(space) = refs.spaces.get(&scene_name).cloned() {
+            let all = three::Obj {
+                scene: scene_name.clone(),
+                items: members3.iter().flat_map(|m| objs[*m].items.clone()).collect(),
+                path: Vec::new(),
+            };
+            let c0 = all.center();
+            let fx = three::effect(st, t, c0, three::span_of(&space), refs)?;
+            for m in &members3 {
+                if let Some(o) = objs.get_mut(*m) {
+                    fx.apply(&mut o.items);
+                    o.path = o.path.iter().map(|p| fx.map(*p)).collect();
+                    let c = fx.map(refs.centers3[*m]);
+                    refs.centers3.insert((*m).clone(), c);
+                    if o.path.len() >= 2 {
+                        refs.paths3.insert((*m).clone(), o.path.clone());
+                    }
+                    refs.insert((*m).clone(), three::screen_geom(&space, o, c));
+                }
+            }
+            refs.centers3.insert(st.fig.name.clone(), fx.map(c0));
+            refs.scene_of.insert(st.fig.name.clone(), scene_name);
+        }
+    }
+
     let members: Vec<&String> = st.members.iter().filter(|m| shapes_by_name.contains_key(*m)).collect();
+    if members.is_empty() {
+        shapes_by_name.insert(st.fig.name.clone(), Vec::new());
+        if !refs.contains_key(&st.fig.name) {
+            if let Some(c) = refs.centers3.get(&st.fig.name).copied() {
+                if let Some(sp) = refs.scene_of.get(&st.fig.name).and_then(|s| refs.spaces.get(s)) {
+                    let g = three::screen_geom(sp, &three::Obj::default(), c);
+                    refs.insert(st.fig.name.clone(), g);
+                }
+            }
+        }
+        return Ok(());
+    }
 
     // Centre de l'ensemble : figures affichées (toutes si aucune ne l'est)
     let shown: Vec<&String> = members.iter().copied().filter(|m| visible.get(m.as_str()) == Some(&true)).collect();
@@ -401,19 +605,43 @@ fn build_group(
     Ok(())
 }
 
-/// Couleur du trait après les animations color(...), en "#RRGGBBAA" ; None si aucune
-fn animated_color(st: &FigureState, t: f64) -> Result<Option<String>, String> {
-    let color_anims: Vec<_> = st.anims.iter().filter(|a| matches!(a.kind, AnimKind::Color { part: None, .. })).collect();
+/// La figure avec `color` et `fill` remplacés par leurs valeurs animées (color(...), fill(...)) ;
+/// None si aucune animation de couleur
+pub(crate) fn with_animated_colors(st: &FigureState, t: f64) -> Result<Option<ResolvedFigure>, String> {
+    let color = animated_color(st, t, "color")?;
+    let fill = animated_color(st, t, "fill")?;
+    if color.is_none() && fill.is_none() {
+        return Ok(None);
+    }
+    let mut f = st.fig.clone();
+    if let Some(c) = color {
+        f.properties.insert("color".to_string(), PropValue::Single(c));
+    }
+    if let Some(c) = fill {
+        f.properties.insert("fill".to_string(), PropValue::Single(c));
+    }
+    Ok(Some(f))
+}
+
+/// Couleur `key` (color : le trait, fill : le remplissage) après ses animations, en "#RRGGBBAA" ; None si aucune
+fn animated_color(st: &FigureState, t: f64, key: &str) -> Result<Option<String>, String> {
+    let target_of = |kind: &AnimKind| match (kind, key) {
+        (AnimKind::Color { to, part: None }, "color") | (AnimKind::Fill { to }, "fill") => Some(to.clone()),
+        _ => None,
+    };
+    let color_anims: Vec<_> = st.anims.iter().filter(|a| target_of(&a.kind).is_some()).collect();
     if color_anims.is_empty() {
         return Ok(None);
     }
-    let mut c = match st.fig.properties.get("color") {
+    // Sans valeur de départ : noir pour le trait, transparent pour le remplissage
+    let fallback = if key == "color" { Rgba::BLACK } else { Rgba { a: 0.0, ..Rgba::BLACK } };
+    let mut c = match st.fig.properties.get(key) {
         Some(v) => geometry::parse_color(&fmt_value(v))?.unwrap_or(Rgba { a: 0.0, ..Rgba::BLACK }),
-        None => Rgba::BLACK,
+        None => fallback,
     };
     for a in color_anims {
-        if let AnimKind::Color { to, .. } = &a.kind {
-            let target = geometry::parse_color(to)?.unwrap_or(Rgba { a: 0.0, ..c });
+        if let Some(to) = target_of(&a.kind) {
+            let target = geometry::parse_color(&to)?.unwrap_or(Rgba { a: 0.0, ..c });
             let e = a.progress(t) as f32;
             c = Rgba {
                 r: c.r + (target.r - c.r) * e,

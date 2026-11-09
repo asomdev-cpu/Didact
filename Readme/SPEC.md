@@ -24,7 +24,8 @@ Les points encore à trancher sont regroupés dans la dernière section "À déc
 12. [Références dynamiques](#12-références-dynamiques)
 13. [Audio et commentaires multilingues](#13-audio-et-commentaires-multilingues)
 14. [Escape hatches : LaTeX et Matplotlib bruts](#14-escape-hatches--latex-et-matplotlib-bruts)
-15. [À décider](#15-à-décider)
+15. [3D, champs et récurrences](#15-3d-champs-et-récurrences)
+16. [À décider](#16-à-décider)
 
 ---
 
@@ -258,6 +259,15 @@ Format : `secondes.millisecondes`.
 | `61.500` | 61 secondes, 500 ms |
 
 **Unicité :** chaque timestamp n'apparaît qu'une fois. Deux blocs avec le même instant produisent une erreur de compilation : tout ce qui se passe à un instant donné est regroupé dans un seul bloc.
+
+**Décaler la suite :** pour ajouter ou retirer du temps au milieu, inutile de réécrire chaque timestamp :
+
+```
+didact shift cours.dct 16 +2      # tous les blocs à partir de 16 s avancent de 2 s
+didact shift cours.dct 16 -1.5    # ils reculent de 1,5 s
+```
+
+Seuls les en-têtes de blocs sont réécrits ; le reste du fichier (commentaires, espaces) ne change pas. La commande refuse, sans rien modifier, un décalage qui ferait passer un bloc avant 0 ou sur un bloc qui ne bouge pas, et donne alors le recul maximal possible. Si la fenêtre est ouverte, elle se recharge d'elle-même ; les voix déjà générées restent valables.
 
 ### 6.2 Structure d'un événement
 
@@ -956,7 +966,154 @@ deffigure mon_graphe =
 
 ---
 
-## 15. À décider
+## 15. 3D, champs et récurrences
+
+### 15.1 Principe
+
+Une **scène 3D** (`scene3d`) est une figure qui porte une caméra. Les objets 3D s'y rattachent par `scene : nom` (comme une courbe à son repère par `axes`). À chaque image, Didact découpe les objets en petits morceaux (faces, segments, points), les projette avec la caméra et les **trie du plus loin au plus proche** : la transparence et l'anti-crénelage restent parfaits. Les figures 2D (textes, équations) restent par-dessus, nettes.
+
+- Axes : **z vers le haut**.
+- Toutes les animations existantes marchent sur les objets 3D (voir 15.5), et les paramètres (`defparam`) sont utilisables partout : caméra, formules, positions.
+- Un objet 3D n'est dessiné que s'il est démarré (`start`) ; le repère de la scène n'est dessiné que si la scène l'est.
+
+### 15.2 La scène : `scene3d`
+
+```
+defparam theta = -60
+
+deffigure espace =
+    type       : scene3d
+    xrange     : [-3, 3]          # défaut [-3, 3] pour les trois axes
+    yrange     : [-3, 3]
+    zrange     : [0, 5]
+    camera     : (30, theta)      # (élévation, rotation autour de z) en degrés
+    projection : perspective      # ou ortho
+    fov        : 30               # angle de vue (perspective), en degrés
+    zoom       : 1
+    target     : (0, 0, 2)        # point regardé (défaut : centre de la boîte)
+    equal      : true             # unités réelles ; false : boîte de proportions `box`
+    box        : (1, 1, 0.8)      # proportions si equal : false
+    light      : (1, 1, 2)        # direction de la lumière (défaut : liée à la caméra)
+    ambient    : 0.35             # part de lumière ambiante
+    axes       : lines            # lines (ou true), box, none (défaut)
+    floor      : 8                # grille au sol (n lignes)
+    labels     : ("x", "y", "z")  # LaTeX
+    color      : #888888          # couleur du repère
+    from       : (5%, 5%)         # zone de l'écran (défaut : toute la scène)
+    to         : (95%, 95%)
+```
+
+Tout nombre peut être une expression avec des paramètres : faire tourner la caméra, c'est animer un paramètre (`anim : [theta to(30, 6s)]`).
+
+**Dans la fenêtre** : glisser la souris tourne la caméra, la molette zoome, un double-clic revient à la caméra du fichier. C'est un aperçu : les exports gardent la caméra du fichier.
+
+**Points 3D.** Partout où une position est attendue :
+
+| Écriture | Signification |
+|---|---|
+| `espace(x, y, z)` | point de la scène `espace` |
+| `f(a, b)` | point de la surface `f` : `(a, b, f(a, b))`, ou le point de paramètres (u, v) = (a, b) |
+| `center(objet)` | centre d'un objet 3D (il suit ses animations) |
+| `(x, y, z)` | point de la scène de l'objet (avec `scene : ...`) |
+
+Une figure 2D accepte aussi ces points : `pos : espace(1, 2, 3)` place une équation sur ce point, et elle suit la caméra.
+
+### 15.3 Objets 3D
+
+**Apparence commune :** `fill` (faces), `color` (lignes, arêtes, grille), `stroke` (épaisseur des lignes), `opacity`, `shading : flat | none` (éclairage selon l'orientation des faces), `glow` (halo, §15.6), `tube` (lignes dessinées comme un tube éclairé, épaisseur en px).
+
+**`surface`** — `z = f(x, y)` ou paramétrée :
+
+```
+deffigure f =
+    type       : surface
+    scene      : espace
+    expr       : sin(x)*cos(y)       # z = f(x, y)
+    xrange     : [-3, 3]             # défaut : ceux de la scène
+    yrange     : [-3, 3]
+    resolution : 48                  # ou (nu, nv)
+    grid       : (20, 20)            # lignes de grille (0 : aucune)
+    colormap   : viridis             # viridis, plasma, inferno, magma, coolwarm, turbo, blues, gray, ou [#000, #FFF]
+    color_by   : z                   # valeur colorée (x, y, z, u, v) ; défaut z
+    crange     : [-1, 1]             # défaut : min et max
+    clip       : true                # coupée à zrange (défaut)
+
+deffigure tore =
+    type   : surface
+    scene  : espace
+    expr   : (cos(u)*(2 + cos(v)), sin(u)*(2 + cos(v)), sin(v))
+    urange : [0, 6.2832]
+    vrange : [0, 6.2832]
+```
+
+**`curve3d`** — `expr : (x(t), y(t), z(t))` avec `t : [a, b]` et `samples` (défaut 200), ou `points : [espace(0, 0, 0), f(1, 2), ...]`. `markers` : rayon des points en px.
+
+**Solides :** `cube` (`size`), `box` (`size : (a, b, c)`), `sphere` (`radius`), `cylinder` et `cone` (`radius`, `height`), `plane` (`size : (a, b)`, `grid`), `polyhedron` (`points : [(x, y, z), ...]`, `faces : [(0, 1, 2), ...]`). Position : `center` ; orientation fixe : `rotate : (rx, ry, rz)` en degrés (autour de x, puis y, puis z) ; `resolution` : finesse du découpage.
+
+**`arrow`** — `from`, `to`. En 3D (points 3D ou `scene`) : tige et pointe conique, `head` = longueur de la pointe. En 2D (points en % ou dans un repère) : flèche plate.
+
+**`field`** — champ de vecteurs : `expr : (fx, fy)` dans un repère 2D (`axes`), ou `(fx, fy, fz)` dans une scène. `density` (nombre de flèches par axe), `length` (part de la case, défaut 0.85), `normalize : true` (toutes de même longueur), `colormap` (selon l'intensité), `xrange`/`yrange`/`zrange`.
+
+Pour un tenseur ou tout objet composé : un `defgroup` (cube + flèches) s'anime comme un seul objet (`rotate3d` sur le groupe).
+
+### 15.4 `iterate` : récurrences et optimiseurs
+
+Une suite de points calculée par Didact, dessinée pas à pas (`draw` fait apparaître les pas un à un).
+
+**Récurrence libre :**
+
+```
+deffigure orbite =
+    type   : iterate
+    axes   : repere                     # ou scene : espace (3 variables : x, y, z)
+    vars   : (x, y)
+    init   : (2.5, 0)
+    update : (x - 0.1*y, y + 0.1*(x - 0.3*y))
+    steps  : 120
+```
+
+Dans `update` : les variables, `n` (numéro du pas), les paramètres, et si `on` est donné : `f` (valeur), `dx`, `dy` (dérivées), `hxx`, `hxy`, `hyy` (dérivées secondes), calculées par Didact. Les nouvelles valeurs sont toutes calculées à partir des anciennes. On peut donc écrire n'importe quelle méthode :
+
+```
+    on     : f
+    vars   : (x, y, vx, vy)
+    init   : (-2, 3, 0, 0)
+    update : (x + vx, y + vy, 0.9*vx - 0.02*dx, 0.9*vy - 0.02*dy)
+```
+
+**Optimiseurs intégrés** (raccourcis) : `on : f` (surface z = f(x, y), ou un `plot` 2D), `start : (x, y)`, `method : gd | momentum | nesterov | rmsprop | adam | newton`, `rate`, `beta`, `beta2`, `eps`, `steps`.
+
+**Dessin :** sur une surface, les points sont posés dessus (`lift` : hauteur au-dessus, défaut 1 % de zrange) ; `drape : true` fait suivre la surface entre deux pas. `color` (ligne, `none` pour l'enlever), `stroke` ou `tube`, `markers` (rayon des points, défaut 4px), `fill` (couleur des points), `glow`. Une bille peut suivre la trajectoire : `follow(path=chemin, 5s)`.
+
+### 15.5 Animations en 3D
+
+| Animation | En 3D |
+|---|---|
+| `fadein`, `fadeout`, `grow`, `shrink`, `scale` | comme en 2D, autour du centre de l'objet |
+| `draw`, `write` | les morceaux apparaissent dans l'ordre (surface balayée, courbe tracée, pas d'une trajectoire) |
+| `move(to=espace(x, y, z), d)` | le centre va vers ce point ; `move(up, 20%, d)` : up/down = z, left/right = x, en % de la plus grande étendue |
+| `rotate(angle, d)` | rotation autour de l'axe vertical (z) passant par le centre |
+| `rotate3d(angle, axis=x, d)` | rotation autour de l'axe `x`, `y`, `z` ou `(a, b, c)` passant par le centre |
+| `follow(path=courbe, d)` | le centre parcourt une `curve3d`, une trajectoire `iterate` ou une `arrow` |
+| `color(to=c, d)` / `fill(to=c, d)` | couleur des lignes / des faces (`fill` marche aussi en 2D) |
+| `transform(to=b, d)` | entre deux surfaces : la surface se déforme point par point ; entre autres objets : les morceaux glissent s'ils correspondent, sinon fondu enchaîné |
+
+Sur un groupe, l'animation s'applique à tous ses objets 3D autour du centre de l'ensemble. Sur la scène elle-même : `fadein`, `fadeout`, `draw` s'appliquent à son repère.
+
+### 15.6 Halo : `glow`
+
+`glow : 10px` sur n'importe quelle figure (2D ou 3D) ajoute un halo lumineux de ce rayon. Il éclaircit ce qui est dessous (sur un fond sombre surtout) et se voit à travers les surfaces translucides. Les halos de toute l'image sont calculés en une seule fois à la fin.
+
+### 15.7 Limites connues
+
+- Deux grandes faces qui se coupent peuvent être mal ordonnées par endroits : augmenter `resolution` les découpe plus finement.
+- Une ligne posée sur une surface passe devant les faces voisines (pour rester visible) : vue de dessous, elle peut se voir à travers la surface.
+- Pas d'ombres portées ni de reflets : éclairage simple selon l'orientation des faces.
+- Le nombre de pas d'une trajectoire et la finesse d'un maillage sont fixés pour toute l'animation (ils ne peuvent pas suivre un paramètre animé).
+
+---
+
+## 16. À décider
 
 Cette section liste les points évoqués pendant le design mais qui n'ont pas été tranchés explicitement, ainsi que les questions ouvertes qui mériteraient une décision avant l'implémentation complète.
 

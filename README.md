@@ -2,7 +2,7 @@
 
 > Langage de description d'animations éducatives — style 3Blue1Brown, accessible à tous, embarquable partout.
 
-**Statut :** prototype fonctionnel — fenêtre, export MP4, HTML et audio, voix de synthèse.
+**Statut :** prototype fonctionnel — 2D et 3D, fenêtre, export MP4, HTML et audio, voix de synthèse.
 
 ---
 

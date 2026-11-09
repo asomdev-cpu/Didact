@@ -1,0 +1,67 @@
+# ─────────────────────────────────────────────
+#  2D : champ de vecteurs, récurrence libre, optimiseur sur une courbe, flèche
+#  didact demo_champs_2d.dct
+# ─────────────────────────────────────────────
+
+[config]
+window : [16:9]
+
+[figures]
+
+deffigure r =
+    type   : axes
+    from   : (8%, 12%)
+    to     : (48%, 88%)
+    xrange : [-3, 3]
+    yrange : [-3, 3]
+
+deffigure champ =
+    type     : field
+    axes     : r
+    expr     : (-y, x - 0.3*y)
+    density  : 14
+    colormap : viridis
+
+deffigure orbite =
+    type    : iterate
+    axes    : r
+    vars    : (x, y)
+    init    : (2.5, 0)
+    update  : (x + 0.1*(-y), y + 0.1*(x - 0.3*y))
+    steps   : 120
+    color   : #DC2626
+    markers : 0
+    stroke  : 3px
+
+deffigure g =
+    type   : axes
+    from   : (55%, 12%)
+    to     : (95%, 88%)
+    xrange : [-2.5, 2.5]
+    yrange : [-1, 6]
+
+deffigure courbe =
+    type  : plot
+    axes  : g
+    expr  : x^4/4 - x^2 + 0.3*x + 1
+    color : #2563EB
+
+deffigure descente =
+    type    : iterate
+    on      : courbe
+    method  : momentum
+    start   : (2.2)
+    rate    : 0.05
+    steps   : 25
+    color   : #F59E0B
+    glow    : 6px
+
+deffigure v =
+    type  : arrow
+    from  : g(0, 0)
+    to    : g(1.5, 2)
+    color : #16A34A
+    stroke : 4px
+
+[timeline]
+0.000 => { start : [r, champ fadein(1s), orbite draw(3s), g, courbe, descente draw(3s), v grow(1s)] }

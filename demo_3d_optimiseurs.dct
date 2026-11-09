@@ -1,0 +1,132 @@
+# ─────────────────────────────────────────────
+#  3D : trois optimiseurs dans une vallée étroite
+#  didact demo_3d_optimiseurs.dct
+#  (dans la fenêtre : glisser pour tourner la caméra, molette pour zoomer, double-clic pour revenir)
+# ─────────────────────────────────────────────
+
+[config]
+window       : [16:9]
+background   : #26262B
+languages    : [FR, EN]
+default_lang : FR
+
+[figures]
+
+defparam theta = -100      # rotation de la caméra
+
+deffigure espace =
+    type   : scene3d
+    xrange : [-2.5, 2.5]
+    yrange : [-1, 3.5]
+    zrange : [0, 6]
+    equal  : false
+    camera : (55, theta)
+
+# La fonction : une vallée courbe et étroite (type Rosenbrock)
+deffigure f =
+    type       : surface
+    scene      : espace
+    expr       : 0.3*x^2 + (y - 0.6*x^2)^2
+    fill       : #0B1E33
+    opacity    : 0.9
+    grid       : (30, 30)
+    color      : #4A7FB0
+    stroke     : 1.5px
+
+# Trois optimiseurs, même départ, même pas
+defstyle trace =
+    on     : f
+    start  : (-2, 3)
+    rate   : 0.02
+    steps  : 250
+    drape  : true
+    tube   : 7px
+    glow   : 12px
+
+deffigure gd =
+    type   : iterate
+    style  : trace
+    method : gd
+    color  : #F5F57A
+
+deffigure mom =
+    type   : iterate
+    style  : trace
+    method : momentum
+    beta   : 0.9
+    color  : #67E8F9
+
+deffigure adam =
+    type   : iterate
+    style  : trace
+    method : adam
+    rate   : 0.05
+    color  : #F472B6
+
+deffigure bille =
+    type   : sphere
+    scene  : espace
+    center : f(-2, 3)
+    radius : 0.09
+    fill   : #67E8F9
+    glow   : 10px
+
+defstyle legende =
+    font  : 34px
+    align : left
+
+deffigure l_gd =
+    type    : text
+    style   : legende
+    content : "Descente de gradient"
+    pos     : (5%, 90%)
+    color   : #F5F57A
+
+deffigure l_mom =
+    type    : text
+    style   : legende
+    content : "Momentum"
+    pos     : (5%, 84%)
+    color   : #67E8F9
+
+deffigure l_adam =
+    type    : text
+    style   : legende
+    content : "Adam"
+    pos     : (5%, 78%)
+    color   : #F472B6
+
+deffigure formule =
+    type  : equation
+    expr  : f(x, y) = 0.3x^2 + (y - 0.6x^2)^2
+    pos   : (78%, 90%)
+    size  : 36px
+    color : #CBD5E1
+
+[timeline]
+
+0.000 => {
+    start   : [espace, f draw(2.5s), formule fadein(1s)]
+    comment : ["Une vallée étroite et courbe.", "A narrow, curved valley."]
+}
+
+3.000 => {
+    start   : [gd draw(5s), l_gd fadein(0.5s)]
+    comment : ["La descente de gradient avance lentement le long du fond.", "Gradient descent crawls along the floor."]
+}
+
+8.500 => {
+    start   : [mom draw(5s), l_mom fadein(0.5s), bille]
+    anim    : [bille follow(path=mom, 5s), theta to(-60, 5s)]
+    comment : ["Le momentum prend de l'élan.", "Momentum builds up speed."]
+}
+
+14.000 => {
+    start   : [adam draw(5s), l_adam fadein(0.5s)]
+    anim    : [theta to(-130, 5s)]
+    comment : ["Adam adapte son pas à chaque direction.", "Adam adapts its step to each direction."]
+}
+
+20.000 => {
+    end : [espace fadeout(1s), f fadeout(1s), gd fadeout(1s), mom fadeout(1s), adam fadeout(1s), bille fadeout(1s), l_gd fadeout(1s), l_mom fadeout(1s), l_adam fadeout(1s), formule fadeout(1s)]
+}

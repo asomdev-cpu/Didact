@@ -1,0 +1,65 @@
+# ─────────────────────────────────────────────
+#  3D : un élément de matière et ses contraintes, qui tourne
+#  didact demo_3d_tenseur.dct
+# ─────────────────────────────────────────────
+
+[config]
+window     : [16:9]
+background : #1E1E24
+
+[figures]
+
+deffigure espace =
+    type   : scene3d
+    xrange : [-2, 2]
+    yrange : [-2, 2]
+    zrange : [-2, 2]
+    camera : (25, -55)
+    axes   : lines
+    color  : #9CA3AF
+
+deffigure cube =
+    type    : cube
+    scene   : espace
+    size    : 1.4
+    fill    : #3B82F6
+    opacity : 0.85
+    color   : #BFDBFE
+    stroke  : 2px
+
+defmodel fleche(a, b, c) =
+    type   : arrow
+    scene  : espace
+    from   : espace(@a)
+    to     : espace(@b)
+    color  : @c
+    stroke : 5px
+
+deffigure sxx = fleche("0.7, 0, 0", "1.6, 0, 0", #EF4444)
+deffigure sxx2 = fleche("-0.7, 0, 0", "-1.6, 0, 0", #EF4444)
+deffigure szz = fleche("0, 0, 0.7", "0, 0, 1.5", #22C55E)
+deffigure szz2 = fleche("0, 0, -0.7", "0, 0, -1.5", #22C55E)
+deffigure txy = fleche("0.72, -0.4, 0", "0.72, 0.4, 0", #F59E0B)
+
+defgroup element =
+    items : [cube, sxx, sxx2, szz, szz2, txy]
+
+deffigure legende =
+    type    : equation
+    expr    : \sigma_{xx}
+    pos     : espace(1.9, 0, 0.3)
+    color   : #EF4444
+    size    : 40px
+
+deffigure titre =
+    type  : text
+    content : "Tenseur des contraintes"
+    pos   : (50%, 92%)
+    color : white
+    font  : 44px
+
+[timeline]
+0.000 => { start : [espace fadein(0.5s), titre fadein(0.5s), cube draw(1.5s)] }
+1.500 => { start : [sxx grow(0.6s), sxx2 grow(0.6s), szz grow(0.6s), szz2 grow(0.6s), txy grow(0.6s), legende fadein(0.6s)] }
+2.500 => { anim : [element rotate3d(90, axis=z, 3s)] }
+6.000 => { anim : [element rotate3d(60, axis=(1,1,0), 2s), cube fill(to=#A855F7, 2s)] }

@@ -250,7 +250,7 @@ fn draw_subtitle(backend: &mut SkiaBackend, comment: &str) -> Result<(), String>
     let pad = size * 0.4;
     let cx = w / 2.0;
     let cy = h - h * 0.05 - th / 2.0;
-    let bg = Shape {
+    let bg = Shape { glow: 0.0,
         path: rounded_rect(cx - tw / 2.0 - pad, cy - th / 2.0 - pad, tw + 2.0 * pad, th + 2.0 * pad, size * 0.25),
         fill: Some(Rgba { r: 0.0, g: 0.0, b: 0.0, a: 0.67 }),
         stroke: None,

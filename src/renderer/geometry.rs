@@ -33,11 +33,11 @@ impl Rgba {
     pub const BLACK: Rgba = Rgba { r: 0.0, g: 0.0, b: 0.0, a: 1.0 };
     pub const WHITE: Rgba = Rgba { r: 1.0, g: 1.0, b: 1.0, a: 1.0 };
 
-    fn rgb8(r: u8, g: u8, b: u8) -> Rgba {
+    pub fn rgb8(r: u8, g: u8, b: u8) -> Rgba {
         Rgba { r: r as f32 / 255.0, g: g as f32 / 255.0, b: b as f32 / 255.0, a: 1.0 }
     }
 
-    fn with_opacity(self, opacity: f32) -> Rgba {
+    pub fn with_opacity(self, opacity: f32) -> Rgba {
         Rgba { a: self.a * opacity, ..self }
     }
 }
@@ -59,6 +59,8 @@ pub struct Shape {
     pub fill: Option<Rgba>,
     /// Couleur et épaisseur du trait (en pixels)
     pub stroke: Option<(Rgba, f32)>,
+    /// Rayon du halo lumineux en pixels (0 : pas de halo)
+    pub glow: f32,
 }
 
 /// Géométrie calculée d'une figure à l'instant t, utilisée par les références
@@ -105,6 +107,18 @@ impl AxesMap {
 pub struct Refs {
     geoms: HashMap<String, Geom>,
     pub params: HashMap<String, f64>,
+    /// Scènes 3D (caméra à l'instant t)
+    pub spaces: HashMap<String, super::three::Space>,
+    /// Surfaces 3D : `f(a, b)` place un point dessus
+    pub surfaces: HashMap<String, super::three::SurfaceRef>,
+    /// Formules des plots 2D (pour iterate)
+    pub plots: HashMap<String, super::three::PlotRef>,
+    /// Chemins 3D suivis par follow (coordonnées de la scène)
+    pub paths3: HashMap<String, Vec<super::three::V3>>,
+    /// Centres des objets 3D (coordonnées de la scène)
+    pub centers3: HashMap<String, super::three::V3>,
+    /// Scène de chaque objet 3D
+    pub scene_of: HashMap<String, String>,
 }
 
 impl Refs {
@@ -113,10 +127,10 @@ impl Refs {
     }
 
     pub fn with_params(params: HashMap<String, f64>) -> Refs {
-        Refs { geoms: HashMap::new(), params }
+        Refs { params, ..Refs::default() }
     }
 
-    fn param_names(&self) -> Vec<String> {
+    pub fn param_names(&self) -> Vec<String> {
         self.params.keys().cloned().collect()
     }
 }
@@ -143,6 +157,9 @@ pub struct Scene {
     /// Facteur appliqué aux valeurs en `px` (taille réelle / taille de référence)
     pub px_scale: f32,
     pub background: Rgba,
+    /// Caméra tournée à la souris dans la fenêtre : (élévation, rotation) en degrés, et facteur de zoom.
+    /// Ajoutée à la caméra de chaque scène 3D ; (0, 0, 1) partout ailleurs.
+    pub orbit: (f32, f32, f32),
 }
 
 impl Scene {
@@ -156,6 +173,7 @@ impl Scene {
             height: height as f32,
             px_scale: height as f32 / reference_height,
             background: parse_color(&config.background).ok().flatten().unwrap_or(Rgba::WHITE),
+            orbit: (0.0, 0.0, 1.0),
         }
     }
 
@@ -223,6 +241,7 @@ pub fn figure_shapes(f: &ResolvedFigure, scene: &Scene, refs: &Refs) -> Result<V
         "plot" => plot(f, scene, refs, &look),
         "scatter" => scatter(f, scene, refs, &look),
         "histogram" => histogram(f, scene, refs, &look),
+        "arrow" | "field" | "iterate" => super::three::shapes_2d(f, scene, refs),
         other => Err(format!("type '{}' pas encore dessiné", other)),
     }
 }
@@ -253,7 +272,7 @@ fn line(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<V
 
     shapes.insert(
         0,
-        Shape {
+        Shape { glow: 0.0,
             path: vec![PathCmd::MoveTo(ax, ay), PathCmd::LineTo(bx, by)],
             fill: None,
             stroke: look.color.map(|c| (c, look.stroke)),
@@ -265,7 +284,7 @@ fn line(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<V
 fn circle(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<Vec<Shape>, String> {
     let (cx, cy) = point(require(f, "center")?, scene, refs)?;
     let r = length(require(f, "radius")?, scene, scene.min_side())?;
-    Ok(vec![Shape {
+    Ok(vec![Shape { glow: 0.0,
         path: circle_path(cx, cy, r),
         fill: look.fill,
         stroke: look.color.map(|c| (c, look.stroke)),
@@ -285,7 +304,7 @@ fn rect(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<V
         Some(other) => return Err(format!("anchor '{}' pas encore supporté (seulement center)", other)),
     };
 
-    Ok(vec![Shape {
+    Ok(vec![Shape { glow: 0.0,
         path: vec![
             PathCmd::MoveTo(left, top),
             PathCmd::LineTo(left + w, top),
@@ -312,7 +331,7 @@ fn polygon(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Resul
         path.push(if i == 0 { PathCmd::MoveTo(x, y) } else { PathCmd::LineTo(x, y) });
     }
     path.push(PathCmd::Close);
-    Ok(vec![Shape { path, fill: look.fill, stroke: look.color.map(|c| (c, look.stroke)) }])
+    Ok(vec![Shape { glow: 0.0, path, fill: look.fill, stroke: look.color.map(|c| (c, look.stroke)) }])
 }
 
 fn arc(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<Vec<Shape>, String> {
@@ -344,7 +363,7 @@ fn arc(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<Ve
         path.push(if i == 0 { PathCmd::MoveTo(x, y) } else { PathCmd::LineTo(x, y) });
     }
 
-    let mut shapes = vec![Shape { path, fill: None, stroke: look.color.map(|c| (c, look.stroke)) }];
+    let mut shapes = vec![Shape { glow: 0.0, path, fill: None, stroke: look.color.map(|c| (c, look.stroke)) }];
     let head = arrow_length(look.stroke, scene);
     if end_arrow {
         let (x, y) = at(a1);
@@ -379,7 +398,7 @@ fn star(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<V
         path.push(if i == 0 { PathCmd::MoveTo(x, y) } else { PathCmd::LineTo(x, y) });
     }
     path.push(PathCmd::Close);
-    Ok(vec![Shape { path, fill: look.fill, stroke: look.color.map(|c| (c, look.stroke)) }])
+    Ok(vec![Shape { glow: 0.0, path, fill: look.fill, stroke: look.color.map(|c| (c, look.stroke)) }])
 }
 
 /// Taille de police par défaut (px de la scène de référence)
@@ -578,14 +597,14 @@ fn axes(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<V
             let (a, b) = (m.to_px(xa, y), m.to_px(xb, y));
             path.extend([PathCmd::MoveTo(a.0, a.1), PathCmd::LineTo(b.0, b.1)]);
         }
-        shapes.push(Shape { path, fill: None, stroke: Some((grid, 1.0 * scene.px_scale)) });
+        shapes.push(Shape { glow: 0.0, path, fill: None, stroke: Some((grid, 1.0 * scene.px_scale)) });
     }
 
     // Axes fléchés
     let head = arrow_length(look.stroke, scene);
     for (from, to) in [(m.to_px(xa, y0), m.to_px(xb, y0)), (m.to_px(x0, ya), m.to_px(x0, yb))] {
         let (dx, dy) = unit(to.0 - from.0, to.1 - from.1);
-        shapes.push(Shape {
+        shapes.push(Shape { glow: 0.0,
             path: vec![PathCmd::MoveTo(from.0, from.1), PathCmd::LineTo(to.0 - dx * head * 0.8, to.1 - dy * head * 0.8)],
             fill: None,
             stroke: Some((color, look.stroke)),
@@ -612,7 +631,7 @@ fn axes(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<V
             path.extend([PathCmd::MoveTo(px - tick, py), PathCmd::LineTo(px + tick, py)]);
             shapes.extend(super::text::text_shapes(&fmt_number(y), px - tick - font * 0.4, py, font, super::text::Align::Right, color)?);
         }
-        shapes.push(Shape { path, fill: None, stroke: Some((color, look.stroke * 0.75)) });
+        shapes.push(Shape { glow: 0.0, path, fill: None, stroke: Some((color, look.stroke * 0.75)) });
     }
 
     // Noms des axes
@@ -669,7 +688,7 @@ fn plot(f: &ResolvedFigure, _scene: &Scene, refs: &Refs, look: &Look) -> Result<
         }
         prev = cur;
     }
-    Ok(vec![Shape { path, fill: None, stroke: look.color.map(|c| (c, look.stroke)) }])
+    Ok(vec![Shape { glow: 0.0, path, fill: None, stroke: look.color.map(|c| (c, look.stroke)) }])
 }
 
 /// Partie du segment [a, b] comprise entre y = lo et y = hi (None si entièrement dehors)
@@ -713,7 +732,7 @@ fn scatter(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Resul
             return Err(format!("point invalide '{}', attendu (x, y)", item));
         }
         let (px, py) = m.to_px(parts[0], parts[1]);
-        shapes.push(Shape { path: circle_path(px, py, r), fill, stroke: None });
+        shapes.push(Shape { glow: 0.0, path: circle_path(px, py, r), fill, stroke: None });
     }
     Ok(shapes)
 }
@@ -750,7 +769,7 @@ fn histogram(f: &ResolvedFigure, _scene: &Scene, refs: &Refs, look: &Look) -> Re
         .map(|(i, c)| {
             let x0 = lo + i as f64 * width;
             let (a, b) = (m.to_px(x0, 0.0), m.to_px(x0 + width, *c as f64));
-            Shape {
+            Shape { glow: 0.0,
                 path: vec![
                     PathCmd::MoveTo(a.0, a.1),
                     PathCmd::LineTo(b.0, a.1),
@@ -779,16 +798,16 @@ fn arrows(f: &ResolvedFigure) -> Result<(bool, bool), String> {
     }
 }
 
-fn arrow_length(stroke: f32, scene: &Scene) -> f32 {
+pub(crate) fn arrow_length(stroke: f32, scene: &Scene) -> f32 {
     (stroke * 4.0).max(14.0 * scene.px_scale)
 }
 
 /// Triangle plein dont la pointe est en (x, y), orienté selon (dx, dy) unitaire
-fn arrow_head(x: f32, y: f32, dx: f32, dy: f32, len: f32, color: Rgba) -> Shape {
+pub(crate) fn arrow_head(x: f32, y: f32, dx: f32, dy: f32, len: f32, color: Rgba) -> Shape {
     let half = len * 0.45;
     let (bx, by) = (x - dx * len, y - dy * len); // base de la flèche
     let (nx, ny) = (-dy, dx); // normale
-    Shape {
+    Shape { glow: 0.0,
         path: vec![
             PathCmd::MoveTo(x, y),
             PathCmd::LineTo(bx + nx * half, by + ny * half),
@@ -801,7 +820,7 @@ fn arrow_head(x: f32, y: f32, dx: f32, dy: f32, len: f32, color: Rgba) -> Shape 
 }
 
 /// Cercle exact à 0,03 % près avec 4 courbes de Bézier
-fn circle_path(cx: f32, cy: f32, r: f32) -> Vec<PathCmd> {
+pub(crate) fn circle_path(cx: f32, cy: f32, r: f32) -> Vec<PathCmd> {
     let k = 0.552_284_8 * r;
     vec![
         PathCmd::MoveTo(cx + r, cy),
@@ -822,14 +841,14 @@ fn unit(dx: f32, dy: f32) -> (f32, f32) {
 //  LECTURE DES VALEURS
 // ─────────────────────────────────────────────
 
-fn require<'a>(f: &'a ResolvedFigure, key: &str) -> Result<&'a PropValue, String> {
+pub(crate) fn require<'a>(f: &'a ResolvedFigure, key: &str) -> Result<&'a PropValue, String> {
     f.properties
         .get(key)
         .ok_or_else(|| format!("propriété `{}` manquante", key))
 }
 
 /// Position (x, y) en pixels : tuple (20%, 50%) ou référence dynamique center(fig), offset(fig, d)
-fn point(v: &PropValue, scene: &Scene, refs: &Refs) -> Result<(f32, f32), String> {
+pub(crate) fn point(v: &PropValue, scene: &Scene, refs: &Refs) -> Result<(f32, f32), String> {
     match v {
         PropValue::Tuple(items) if items.len() == 2 => {
             Ok((coord(&items[0], scene, true)?, coord(&items[1], scene, false)?))
@@ -863,7 +882,7 @@ fn geom<'a>(name: &str, refs: &'a Refs) -> Result<&'a Geom, String> {
 fn ref_point(s: &str, scene: &Scene, refs: &Refs) -> Result<(f32, f32), String> {
     let (fname, args) = split_call(s);
     match (fname, args.as_slice()) {
-        ("center", [name]) => Ok(geom(name, refs)?.center),
+        ("center", [name]) if !refs.centers3.contains_key(*name) => Ok(geom(name, refs)?.center),
         ("offset", [name, d]) => {
             let g = geom(name, refs)?;
             let d = length_str(d, scene)?;
@@ -874,6 +893,8 @@ fn ref_point(s: &str, scene: &Scene, refs: &Refs) -> Result<(f32, f32), String> 
                 None => (g.bbox.2 + d, g.bbox.1 - d),
             })
         }
+        // Point d'une scène ou d'une surface 3D, ou centre d'un objet 3D : projeté à l'écran
+        _ if super::three::point_px(s, refs).is_some() => super::three::point_px(s, refs).unwrap(),
         ("center" | "offset", _) => Err(format!("'{}' : nombre d'arguments invalide", s)),
         // mes_axes(3, 4) : position dans un repère
         (name, [x, y]) => {
@@ -952,7 +973,7 @@ fn coord(s: &str, scene: &Scene, is_x: bool) -> Result<f32, String> {
 }
 
 /// Une longueur en pixels : "10%" (de `base`), "2px", ou un nombre (px)
-fn length(v: &PropValue, scene: &Scene, base: f32) -> Result<f32, String> {
+pub(crate) fn length(v: &PropValue, scene: &Scene, base: f32) -> Result<f32, String> {
     match v {
         PropValue::Percent(p) => {
             let n: f32 = p.trim_end_matches('%').parse().map_err(|_| format!("pourcentage invalide '{}'", p))?;
@@ -1032,7 +1053,7 @@ mod tests {
     use super::*;
 
     fn scene() -> Scene {
-        Scene { width: 1000.0, height: 500.0, px_scale: 1.0, background: Rgba::WHITE }
+        Scene { width: 1000.0, height: 500.0, px_scale: 1.0, background: Rgba::WHITE, orbit: (0.0, 0.0, 1.0) }
     }
 
     #[test]

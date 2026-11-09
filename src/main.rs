@@ -4,8 +4,13 @@ use std::env;
 use std::fs;
 
 const USAGE: &str = "Usage: didact <fichier.dct> [options]
+       didact shift <fichier.dct> <à partir de> <décalage>
 
 Sans option : ouvre une fenêtre et joue l'animation.
+
+shift : décale tous les blocs qui commencent à <à partir de> ou après, et réécrit le fichier.
+  didact shift cours.dct 16 +2      ajoute 2 s à partir de 16 s
+  didact shift cours.dct 16 -1.5    retire 1,5 s à partir de 16 s
 
 Options :
   --png <t> <image.png>   enregistre l'image à l'instant t (en secondes), sans fenêtre
@@ -30,6 +35,9 @@ Options :
 fn main() {
     // ── Arguments ──
     let args: Vec<String> = env::args().skip(1).collect();
+    if args.first().map(|a| a.as_str()) == Some("shift") {
+        return shift_command(&args[1..]);
+    }
     let mut filename = None;
     let mut lang: Option<String> = None;
     let mut debug = false;
@@ -361,4 +369,22 @@ fn print_summary(resolved: &resolver::ResolvedDocument, timeline: &runtime::Time
 fn fail(msg: &str) -> ! {
     eprintln!("{}", msg);
     std::process::exit(1);
+}
+
+/// didact shift <fichier.dct> <à partir de> <décalage>
+fn shift_command(args: &[String]) {
+    const FORM: &str = "Usage : didact shift <fichier.dct> <à partir de> <décalage>\n  ex : didact shift cours.dct 16 +2";
+    let [file, start, delta] = args else { fail(FORM) };
+    let number = |s: &str, what: &str| {
+        s.replace(',', ".").parse::<f64>().ok().filter(|v| v.is_finite()).unwrap_or_else(|| fail(&format!("{} : '{}' n'est pas un nombre\n\n{}", what, s, FORM)))
+    };
+    let (start, delta) = (number(start, "à partir de"), number(delta, "décalage"));
+    let source = fs::read_to_string(file).unwrap_or_else(|e| fail(&format!("Lecture de '{}' impossible : {}", file, e)));
+    let (text, moved) = didact::shift::shift(&source, start, delta).unwrap_or_else(|e| fail(&format!("✗ Rien n'a été modifié : {}", e)));
+    fs::write(file, text).unwrap_or_else(|e| fail(&format!("Écriture de '{}' impossible : {}", file, e)));
+    let n = moved.len();
+    println!("✓ {} bloc{} décalé{} de {:+.3} s :", n, if n > 1 { "s" } else { "" }, if n > 1 { "s" } else { "" }, delta);
+    for m in &moved {
+        println!("  ligne {:>4} : {:>9.3} → {:.3}", m.line, m.from, m.to);
+    }
 }

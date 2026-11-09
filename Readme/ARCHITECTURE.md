@@ -211,6 +211,12 @@ L'export n'est pas le mode normal d'utilisation. C'est une fonctionnalité opt-i
 - Surveille la date et la taille du `.dct`, attend qu'il soit stable, relit avec `didact::load`
 - La fenêtre garde l'instant courant ; en cas d'erreur, elle garde l'ancienne version et affiche l'erreur
 
+**3D (`src/renderer/three.rs`) — ✅ implémenté**
+- Scène (`Space`) : caméra, projection, lumière ; objets découpés en morceaux (`Item` : face, segment, point, étiquette) en coordonnées de la scène
+- Animations 3D (`Effect3`), `iterate` (récurrences, optimiseurs), `field`, solides
+- `compose` : projection et tri du plus loin au plus proche → formes 2D ; le reste du moteur ne change pas
+- Halo : `RenderBackend::draw_glow`, une passe de flou par image (`skia.rs`)
+
 **Fenêtre (`src/output/window.rs`) — ✅ implémenté**
 - eframe/egui : affiche l'image produite par tiny-skia, au ratio de `window`, à la taille réelle en pixels
 - Contrôles : lecture/pause, retour au début, barre de lecture, temps, langue ; sous-titres par-dessus
@@ -236,6 +242,7 @@ didact/
     ├── lexer.rs             # Tokenisation
     ├── ast.rs               # Structures de données (AST)
     ├── model.rs             # Modèles : defmodel, defrepeat
+    ├── shift.rs             # didact shift : décaler les blocs de la timeline
     ├── parser.rs            # Parser récursif descendant
     │
     ├── validator.rs         # Validation sémantique

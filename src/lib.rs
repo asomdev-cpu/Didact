@@ -12,6 +12,7 @@ pub mod parser;
 pub mod renderer;
 pub mod resolver;
 pub mod runtime;
+pub mod shift;
 pub mod validator;
 pub mod voice;
 pub mod web;

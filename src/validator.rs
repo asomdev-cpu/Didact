@@ -26,6 +26,8 @@ const FIGURE_TYPES: &[&str] = &[
     "axes", "plot", "scatter", "histogram",
     "raw.latex", "raw.matplotlib",
     "group",
+    "scene3d", "surface", "curve3d", "iterate", "arrow", "field",
+    "cube", "box", "sphere", "cylinder", "cone", "plane", "polyhedron",
 ];
 
 /// Animations acceptées (§11)
@@ -34,7 +36,7 @@ const ANIMATIONS: &[&str] = &[
     "move", "follow", "rotate",
     "color", "scale", "transform",
     "fadeout", "slideout", "shrink",
-    "to",
+    "to", "rotate3d", "fill",
 ];
 
 /// Fonctions de référence dynamique dont le 1er argument est une figure (§12)
@@ -42,7 +44,7 @@ const REF_FUNCTIONS: &[&str] = &["center", "angle", "offset", "auto_tangent"];
 
 /// Propriétés dont la valeur est du texte libre (LaTeX, maths, code) :
 /// on n'y cherche pas de références. Ex : `expr : sin(x)` n'est pas un appel.
-const FREE_TEXT_PROPS: &[&str] = &["type", "expr", "content", "code", "rows", "header"];
+const FREE_TEXT_PROPS: &[&str] = &["type", "expr", "content", "code", "rows", "header", "color_by", "update", "init", "vars"];
 
 // ─────────────────────────────────────────────
 //  STRUCTURES INTERNES
@@ -227,7 +229,7 @@ impl Validator {
                     (Expected::Style, Kind::Style) => true,
                     (Expected::Param, Kind::Param) => true,
                     (Expected::Figure, Kind::Figure { .. }) => true,
-                    (Expected::Axes, Kind::Figure { ftype }) => ftype == "axes",
+                    (Expected::Axes, Kind::Figure { ftype }) => matches!(ftype.as_str(), "axes" | "scene3d" | "surface"),
                     _ => false,
                 };
                 (def.index, def.line, ok_kind)
@@ -248,7 +250,7 @@ impl Validator {
                 Expected::Style => "un style",
                 Expected::Param => "un paramètre",
                 Expected::Figure => "une figure",
-                Expected::Axes => "une figure de type axes",
+                Expected::Axes => "un repère (axes ou scene3d) ou une surface",
             };
             self.error(line, format!("'{}' : '{}' devrait être {}", from, target, attendu));
         }
@@ -337,8 +339,20 @@ impl Validator {
                     ("style", PropValue::Single(s)) => {
                         self.check_ref(line, &f.name, f.index, s, Expected::Style);
                     }
-                    ("axes", PropValue::Single(a)) => {
+                    ("axes", PropValue::Single(a)) if ftype != "scene3d" => {
                         self.check_ref(line, &f.name, f.index, a, Expected::Axes);
+                        refs.push(a.clone());
+                    }
+                    // Scène d'un objet 3D, fonction d'une trajectoire
+                    ("scene" | "on", PropValue::Single(a)) => {
+                        self.check_ref(line, &f.name, f.index, a, Expected::Figure);
+                        let want = if key == "scene" { &["scene3d"][..] } else { &["surface", "plot"][..] };
+                        if let Some(Def { kind: Kind::Figure { ftype: t }, .. }) = self.defs.get(a.as_str()) {
+                            if !want.contains(&t.as_str()) {
+                                let msg = format!("'{}' : {} '{}' devrait être de type {}", f.name, key, a, want.join(" ou "));
+                                self.error(line, msg);
+                            }
+                        }
                         refs.push(a.clone());
                     }
                     ("items", PropValue::List(items)) => {
@@ -362,6 +376,12 @@ impl Validator {
                     }
                     _ => {}
                 }
+            }
+
+            // 3D : formules et propriétés propres (avec celles héritées des styles)
+            let merged = with_style_props(f, &styles_by_name);
+            for (key, msg) in crate::renderer::three::check(ftype, &merged, &self.params) {
+                self.error(line_of(&key), format!("'{}' : {}", f.name, msg));
             }
 
             self.figure_refs.insert(f.name.clone(), refs);
@@ -617,6 +637,11 @@ impl Validator {
         }
         match animation::parse_call(call) {
             Err(e) => self.error_t(line, t, format!("'{}' : {}", figure, e)),
+            Ok((AnimKind::Fill { to }, _, _)) => {
+                if let Err(e) = parse_color(&to) {
+                    self.error_t(line, t, format!("'{}' : {}", figure, e));
+                }
+            }
             Ok((AnimKind::Color { to, part }, _, _)) => {
                 if let Err(e) = parse_color(&to) {
                     self.error_t(line, t, format!("'{}' : {}", figure, e));
@@ -732,6 +757,27 @@ fn typeset_content(ftype: &str, key: &str, f: &FigureDef) -> Option<crate::rende
 
 /// Cherche `key` dans un style et ses ancêtres (`extends`).
 /// Renvoie le style qui la définit et la ligne, ou None.
+/// Propriétés d'une figure complétées par celles de ses styles (la figure l'emporte)
+fn with_style_props(f: &FigureDef, styles: &HashMap<&str, &StyleDef>) -> HashMap<String, PropValue> {
+    let mut props = f.properties.clone();
+    let mut visited: Vec<&str> = Vec::new();
+    let mut current = match f.properties.get("style") {
+        Some(PropValue::Single(s)) => styles.get(s.as_str()).copied(),
+        _ => None,
+    };
+    while let Some(style) = current {
+        if visited.contains(&style.name.as_str()) {
+            break;
+        }
+        visited.push(style.name.as_str());
+        for (k, v) in &style.properties {
+            props.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+        current = style.extends.as_deref().and_then(|p| styles.get(p).copied());
+    }
+    props
+}
+
 fn find_in_style_chain<'a>(
     start: &str,
     key: &str,
@@ -1263,5 +1309,68 @@ defrepeat barres = barre(@i, 0.5) for i in 0..3   # fin de ligne
         err(&format!("{m}defrepeat a = c(1%) for i in 3..1\n[timeline]"), "intervalle");
         err(&format!("{m}defrepeat a = c(1%) pour tous\n[timeline]"), "forme attendue");
         err("[figures]\ndefmodel c(r) =\n    color : @q\ndeffigure a = c(1)\n[timeline]", "@q");
+    }
+
+    // ── 3D ──
+
+    #[test]
+    fn scene_3d_valide() {
+        let src = "[figures]
+defparam theta = 30
+deffigure s =
+    type   : scene3d
+    camera : (40, theta)
+    axes   : box
+deffigure f =
+    type     : surface
+    scene    : s
+    expr     : sin(x)*cos(y)
+    colormap : viridis
+    grid     : (10, 10)
+defstyle trace =
+    on    : f
+    start : (1, 1)
+    rate  : 0.1
+deffigure chemin =
+    type   : iterate
+    style  : trace
+    method : adam
+deffigure tore =
+    type   : surface
+    scene  : s
+    expr   : (cos(u)*(2 + cos(v)), sin(u)*(2 + cos(v)), sin(v))
+    urange : [0, 6.28]
+    vrange : [0, 6.28]
+deffigure c =
+    type   : cube
+    scene  : s
+    center : f(0.5, 0.5)
+deffigure v =
+    type : arrow
+    from : s(0, 0, 0)
+    to   : center(c)
+deffigure lab =
+    type    : equation
+    expr    : \\sigma
+    pos     : s(1, 1, 1)
+[timeline]
+0.000 => { start : [s, f draw(1s), chemin draw(2s), c, v, lab] anim : [c rotate3d(90, axis=(1,0,1), 2s), c fill(to=red, 1s), theta to(80, 3s)] }
+1.000 => { anim : [f transform(to=tore, 1s)] }";
+        if let Err(e) = crate::load(src) {
+            panic!("{:?}", e);
+        }
+    }
+
+    #[test]
+    fn erreurs_3d() {
+        let base = "[figures]\ndeffigure s =\n    type : scene3d\n";
+        assert_error(&format!("{base}deffigure f =\n    type : surface\n    scene : s\n    expr : sin(q*x)\n[timeline]"), "nom inconnu 'q'");
+        assert_error(&format!("{base}deffigure c =\n    type : cube\n    scene : t\n[timeline]"), "qui n'est défini nulle part");
+        assert_error(&format!("{base}deffigure i =\n    type : iterate\n    on : s\n    start : (1, 1)\n[timeline]"), "devrait être de type surface ou plot");
+        assert_error(
+            &format!("{base}deffigure c =\n    type : cube\n    scene : s\n[timeline]\n0.000 => {{ anim : [c rotate3d(1s)] }}"),
+            "rotate3d attend un angle",
+        );
+        assert_error(&format!("{base}deffigure c =\n    type : curve3d\n    scene : s\n[timeline]"), "curve3d");
     }
 }

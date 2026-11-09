@@ -168,7 +168,7 @@ pub fn morph_glyphs(a: &[Shape], b: &[Shape], e: f32) -> Vec<Shape> {
                 mix_opt(cx, cy, e).map(|c| (c, mix(wx, wy)))
             }
         };
-        out.push(Shape { path, fill: mix_opt(a[i].fill, b[j].fill, e), stroke });
+        out.push(Shape { glow: 0.0, path, fill: mix_opt(a[i].fill, b[j].fill, e), stroke });
     }
     out.extend(a.iter().zip(&matched_a).filter(|(_, m)| !**m).map(|(s, _)| faded(s, 1.0 - e)));
     out.extend(b.iter().zip(&matched_b).filter(|(_, m)| !**m).map(|(s, _)| faded(s, e)));
@@ -235,7 +235,7 @@ pub fn morph(a: &[Shape], b: &[Shape], e: f32) -> Vec<Shape> {
                 mix_opt(cx, cy, e).map(|c| (c, wx + (wy - wx) * e))
             }
         };
-        out.push(Shape { path, fill, stroke });
+        out.push(Shape { glow: 0.0, path, fill, stroke });
     }
     out
 }
@@ -364,7 +364,7 @@ mod tests {
     use super::*;
 
     fn square(x: f32, y: f32, s: f32, color: Rgba) -> Shape {
-        Shape {
+        Shape { glow: 0.0,
             path: vec![
                 PathCmd::MoveTo(x, y),
                 PathCmd::LineTo(x + s, y),

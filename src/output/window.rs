@@ -52,6 +52,9 @@ struct DidactApp {
     watcher: Watcher,
     /// Erreurs de la dernière sauvegarde (l'ancienne version reste affichée)
     reload_errors: Vec<String>,
+    /// Caméra 3D tournée à la souris : (élévation, rotation) en degrés, zoom.
+    /// Aperçu seulement : les exports gardent la caméra du fichier.
+    orbit: (f32, f32, f32),
 }
 
 /// Toutes les pistes de la fenêtre, avec la langue à laquelle chacune appartient
@@ -135,6 +138,7 @@ pub fn run(
         source: source.to_path_buf(),
         watcher: Watcher::new(source),
         reload_errors: Vec::new(),
+        orbit: (0.0, 0.0, 1.0),
     };
 
     eframe::run_native("Didact", options, Box::new(|_cc| Ok(Box::new(app)))).map_err(|e| e.to_string())
@@ -334,9 +338,27 @@ impl DidactApp {
         let t = self.holds_of(self.lang_idx()).to_timeline(self.t);
         let Some(backend) = self.backend.as_mut() else { return };
 
+        // Scène 3D : glisser = tourner la caméra, molette = zoom, double-clic = caméra du fichier
+        let response = ui.interact(rect, ui.unique_id().with("scene3d"), egui::Sense::click_and_drag());
+        if response.dragged() {
+            let d = response.drag_delta();
+            self.orbit.1 -= d.x * 0.4;
+            self.orbit.0 = (self.orbit.0 + d.y * 0.4).clamp(-180.0, 180.0);
+        }
+        if response.hovered() {
+            let scroll = ui.ctx().input(|i| i.smooth_scroll_delta.y);
+            if scroll != 0.0 {
+                self.orbit.2 = (self.orbit.2 * (1.0 + scroll * 0.002)).clamp(0.1, 10.0);
+            }
+        }
+        if response.double_clicked() {
+            self.orbit = (0.0, 0.0, 1.0);
+        }
+
         // Dessin
         let frame = self.timeline.frame_at(t, Some(&self.lang));
-        let scene = Scene::new(&self.config, pw, ph);
+        let mut scene = Scene::new(&self.config, pw, ph);
+        scene.orbit = self.orbit;
         let skipped = renderer::render_frame(&frame, &scene, backend);
         for (name, reason) in skipped {
             if self.warned.insert(format!("{}|{}", name, reason)) {

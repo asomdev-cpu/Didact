@@ -122,6 +122,57 @@ impl Parser {
         Some(PropValue::Single(value))
     }
 
+    /// Valeur `( ... )` qui occupe toute la fin de la ligne et contient des calculs
+    /// (`(0.9*vx - 0.05*dx, sin(x))`, `(60, theta + 10)`) : chaque élément est gardé tel quel.
+    /// Les tuples simples (`(50%, 30%)`, `(1, 2)`) gardent la lecture habituelle.
+    fn raw_tuple_value(&mut self, line: usize) -> Option<PropValue> {
+        if *self.peek() != Token::LParen {
+            return None;
+        }
+        let text = self.source_lines.get(line.checked_sub(1)?)?;
+        let after = text.split_once(':')?.1;
+        // Commentaire de fin de ligne : « # » suivi d'une espace (une couleur #FF0000 n'en a pas)
+        let after = match after.find(" # ") {
+            Some(i) => &after[..i],
+            None => after,
+        };
+        let value = after.trim();
+        let inside = value.strip_prefix('(')?.strip_suffix(')')?;
+        let mut items = Vec::new();
+        let (mut depth, mut start) = (0i32, 0);
+        for (i, c) in inside.char_indices() {
+            match c {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth < 0 {
+                        return None; // « (a) + (b) » : pas un seul tuple
+                    }
+                }
+                ',' if depth == 0 => {
+                    items.push(inside[start..i].trim().to_string());
+                    start = i + 1;
+                }
+                _ => {}
+            }
+        }
+        if depth != 0 {
+            return None;
+        }
+        items.push(inside[start..].trim().to_string());
+        let simple = |s: &str| {
+            let n = s.trim_end_matches('%').trim_end_matches("px");
+            n.parse::<f64>().is_ok() || s.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '#')
+        };
+        if items.iter().all(|i| simple(i)) {
+            return None;
+        }
+        while self.line() == line && *self.peek() != Token::EOF {
+            self.advance();
+        }
+        Some(PropValue::Tuple(items))
+    }
+
     /// Regarde le token courant sans avancer
     fn peek(&self) -> &Token {
         &self.tokens[self.pos].token
@@ -525,6 +576,8 @@ impl Parser {
                     properties.insert(key, v);
                 } else if let Some(v) = self.raw_call_value(line) {
                     properties.insert(key, v);
+                } else if let Some(v) = self.raw_tuple_value(line) {
+                    properties.insert(key, v);
                 } else {
                     properties.insert(key, self.parse_prop_value()?);
                 }
@@ -567,7 +620,10 @@ impl Parser {
                         Some(v) => v,
                         None => match self.raw_call_value(line) {
                             Some(v) => v,
-                            None => self.parse_prop_value()?,
+                            None => match self.raw_tuple_value(line) {
+                                Some(v) => v,
+                                None => self.parse_prop_value()?,
+                            },
                         },
                     },
                 };
