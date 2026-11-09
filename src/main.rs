@@ -243,7 +243,7 @@ fn export_png(resolved: &resolver::ResolvedDocument, timeline: &runtime::Timelin
     let mut backend = renderer::skia::SkiaBackend::new(w, h).unwrap_or_else(|| fail("taille d'image invalide"));
     let scene = renderer::Scene::new(&resolved.config, w, h);
     let frame = timeline.frame_at(t, lang);
-    for (name, reason) in renderer::render_frame(&frame, &scene, &mut backend) {
+    for (name, reason) in renderer::render_frame_parallel(&frame, &scene, &mut backend) {
         eprintln!("Attention : '{}' non dessinée : {}", name, reason);
     }
     backend.save_png(path).unwrap_or_else(|e| fail(&format!("✗ Écriture de '{}' impossible : {}", path, e)));

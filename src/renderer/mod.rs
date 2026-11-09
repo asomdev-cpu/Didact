@@ -162,10 +162,11 @@ pub fn render_frame(frame: &Frame, scene: &Scene, backend: &mut dyn RenderBacken
     //    projetés et triés du plus loin au plus proche
     let mut composed: HashMap<String, Vec<Shape>> = HashMap::new();
     for (scene_name, space) in &refs.spaces {
+        // Dans l'ordre du fichier : à profondeur égale, l'ordre de dessin est toujours le même
         let mut items: Vec<&three::Item> = Vec::new();
-        for (name, obj) in &objs {
-            let shown = visible.get(name.as_str()) == Some(&true);
-            if obj.scene == *scene_name && shown {
+        for st in &frame.states {
+            let Some(obj) = objs.get(&st.fig.name) else { continue };
+            if obj.scene == *scene_name && st.visible {
                 items.extend(obj.items.iter());
             }
         }
@@ -259,6 +260,15 @@ fn build_object3d(
     refs.insert(name.clone(), three::screen_geom(&space, &obj, center));
     objs.insert(name, obj);
     Ok(())
+}
+
+/// Comme `render_frame`, mais le dessin est réparti sur tous les cœurs du processeur
+/// (même image au pixel près)
+pub fn render_frame_parallel(frame: &Frame, scene: &Scene, backend: &mut skia::SkiaBackend) -> Vec<(String, String)> {
+    let mut rec = skia::Recorder::default();
+    let problems = render_frame(frame, scene, &mut rec);
+    backend.replay(&rec.ops);
+    problems
 }
 
 /// Figures composées par le moteur de texte : leurs formes sont des lettres

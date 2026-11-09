@@ -55,7 +55,15 @@ struct DidactApp {
     /// Caméra 3D tournée à la souris : (élévation, rotation) en degrés, zoom.
     /// Aperçu seulement : les exports gardent la caméra du fichier.
     orbit: (f32, f32, f32),
+    /// Part de la résolution utilisée (1 = pleine). Baisse pendant la lecture si les images
+    /// tardent, et revient à 1 dès que rien ne bouge.
+    quality: f32,
+    /// Ce qui a été dessiné la dernière fois : rien à refaire si rien n'a changé
+    last_drawn: Option<(f64, (f32, f32, f32), u32, u32, String)>,
 }
+
+/// Temps visé pour une image (secondes) : au-delà, la résolution baisse pendant le mouvement
+const FRAME_BUDGET: f64 = 1.0 / 30.0;
 
 /// Toutes les pistes de la fenêtre, avec la langue à laquelle chacune appartient
 type Tracks = Vec<(AudioSegment, Option<usize>)>;
@@ -139,6 +147,8 @@ pub fn run(
         watcher: Watcher::new(source),
         reload_errors: Vec::new(),
         orbit: (0.0, 0.0, 1.0),
+        quality: 1.0,
+        last_drawn: None,
     };
 
     eframe::run_native("Didact", options, Box::new(|_cc| Ok(Box::new(app)))).map_err(|e| e.to_string())
@@ -271,6 +281,7 @@ impl DidactApp {
         };
         self.reload_errors.clear();
         self.warned.clear();
+        self.last_drawn = None; // le fichier a changé : à redessiner
 
         let t_timeline = self.holds_of(self.lang_idx()).to_timeline(self.t);
         self.timeline = timeline;
@@ -326,21 +337,10 @@ impl DidactApp {
         };
         let rect = egui::Rect::from_center_size(avail.center(), size);
 
-        // Taille en vrais pixels (écrans haute densité)
-        let ppp = ui.ctx().pixels_per_point();
-        let pw = (size.x * ppp).round().max(1.0) as u32;
-        let ph = (size.y * ppp).round().max(1.0) as u32;
-
-        // (Re)crée l'image si la taille a changé
-        if self.backend.as_ref().map(|b| (b.width(), b.height())) != Some((pw, ph)) {
-            self.backend = SkiaBackend::new(pw, ph);
-        }
-        let t = self.holds_of(self.lang_idx()).to_timeline(self.t);
-        let Some(backend) = self.backend.as_mut() else { return };
-
         // Scène 3D : glisser = tourner la caméra, molette = zoom, double-clic = caméra du fichier
         let response = ui.interact(rect, ui.unique_id().with("scene3d"), egui::Sense::click_and_drag());
-        if response.dragged() {
+        let dragging = response.dragged();
+        if dragging {
             let d = response.drag_delta();
             self.orbit.1 -= d.x * 0.4;
             self.orbit.0 = (self.orbit.0 + d.y * 0.4).clamp(-180.0, 180.0);
@@ -355,22 +355,55 @@ impl DidactApp {
             self.orbit = (0.0, 0.0, 1.0);
         }
 
-        // Dessin
-        let frame = self.timeline.frame_at(t, Some(&self.lang));
-        let mut scene = Scene::new(&self.config, pw, ph);
-        scene.orbit = self.orbit;
-        let skipped = renderer::render_frame(&frame, &scene, backend);
-        for (name, reason) in skipped {
-            if self.warned.insert(format!("{}|{}", name, reason)) {
-                eprintln!("Attention : '{}' non dessinée : {}", name, reason);
-            }
+        // Résolution : pleine à l'arrêt ; réduite pendant le mouvement si besoin
+        let moving = self.playing || dragging;
+        if !moving {
+            self.quality = 1.0;
         }
 
-        // Envoi de l'image à egui
-        let image = egui::ColorImage::from_rgba_premultiplied([pw as usize, ph as usize], backend.pixmap.data());
-        match &mut self.texture {
-            Some(tex) => tex.set(image, egui::TextureOptions::LINEAR),
-            None => self.texture = Some(ui.ctx().load_texture("scene", image, egui::TextureOptions::LINEAR)),
+        // Taille en vrais pixels (écrans haute densité), à la qualité du moment
+        let ppp = ui.ctx().pixels_per_point();
+        let pw = (size.x * ppp * self.quality).round().max(1.0) as u32;
+        let ph = (size.y * ppp * self.quality).round().max(1.0) as u32;
+
+        // (Re)crée l'image si la taille a changé
+        if self.backend.as_ref().map(|b| (b.width(), b.height())) != Some((pw, ph)) {
+            self.backend = SkiaBackend::new(pw, ph);
+        }
+        let t = self.holds_of(self.lang_idx()).to_timeline(self.t);
+        let Some(backend) = self.backend.as_mut() else { return };
+
+        // Dessin (seulement si quelque chose a changé : instant, caméra, taille, langue)
+        let frame = self.timeline.frame_at(t, Some(&self.lang));
+        let key = (t, self.orbit, pw, ph, self.lang.clone());
+        if self.last_drawn.as_ref() != Some(&key) || self.texture.is_none() {
+            let started = std::time::Instant::now();
+            let mut scene = Scene::new(&self.config, pw, ph);
+            scene.orbit = self.orbit;
+            let skipped = renderer::render_frame_parallel(&frame, &scene, backend);
+            for (name, reason) in skipped {
+                if self.warned.insert(format!("{}|{}", name, reason)) {
+                    eprintln!("Attention : '{}' non dessinée : {}", name, reason);
+                }
+            }
+
+            // Envoi de l'image à egui
+            let image = egui::ColorImage::from_rgba_premultiplied([pw as usize, ph as usize], backend.pixmap.data());
+            match &mut self.texture {
+                Some(tex) => tex.set(image, egui::TextureOptions::LINEAR),
+                None => self.texture = Some(ui.ctx().load_texture("scene", image, egui::TextureOptions::LINEAR)),
+            }
+            self.last_drawn = Some(key);
+
+            // Ajuste la résolution pour rester fluide pendant le mouvement
+            let spent = started.elapsed().as_secs_f64();
+            if moving {
+                if spent > FRAME_BUDGET * 1.3 {
+                    self.quality = (self.quality * (FRAME_BUDGET / spent).sqrt() as f32).max(if dragging { 0.5 } else { 0.7 });
+                } else if spent < FRAME_BUDGET * 0.5 {
+                    self.quality = (self.quality * 1.1).min(1.0);
+                }
+            }
         }
         if let Some(tex) = &self.texture {
             let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));

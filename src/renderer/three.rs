@@ -110,6 +110,8 @@ pub enum Prim {
     Face { pts: Vec<V3>, color: Rgba, shade: bool },
     /// Segment ; `tube` : dessiné comme un tube éclairé
     Seg { a: V3, b: V3, color: Rgba, width: f32, tube: bool },
+    /// Ligne brisée (quelques segments qui se suivent, dessinés d'un seul trait)
+    Line { pts: Vec<V3>, color: Rgba, width: f32, tube: bool },
     /// Point (disque toujours face à la caméra), rayon en pixels
     Dot { p: V3, color: Rgba, radius: f32 },
     /// Formule LaTeX accrochée à un point, toujours face à la caméra
@@ -138,13 +140,14 @@ impl Prim {
         match self {
             Prim::Face { pts, .. } => pts.clone(),
             Prim::Seg { a, b, .. } => vec![*a, *b],
+            Prim::Line { pts, .. } => pts.clone(),
             Prim::Dot { p, .. } | Prim::Label { p, .. } => vec![*p],
         }
     }
 
     fn map(&mut self, f: &dyn Fn(V3) -> V3) {
         match self {
-            Prim::Face { pts, .. } => pts.iter_mut().for_each(|p| *p = f(*p)),
+            Prim::Face { pts, .. } | Prim::Line { pts, .. } => pts.iter_mut().for_each(|p| *p = f(*p)),
             Prim::Seg { a, b, .. } => {
                 *a = f(*a);
                 *b = f(*b);
@@ -155,7 +158,11 @@ impl Prim {
 
     fn fade(&mut self, k: f32) {
         match self {
-            Prim::Face { color, .. } | Prim::Seg { color, .. } | Prim::Dot { color, .. } | Prim::Label { color, .. } => {
+            Prim::Face { color, .. }
+            | Prim::Seg { color, .. }
+            | Prim::Line { color, .. }
+            | Prim::Dot { color, .. }
+            | Prim::Label { color, .. } => {
                 color.a *= k
             }
         }
@@ -180,6 +187,40 @@ impl Obj {
 
 fn item(prim: Prim, order: (f32, f32), glow: f32) -> Item {
     Item { prim, order, glow }
+}
+
+/// Nombre de segments regroupés en une ligne : moins de traits à dessiner, tout en gardant
+/// des morceaux assez courts pour se trier correctement avec les faces
+const RUN: usize = 6;
+
+/// Regroupe les segments qui se suivent (même apparence, bout à bout) en lignes brisées
+pub fn merge_runs(items: Vec<Item>) -> Vec<Item> {
+    let mut out: Vec<Item> = Vec::with_capacity(items.len());
+    let mut count = 0; // segments dans la ligne en cours
+    for it in items {
+        if let Prim::Seg { a, b, color, width, tube } = &it.prim {
+            if let Some(last) = out.last_mut() {
+                let same = last.glow == it.glow;
+                match &mut last.prim {
+                    Prim::Line { pts, color: c, width: w, tube: t }
+                        if same && count < RUN && c == color && w == width && t == tube && pts.last() == Some(a) =>
+                    {
+                        pts.push(*b);
+                        last.order.1 = last.order.1.max(it.order.1);
+                        count += 1;
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
+            out.push(Item { prim: Prim::Line { pts: vec![*a, *b], color: *color, width: *width, tube: *tube }, order: it.order, glow: it.glow });
+            count = 1;
+        } else {
+            out.push(it);
+            count = 0;
+        }
+    }
+    out
 }
 
 // ─────────────────────────────────────────────
@@ -717,6 +758,7 @@ fn scene_axes(f: &ResolvedFigure, sp: &Space, scene: &Scene, refs: &Refs) -> Res
         }
         o => return Err(format!("axes '{}' invalide (lines, box ou none)", o)),
     }
+    let mut items = merge_runs(items);
     // Grille au sol
     let floor = num(f, "floor", 0.0, refs)?.round().max(0.0) as usize;
     if floor > 0 {
@@ -1069,7 +1111,9 @@ fn polyline(pts: &[V3], color: Rgba, width: f32, tube: bool, glow: f32) -> Vec<I
             items.push(item(Prim::Seg { a: w[0], b: w[1], color, width, tube }, o, glow));
         }
     }
-    items
+    // Courbes et trajectoires : segments regroupés (le quadrillage d'une surface, lui, reste
+    // découpé case par case pour se trier avec ses faces)
+    merge_runs(items)
 }
 
 /// curve3d : (x(t), y(t), z(t)) avec `t : [a, b]`, ou `points : [...]`
@@ -1142,6 +1186,7 @@ fn arrow3(a: V3, b: V3, head: f64, color: Rgba, width: f32, tube: Option<f32>, s
         let o = (order.0 + (order.1 - order.0) * 0.8 * i as f32 / pieces as f32, order.0 + (order.1 - order.0) * 0.8 * (i + 1) as f32 / pieces as f32);
         items.push(item(Prim::Seg { a: p, b: q, color, width: tube.unwrap_or(width), tube: tube.is_some() }, o, glow));
     }
+    let mut items = merge_runs(items);
     let head_order = (order.0 + (order.1 - order.0) * 0.8, order.1);
     items.extend(cone_items(base, b, head * 0.38, color, shade, head_order, glow));
     items
@@ -1828,7 +1873,7 @@ impl Effect3 {
                     let k = self.scale.max(0.0) as f32;
                     match &mut it.prim {
                         Prim::Dot { radius, .. } => *radius *= k,
-                        Prim::Seg { width, .. } => *width *= k,
+                        Prim::Seg { width, .. } | Prim::Line { width, .. } => *width *= k,
                         Prim::Label { size, .. } => *size *= k,
                         Prim::Face { .. } => {}
                     }
@@ -1856,6 +1901,25 @@ fn reveal(items: &mut Vec<Item>, e: f32) {
         let k = ((e - s) / (end - s).max(1e-6)).clamp(0.0, 1.0);
         match &mut it.prim {
             Prim::Seg { a, b, .. } => *b = lerp(*a, *b, k as f64),
+            Prim::Line { pts, .. } => {
+                // On garde le début de la ligne, jusqu'à la fraction k de sa longueur
+                let total: f64 = pts.windows(2).map(|w| norm(sub(w[1], w[0]))).sum();
+                let mut left = total * k as f64;
+                let mut kept = vec![pts[0]];
+                for w in pts.windows(2) {
+                    let l = norm(sub(w[1], w[0]));
+                    if left >= l {
+                        kept.push(w[1]);
+                        left -= l;
+                    } else {
+                        if l > 0.0 {
+                            kept.push(lerp(w[0], w[1], left / l));
+                        }
+                        break;
+                    }
+                }
+                *pts = kept;
+            }
             Prim::Face { color, .. } | Prim::Label { color, .. } => color.a *= k,
             Prim::Dot { .. } => {}
         }
@@ -1885,6 +1949,11 @@ pub fn morph(a: &[Item], b: &[Item], e: f32) -> Vec<Item> {
                 (Prim::Face { pts: p, color, .. }, Prim::Face { color: c2, .. }) => {
                     *p = pts.clone();
                     *color = mix(*color, *c2, e);
+                }
+                (Prim::Line { pts: p, color, width, .. }, Prim::Line { color: c2, width: w2, .. }) => {
+                    *p = pts.clone();
+                    *color = mix(*color, *c2, e);
+                    *width += (w2 - *width) * e;
                 }
                 (Prim::Seg { a, b, color, width, .. }, Prim::Seg { color: c2, width: w2, .. }) => {
                     *a = pts[0];
@@ -1948,13 +2017,15 @@ pub fn compose(sp: &Space, items: &[&Item]) -> Vec<Shape> {
                 shapes.push(Shape { glow: it.glow, path, fill: Some(c), stroke: seam });
                 depth
             }
-            Prim::Seg { color, width, tube, .. } => {
-                let path = vec![PathCmd::MoveTo(proj[0].0, proj[0].1), PathCmd::LineTo(proj[1].0, proj[1].1)];
+            Prim::Seg { color, width, tube, .. } | Prim::Line { color, width, tube, .. } => {
+                let mut path = vec![PathCmd::MoveTo(proj[0].0, proj[0].1)];
+                path.extend(proj[1..].iter().map(|p| PathCmd::LineTo(p.0, p.1)));
                 if *tube {
+                    // Tube : bord sombre, corps, reflet ; seul le corps porte le halo
                     let dark = Rgba { r: color.r * 0.55, g: color.g * 0.55, b: color.b * 0.55, a: color.a };
-                    shapes.push(Shape { glow: it.glow, path: path.clone(), fill: None, stroke: Some((dark, *width)) });
+                    shapes.push(Shape { glow: 0.0, path: path.clone(), fill: None, stroke: Some((dark, *width)) });
                     shapes.push(Shape { glow: it.glow, path: path.clone(), fill: None, stroke: Some((*color, *width * 0.7)) });
-                    shapes.push(Shape { glow: it.glow, path, fill: None, stroke: Some((mix(*color, Rgba::WHITE, 0.45), *width * 0.25)) });
+                    shapes.push(Shape { glow: 0.0, path, fill: None, stroke: Some((mix(*color, Rgba::WHITE, 0.45), *width * 0.25)) });
                 } else {
                     shapes.push(Shape { glow: it.glow, path, fill: None, stroke: Some((*color, *width)) });
                 }
@@ -2284,12 +2355,28 @@ mod tests {
     }
 
     #[test]
+    fn segments_regroupes() {
+        let pts: Vec<V3> = (0..=13).map(|i| [i as f64, 0.0, 0.0]).collect();
+        let items = polyline(&pts, Rgba::BLACK, 1.0, false, 0.0);
+        // 13 segments → lignes de 6, 6 et 1, bout à bout
+        assert_eq!(items.len(), 3);
+        let Prim::Line { pts: first, .. } = &items[0].prim else { panic!() };
+        assert_eq!(first.len(), 7);
+        assert_eq!(items[0].order.0, 0.0);
+        assert!((items[2].order.1 - 1.0).abs() < 1e-6);
+        // Le dessin progressif coupe une ligne au bon endroit
+        let mut half = items.clone();
+        reveal(&mut half, 0.25);
+        let Prim::Line { pts: cut, .. } = &half[0].prim else { panic!() };
+        assert!((cut.last().unwrap()[0] - 3.25).abs() < 1e-3, "{:?}", cut.last());
+    }
+
+    #[test]
     fn dessin_progressif() {
         let mut items = polyline(&[[0.0; 3], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0], [3.0, 0.0, 0.0]], Rgba::BLACK, 1.0, false, 0.0);
         reveal(&mut items, 0.5);
-        assert_eq!(items.len(), 2);
-        let Prim::Seg { b, .. } = items[1].prim else { panic!() };
-        assert!((b[0] - 1.5).abs() < 1e-6);
+        let Prim::Line { pts, .. } = &items[0].prim else { panic!() };
+        assert!((pts.last().unwrap()[0] - 1.5).abs() < 1e-6);
     }
 
     #[test]

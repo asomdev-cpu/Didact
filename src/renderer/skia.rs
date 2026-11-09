@@ -5,7 +5,7 @@
 
 use super::geometry::{PathCmd, Rgba, Shape};
 use super::RenderBackend;
-use tiny_skia::{BlendMode, Color, FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, PixmapPaint, Stroke, Transform};
+use tiny_skia::{BlendMode, Color, FillRule, LineCap, LineJoin, Mask, Paint, PathBuilder, Pixmap, PixmapPaint, Rect, Stroke, Transform};
 
 pub struct SkiaBackend {
     pub pixmap: Pixmap,
@@ -139,6 +139,11 @@ impl RenderBackend for SkiaBackend {
 impl SkiaBackend {
     /// Dessine une forme avec une transformation (décalage pour le calque du halo)
     fn draw_with(&mut self, shape: &Shape, transform: Transform) {
+        self.draw_masked(shape, transform, None);
+    }
+
+    /// Dessine une forme ; avec un masque, seuls les pixels du masque sont modifiés
+    fn draw_masked(&mut self, shape: &Shape, transform: Transform, mask: Option<&Mask>) {
         let mut pb = PathBuilder::new();
         for cmd in &shape.path {
             match *cmd {
@@ -152,7 +157,7 @@ impl SkiaBackend {
 
         if let Some(fill) = shape.fill {
             self.pixmap
-                .fill_path(&path, &paint(fill), FillRule::Winding, transform, None);
+                .fill_path(&path, &paint(fill), FillRule::Winding, transform, mask);
         }
         if let Some((color, width)) = shape.stroke {
             if width > 0.0 {
@@ -163,8 +168,181 @@ impl SkiaBackend {
                     ..Stroke::default()
                 };
                 self.pixmap
-                    .stroke_path(&path, &paint(color), &stroke, transform, None);
+                    .stroke_path(&path, &paint(color), &stroke, transform, mask);
             }
         }
+    }
+}
+
+// ─────────────────────────────────────────────
+//  DESSIN EN PARALLÈLE
+// ─────────────────────────────────────────────
+
+/// Une instruction de dessin enregistrée
+pub enum DrawOp {
+    Clear(Rgba),
+    Shape(Shape),
+    Glow(Vec<Shape>, f32),
+}
+
+/// Backend qui n'enregistre que les instructions : elles sont rejouées ensuite en parallèle
+#[derive(Default)]
+pub struct Recorder {
+    pub ops: Vec<DrawOp>,
+}
+
+impl RenderBackend for Recorder {
+    fn clear(&mut self, color: Rgba) {
+        self.ops.clear();
+        self.ops.push(DrawOp::Clear(color));
+    }
+    fn draw(&mut self, shape: &Shape) {
+        self.ops.push(DrawOp::Shape(shape.clone()));
+    }
+    fn draw_glow(&mut self, shapes: &[Shape], radius: f32) {
+        self.ops.push(DrawOp::Glow(shapes.to_vec(), radius));
+    }
+}
+
+/// Boîte (y min, y max) d'une forme en pixels, épaisseur du trait comprise
+fn vertical_extent(shape: &Shape) -> (f32, f32) {
+    let pad = shape.stroke.map(|(_, w)| w).unwrap_or(0.0) + 2.0;
+    let (mut y0, mut y1) = (f32::MAX, f32::MIN);
+    for cmd in &shape.path {
+        let ys: &[f32] = &match *cmd {
+            PathCmd::MoveTo(_, y) | PathCmd::LineTo(_, y) => [y, y, y],
+            PathCmd::CubicTo(_, a, _, b, _, y) => [a, b, y],
+            PathCmd::Close => continue,
+        };
+        for &y in ys {
+            y0 = y0.min(y);
+            y1 = y1.max(y);
+        }
+    }
+    (y0 - pad, y1 + pad)
+}
+
+impl SkiaBackend {
+    /// Rejoue des instructions : l'image est découpée en bandes horizontales dessinées en même
+    /// temps sur plusieurs cœurs, puis les halos sont ajoutés sur l'image entière.
+    /// Chaque bande est dessinée aux vraies coordonnées, à travers un masque : le résultat est
+    /// identique au pixel près au dessin direct. Une forme ne va que dans les bandes qu'elle touche.
+    pub fn replay(&mut self, ops: &[DrawOp]) {
+        // DIDACT_THREADS=1 force un seul cœur (pour comparer) ; le résultat est le même
+        let threads = std::env::var("DIDACT_THREADS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1))
+            .clamp(1, 8);
+        self.replay_with(ops, threads);
+    }
+
+    /// `replay` avec un nombre de fils donné. Le résultat ne dépend pas de ce nombre :
+    /// toujours dessiné à travers un masque, aux vraies coordonnées.
+    pub fn replay_with(&mut self, ops: &[DrawOp], threads: usize) {
+        let (w, h) = (self.pixmap.width(), self.pixmap.height());
+        {
+            // Plus de bandes que de cœurs : la charge se répartit mieux
+            let bands = if threads <= 1 { 1 } else { (threads * 3).min(h as usize / 16).max(1) };
+            let band_h = (h as usize).div_ceil(bands) as u32;
+            let extents: Vec<(f32, f32)> = ops
+                .iter()
+                .map(|op| match op {
+                    DrawOp::Shape(s) => vertical_extent(s),
+                    _ => (f32::MIN, f32::MAX),
+                })
+                .collect();
+            let starts: Vec<u32> = (0..bands as u32).map(|i| i * band_h).filter(|y| *y < h).collect();
+            let next = std::sync::atomic::AtomicUsize::new(0);
+            let results: std::sync::Mutex<Vec<(u32, Vec<u8>)>> = std::sync::Mutex::new(Vec::new());
+            let row = w as usize * 4;
+            std::thread::scope(|scope| {
+                for _ in 0..threads.clamp(1, starts.len()) {
+                    scope.spawn(|| {
+                        // Une image entière par fil, réutilisée pour ses bandes
+                        let Some(mut canvas) = SkiaBackend::new(w, h) else { return };
+                        loop {
+                            let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            let Some(&y0) = starts.get(i) else { break };
+                            let bh = band_h.min(h - y0);
+                            let (top, bottom) = (y0 as f32, (y0 + bh) as f32);
+                            let Some(mut mask) = Mask::new(w, h) else { break };
+                            if let Some(rect) = Rect::from_xywh(0.0, top, w as f32, bh as f32) {
+                                mask.fill_path(&PathBuilder::from_rect(rect), FillRule::Winding, false, Transform::identity());
+                            }
+                            let range = y0 as usize * row..(y0 + bh) as usize * row;
+                            for (op, ext) in ops.iter().zip(&extents) {
+                                match op {
+                                    DrawOp::Clear(c) => {
+                                        let px = to_color(*c).premultiply().to_color_u8();
+                                        let bytes = [px.red(), px.green(), px.blue(), px.alpha()];
+                                        for chunk in canvas.pixmap.data_mut()[range.clone()].chunks_exact_mut(4) {
+                                            chunk.copy_from_slice(&bytes);
+                                        }
+                                    }
+                                    DrawOp::Shape(s) if ext.1 >= top && ext.0 <= bottom => {
+                                        canvas.draw_masked(s, Transform::identity(), Some(&mask))
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            let rows = canvas.pixmap.data()[range].to_vec();
+                            results.lock().unwrap().push((y0, rows));
+                        }
+                    });
+                }
+            });
+            let data = self.pixmap.data_mut();
+            for (y0, rows) in results.into_inner().unwrap() {
+                let start = y0 as usize * row;
+                data[start..start + rows.len()].copy_from_slice(&rows);
+            }
+        }
+        for op in ops {
+            if let DrawOp::Glow(shapes, r) = op {
+                self.draw_glow(shapes, *r);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dessin_parallele_identique() {
+        // Même image quel que soit le nombre de fils (1, 2, 5)
+        let shapes: Vec<Shape> = (0..60)
+            .map(|i| {
+                let (x, y) = ((i * 37 % 300) as f32, (i * 53 % 200) as f32);
+                Shape {
+                    glow: if i % 10 == 0 { 6.0 } else { 0.0 },
+                    path: vec![PathCmd::MoveTo(x, y), PathCmd::LineTo(x + 80.0, y + 30.0), PathCmd::LineTo(x + 10.0, y + 70.0), PathCmd::Close],
+                    fill: Some(Rgba { r: (i % 7) as f32 / 7.0, g: 0.5, b: 0.3, a: 0.7 }),
+                    stroke: Some((Rgba::BLACK, 2.5)),
+                }
+            })
+            .collect();
+        let mut direct = SkiaBackend::new(320, 240).unwrap();
+        let mut rec = Recorder::default();
+        for b in [&mut direct as &mut dyn RenderBackend, &mut rec as &mut dyn RenderBackend] {
+            b.clear(Rgba::WHITE);
+            for s in &shapes {
+                b.draw(s);
+            }
+            let glowing: Vec<Shape> = shapes.iter().filter(|s| s.glow > 0.0).cloned().collect();
+            b.draw_glow(&glowing, 6.0);
+        }
+        let image = |threads: usize| {
+            let mut b = SkiaBackend::new(320, 240).unwrap();
+            b.replay_with(&rec.ops, threads);
+            b.pixmap.data().to_vec()
+        };
+        let one = image(1);
+        assert!(one == image(2) && one == image(5), "l'image doit être la même quel que soit le nombre de fils");
+        // Et presque identique au dessin direct (arrondis du masque : 3/255 au plus)
+        let max = one.iter().zip(direct.pixmap.data()).map(|(a, b)| (*a as i32 - *b as i32).abs()).max().unwrap();
+        assert!(max <= 3, "écart {}", max);
     }
 }

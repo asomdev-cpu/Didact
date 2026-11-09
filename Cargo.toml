@@ -35,3 +35,11 @@ flate2 = "1"
 cpal = "0.16"
 symphonia = { version = "0.5", features = ["all"] }
 base64 = "0.22"
+
+# `cargo run` sans --release : Didact optimisé quand même (sinon la 3D est 10 à 30 fois plus lente),
+# et ses dépendances (dessin, LaTeX, son) compilées à pleine vitesse
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

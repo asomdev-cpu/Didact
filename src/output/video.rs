@@ -130,7 +130,7 @@ pub fn export(
         for i in 0..total {
             let t = holds.to_timeline(i as f64 / opts.fps as f64);
             let frame = timeline.frame_at(t, opts.lang.as_deref());
-            for (name, reason) in renderer::render_frame(&frame, &scene, &mut backend) {
+            for (name, reason) in renderer::render_frame_parallel(&frame, &scene, &mut backend) {
                 warnings.insert(format!("'{}' non dessinée : {}", name, reason));
             }
             if opts.subtitles {
