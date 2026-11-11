@@ -25,6 +25,7 @@ defstyle contour_epais =
 deffigure carre =
     type   : rect
     pos    : (8%, 55%)
+    anchor : bottomleft
     width  : 30%
     height : 30%
     fill   : #3B82F6

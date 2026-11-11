@@ -103,6 +103,8 @@ pub struct AxesMap {
     pub uy: f32,
     pub xrange: (f64, f64),
     pub yrange: (f64, f64),
+    /// Pas des graduations en x et en y (`step`, sinon choisi selon la fenêtre)
+    pub step: (f64, f64),
 }
 
 impl AxesMap {
@@ -236,6 +238,82 @@ pub fn figure_shapes(f: &ResolvedFigure, scene: &Scene, refs: &Refs) -> Result<V
         },
     };
 
+    let shapes = figure_shapes_inner(f, scene, refs, &look, opacity)?;
+    // `anchor` : quel point de la figure se pose sur `pos` (textes, tableaux, graphes)
+    if ANCHORED.contains(&f.ftype.as_str()) {
+        if let Some(a) = f.properties.get("anchor") {
+            let (fx, fy) = anchor_frac(&fmt_value(a))?;
+            let (x, y) = point(require(f, "pos")?, scene, refs)?;
+            return Ok(anchor_shapes(shapes, x, y, fx, fy));
+        }
+    }
+    Ok(shapes)
+}
+
+/// Types placés par `pos` dont `anchor` déplace toute la figure (le rect le gère lui-même)
+const ANCHORED: &[&str] = &["text", "equation", "latex", "raw.latex", "table", "array", "graph"];
+
+/// Les 9 points d'ancrage : fraction (horizontale, verticale) depuis le coin haut-gauche
+pub(crate) fn anchor_frac(name: &str) -> Result<(f32, f32), String> {
+    Ok(match name.trim() {
+        "topleft" => (0.0, 0.0),
+        "top" => (0.5, 0.0),
+        "topright" => (1.0, 0.0),
+        "left" => (0.0, 0.5),
+        "center" => (0.5, 0.5),
+        "right" => (1.0, 0.5),
+        "bottomleft" => (0.0, 1.0),
+        "bottom" => (0.5, 1.0),
+        "bottomright" => (1.0, 1.0),
+        other => {
+            return Err(format!(
+                "anchor '{}' invalide (topleft, top, topright, left, center, right, bottomleft, bottom, bottomright)",
+                other
+            ))
+        }
+    })
+}
+
+/// Déplace des formes pour que le point (fx, fy) de leur boîte soit en (x, y)
+fn anchor_shapes(mut shapes: Vec<Shape>, x: f32, y: f32, fx: f32, fy: f32) -> Vec<Shape> {
+    let mut b = (f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
+    for s in &shapes {
+        for c in &s.path {
+            let mut add = |px: f32, py: f32| b = (b.0.min(px), b.1.min(py), b.2.max(px), b.3.max(py));
+            match *c {
+                PathCmd::MoveTo(px, py) | PathCmd::LineTo(px, py) => add(px, py),
+                PathCmd::CubicTo(_, _, _, _, px, py) => add(px, py),
+                PathCmd::Close => {}
+            }
+        }
+    }
+    if b.0 > b.2 {
+        return shapes;
+    }
+    let (dx, dy) = (x - (b.0 + fx * (b.2 - b.0)), y - (b.1 + fy * (b.3 - b.1)));
+    for s in &mut shapes {
+        for c in &mut s.path {
+            match c {
+                PathCmd::MoveTo(px, py) | PathCmd::LineTo(px, py) => {
+                    *px += dx;
+                    *py += dy;
+                }
+                PathCmd::CubicTo(a, b2, c2, d, px, py) => {
+                    *a += dx;
+                    *b2 += dy;
+                    *c2 += dx;
+                    *d += dy;
+                    *px += dx;
+                    *py += dy;
+                }
+                PathCmd::Close => {}
+            }
+        }
+    }
+    shapes
+}
+
+fn figure_shapes_inner(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look, opacity: f32) -> Result<Vec<Shape>, String> {
     match f.ftype.as_str() {
         "line" => line(f, scene, refs, &look),
         "circle" => circle(f, scene, refs, &look),
@@ -250,6 +328,7 @@ pub fn figure_shapes(f: &ResolvedFigure, scene: &Scene, refs: &Refs) -> Result<V
         "axes" => axes(f, scene, refs, &look),
         "plot" => plot(f, scene, refs, &look),
         "grid" => grid(f, scene, refs, &look),
+        "image" => super::image::shapes(f, scene, refs, opacity),
         "graph" | "array" => Ok(super::discrete::build(f, scene, refs)?.0),
         "pixels" => {
             let axes = f.properties.get("axes").map(fmt_value).and_then(|a| refs.get(&a).and_then(|g| g.axes));
@@ -319,9 +398,17 @@ fn line(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<V
 
 fn circle(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<Vec<Shape>, String> {
     let (cx, cy) = point(require(f, "center")?, scene, refs)?;
-    let r = length(require(f, "radius")?, scene, scene.min_side())?;
+    // radius : r (cercle) ou (rx, ry) (ellipse)
+    let path = match require(f, "radius")? {
+        PropValue::Tuple(v) if v.len() == 2 => {
+            let (rx, ry) = (length_str(&v[0], scene)?, length_str(&v[1], scene)?);
+            ellipse_path(cx, cy, rx, ry)
+        }
+        PropValue::Tuple(_) => return Err("radius : un nombre, ou (rx, ry) pour une ellipse".to_string()),
+        v => circle_path(cx, cy, length(v, scene, scene.min_side())?),
+    };
     Ok(vec![Shape { glow: 0.0,
-        path: circle_path(cx, cy, r),
+        path,
         fill: look.fill,
         stroke: look.color.map(|c| (c, look.stroke)),
         image: None,
@@ -334,21 +421,20 @@ fn rect(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<V
     let w = length(require(f, "width")?, scene, scene.min_side())?;
     let h = length(require(f, "height")?, scene, scene.min_side())?;
 
-    // Sans anchor, pos est le coin bas-gauche ; anchor : center → pos est le centre
-    let (left, top) = match f.properties.get("anchor").map(fmt_value).as_deref() {
-        None => (x, y - h),
-        Some("center") => (x - w / 2.0, y - h / 2.0),
-        Some(other) => return Err(format!("anchor '{}' pas encore supporté (seulement center)", other)),
+    // pos est le centre, sauf `anchor` (bottomleft : pos est le coin bas-gauche, ...)
+    let (fx, fy) = match f.properties.get("anchor") {
+        Some(a) => anchor_frac(&fmt_value(a))?,
+        None => (0.5, 0.5),
+    };
+    let (left, top) = (x - fx * w, y - fy * h);
+    // Coins arrondis : corner_radius en % du plus petit côté de l'écran, ou en px
+    let r = match f.properties.get("corner_radius") {
+        Some(v) => length(v, scene, scene.min_side())?,
+        None => 0.0,
     };
 
     Ok(vec![Shape { glow: 0.0,
-        path: vec![
-            PathCmd::MoveTo(left, top),
-            PathCmd::LineTo(left + w, top),
-            PathCmd::LineTo(left + w, top + h),
-            PathCmd::LineTo(left, top + h),
-            PathCmd::Close,
-        ],
+        path: rounded_rect_path(left, top, w, h, r),
         fill: look.fill,
         stroke: look.color.map(|c| (c, look.stroke)),
         image: None,
@@ -360,16 +446,22 @@ fn polygon(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Resul
         PropValue::List(items) => items,
         v => return Err(format!("points doit être une liste de points, trouvé '{}'", fmt_value(v))),
     };
-    if items.len() < 3 {
-        return Err("un polygon doit avoir au moins 3 points".to_string());
+    // closed : false → ligne brisée (pas de segment de retour, pas de remplissage)
+    let closed = flag(f, "closed", true)?;
+    let min = if closed { 3 } else { 2 };
+    if items.len() < min {
+        return Err(format!("un polygon {}doit avoir au moins {} points", if closed { "" } else { "ouvert " }, min));
     }
     let mut path = Vec::new();
     for (i, item) in items.iter().enumerate() {
         let (x, y) = resolve_point(item, scene, refs)?;
         path.push(if i == 0 { PathCmd::MoveTo(x, y) } else { PathCmd::LineTo(x, y) });
     }
-    path.push(PathCmd::Close);
-    Ok(vec![Shape { glow: 0.0, path, fill: look.fill, stroke: look.color.map(|c| (c, look.stroke)), image: None }])
+    if closed {
+        path.push(PathCmd::Close);
+    }
+    let fill = if closed { look.fill } else { None };
+    Ok(vec![Shape { glow: 0.0, path, fill, stroke: look.color.map(|c| (c, look.stroke)), image: None }])
 }
 
 fn arc(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<Vec<Shape>, String> {
@@ -424,8 +516,13 @@ fn star(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<V
         None => 5,
         Some(v) => return Err(format!("points d'une star doit être un entier ≥ 3, trouvé '{}'", fmt_value(v))),
     };
-    // Rapport rayon intérieur / extérieur d'une étoile régulière à 5 branches
-    let inner = outer * 0.382;
+    // Rayon intérieur / extérieur : `inner` (défaut 0.382, étoile régulière à 5 branches)
+    let ratio = match f.properties.get("inner") {
+        Some(PropValue::Number(n)) if *n > 0.0 && *n < 1.0 => *n as f32,
+        None => 0.382,
+        Some(v) => return Err(format!("inner : rapport rayon intérieur / extérieur entre 0 et 1 (ex : 0.5), trouvé '{}'", fmt_value(v))),
+    };
+    let inner = outer * ratio;
 
     let mut path = Vec::with_capacity(2 * n + 1);
     for i in 0..2 * n {
@@ -437,6 +534,58 @@ fn star(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<V
     }
     path.push(PathCmd::Close);
     Ok(vec![Shape { glow: 0.0, path, fill: look.fill, stroke: look.color.map(|c| (c, look.stroke)), image: None }])
+}
+
+/// Formes des points d'un scatter
+const MARKERS: &[&str] = &["circle", "square", "diamond", "triangle", "cross", "plus"];
+
+/// Un marqueur de « rayon » r centré en (x, y) ; même surface apparente à peu près pour tous
+fn marker_shape(marker: &str, x: f32, y: f32, r: f32, color: Option<Rgba>) -> Shape {
+    let poly = |pts: &[(f32, f32)]| {
+        let mut p: Vec<PathCmd> = pts
+            .iter()
+            .enumerate()
+            .map(|(i, &(dx, dy))| if i == 0 { PathCmd::MoveTo(x + dx, y + dy) } else { PathCmd::LineTo(x + dx, y + dy) })
+            .collect();
+        p.push(PathCmd::Close);
+        p
+    };
+    let filled = |path| Shape { glow: 0.0, path, fill: color, stroke: None, image: None };
+    // Croix : deux traits, épaisseur proportionnelle à la taille
+    let lines = |segs: [(f32, f32, f32, f32); 2]| Shape {
+        glow: 0.0,
+        path: segs
+            .iter()
+            .flat_map(|&(a, b, c, d)| [PathCmd::MoveTo(x + a, y + b), PathCmd::LineTo(x + c, y + d)])
+            .collect(),
+        fill: None,
+        stroke: color.map(|c| (c, r * 0.45)),
+        image: None,
+    };
+    match marker {
+        "square" => {
+            let a = r * 0.886; // même aire que le disque
+            filled(poly(&[(-a, -a), (a, -a), (a, a), (-a, a)]))
+        }
+        "diamond" => {
+            let a = r * 1.25;
+            filled(poly(&[(0.0, -a), (a, 0.0), (0.0, a), (-a, 0.0)]))
+        }
+        "triangle" => {
+            // pointe vers le haut (y pixel vers le bas)
+            let a = r * 1.35;
+            filled(poly(&[(0.0, -a), (a * 0.866, a * 0.5), (-a * 0.866, a * 0.5)]))
+        }
+        "cross" => {
+            let a = r * 0.9;
+            lines([(-a, -a, a, a), (-a, a, a, -a)])
+        }
+        "plus" => {
+            let a = r * 1.1;
+            lines([(-a, 0.0, a, 0.0), (0.0, -a, 0.0, a)])
+        }
+        _ => filled(circle_path(x, y, r)),
+    }
 }
 
 /// Taille de police par défaut (px de la scène de référence)
@@ -572,6 +721,7 @@ pub fn axes_map(f: &ResolvedFigure, scene: &Scene, refs: &Refs) -> Result<AxesMa
     let (w, h) = (span_x * ux, span_y * uy);
     let area_left = left + (box_w - w) / 2.0;
     let area_bottom = bottom - (box_h - h) / 2.0;
+    let step = tick_steps(f, xrange, yrange)?;
     Ok(AxesMap {
         ox: area_left - xrange.0 as f32 * ux,
         oy: area_bottom + yrange.0 as f32 * uy,
@@ -579,7 +729,62 @@ pub fn axes_map(f: &ResolvedFigure, scene: &Scene, refs: &Refs) -> Result<AxesMa
         uy,
         xrange,
         yrange,
+        step,
     })
+}
+
+/// Pas des graduations d'un repère : `step : 0.5`, `step : pi/2`, `step : (pi/2, 0.5)`,
+/// `auto` (défaut : 1, 2 ou 5 × 10^k selon la fenêtre, suit le zoom)
+fn tick_steps(f: &ResolvedFigure, xr: (f64, f64), yr: (f64, f64)) -> Result<(f64, f64), String> {
+    let one = |s: &str, span: f64| -> Result<f64, String> {
+        let s = s.trim();
+        if s == "auto" {
+            return Ok(nice_step(span));
+        }
+        let e = super::expr::parse_with(s, &[]).map_err(|e| format!("step '{}' : {}", s, e))?;
+        let v = e.eval(0.0, &HashMap::new());
+        if v.is_finite() && v > 0.0 {
+            Ok(v)
+        } else {
+            Err(format!("step '{}' : un pas positif (ex : 0.5, pi/2, auto)", s))
+        }
+    };
+    let (sx, sy) = (xr.1 - xr.0, yr.1 - yr.0);
+    match f.properties.get("step") {
+        None => Ok((nice_step(sx), nice_step(sy))),
+        Some(PropValue::Number(n)) => Ok((one(&n.to_string(), sx)?, one(&n.to_string(), sy)?)),
+        Some(PropValue::Tuple(v)) if v.len() == 2 => Ok((one(&v[0], sx)?, one(&v[1], sy)?)),
+        Some(v) => {
+            let s = fmt_value(v);
+            Ok((one(&s, sx)?, one(&s, sy)?))
+        }
+    }
+}
+
+/// Une graduation : en multiples de π si le pas en est un (π/2, π/3, ...), sinon un nombre
+fn fmt_tick(v: f64, step: f64) -> String {
+    let pi = std::f64::consts::PI;
+    if let Some(q) = (1..=12).find(|q| {
+        let n = step / pi * *q as f64;
+        n.round() >= 1.0 && (n - n.round()).abs() < 1e-9
+    }) {
+        // v = (p/q) π
+        let p = (v / pi * q as f64).round() as i64;
+        let g = gcd(p.unsigned_abs(), q as u64) as i64;
+        let (p, q) = (p / g.max(1), q as i64 / g.max(1));
+        let sign = if p < 0 { "−" } else { "" };
+        let num = match p.abs() {
+            0 => return "0".into(),
+            1 => "π".to_string(),
+            n => format!("{}π", n),
+        };
+        return if q == 1 { format!("{}{}", sign, num) } else { format!("{}{}/{}", sign, num, q) };
+    }
+    fmt_number(v, decimals_for(step).max(4))
+}
+
+fn gcd(a: u64, b: u64) -> u64 {
+    if b == 0 { a } else { gcd(b, a % b) }
 }
 
 /// Fenêtre d'un repère : xrange × yrange, recentrée sur `center : (x, y)` et agrandie
@@ -612,9 +817,8 @@ fn nice_step(span: f64) -> f64 {
     nice * mag
 }
 
-/// Valeurs des graduations dans [a, b]
-fn ticks_in(a: f64, b: f64) -> Vec<f64> {
-    let step = nice_step(b - a);
+/// Valeurs des graduations dans [a, b], tous les `step`
+fn ticks_in(a: f64, b: f64, step: f64) -> Vec<f64> {
     let first = (a / step - 1e-9).ceil() as i64;
     let last = (b / step + 1e-9).floor() as i64;
     if last - first > 1000 {
@@ -656,11 +860,11 @@ fn axes(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<V
     if flag(f, "grid", false)? {
         let grid = Rgba { r: 0.85, g: 0.87, b: 0.9, a: color.a };
         let mut path = Vec::new();
-        for x in ticks_in(xa, xb) {
+        for x in ticks_in(xa, xb, m.step.0) {
             let (a, b) = (m.to_px(x, ya), m.to_px(x, yb));
             path.extend([PathCmd::MoveTo(a.0, a.1), PathCmd::LineTo(b.0, b.1)]);
         }
-        for y in ticks_in(ya, yb) {
+        for y in ticks_in(ya, yb, m.step.1) {
             let (a, b) = (m.to_px(xa, y), m.to_px(xb, y));
             path.extend([PathCmd::MoveTo(a.0, a.1), PathCmd::LineTo(b.0, b.1)]);
         }
@@ -683,21 +887,21 @@ fn axes(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<V
     // Graduations et nombres (sauf au croisement des axes)
     if flag(f, "ticks", true)? {
         let mut path = Vec::new();
-        for x in ticks_in(xa, xb) {
-            if x == x0 || (x - xb).abs() < nice_step(xb - xa) * 1e-6 {
+        for x in ticks_in(xa, xb, m.step.0) {
+            if x == x0 || (x - xb).abs() < m.step.0 * 1e-6 {
                 continue;
             }
             let (px, py) = m.to_px(x, y0);
             path.extend([PathCmd::MoveTo(px, py - tick), PathCmd::LineTo(px, py + tick)]);
-            shapes.extend(super::text::text_shapes(&fmt_number(x, decimals_for(nice_step(xb - xa)).max(4)), px, py + tick + font * 0.8, font, super::text::Align::Center, color)?);
+            shapes.extend(super::text::text_shapes(&fmt_tick(x, m.step.0), px, py + tick + font * 0.8, font, super::text::Align::Center, color)?);
         }
-        for y in ticks_in(ya, yb) {
-            if y == y0 || (y - yb).abs() < nice_step(yb - ya) * 1e-6 {
+        for y in ticks_in(ya, yb, m.step.1) {
+            if y == y0 || (y - yb).abs() < m.step.1 * 1e-6 {
                 continue;
             }
             let (px, py) = m.to_px(x0, y);
             path.extend([PathCmd::MoveTo(px - tick, py), PathCmd::LineTo(px + tick, py)]);
-            shapes.extend(super::text::text_shapes(&fmt_number(y, decimals_for(nice_step(yb - ya)).max(4)), px - tick - font * 0.4, py, font, super::text::Align::Right, color)?);
+            shapes.extend(super::text::text_shapes(&fmt_tick(y, m.step.1), px - tick - font * 0.4, py, font, super::text::Align::Right, color)?);
         }
         shapes.push(Shape { glow: 0.0, path, fill: None, stroke: Some((color, look.stroke * 0.75)), image: None });
     }
@@ -784,7 +988,7 @@ fn grid(f: &ResolvedFigure, _scene: &Scene, refs: &Refs, look: &Look) -> Result<
     let (sx, sy) = match f.properties.get("step") {
         None => (1.0, 1.0),
         // Comme les graduations : suit le zoom
-        Some(PropValue::Single(a)) if a == "auto" => (nice_step(xb - xa), nice_step(yb - ya)),
+        Some(PropValue::Single(a)) if a == "auto" => m.step,
         Some(PropValue::Number(n)) => (*n, *n),
         Some(PropValue::Tuple(v)) if v.len() == 2 => {
             let p = |s: &str| s.trim().parse::<f64>().map_err(|_| format!("step invalide '{}'", s));
@@ -929,6 +1133,10 @@ fn scatter(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Resul
         None => 6.0 * scene.px_scale,
     };
     let fill = look.fill.or(look.color);
+    let marker = f.properties.get("marker").map(fmt_value).unwrap_or_else(|| "circle".into());
+    if !MARKERS.contains(&marker.as_str()) {
+        return Err(format!("marker '{}' inconnu ({})", marker, MARKERS.join(", ")));
+    }
     let mut shapes = Vec::new();
     for item in items {
         let inside = item.trim().trim_start_matches('(').trim_end_matches(')');
@@ -938,7 +1146,7 @@ fn scatter(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Resul
             return Err(format!("point invalide '{}', attendu (x, y)", item));
         }
         let (px, py) = m.to_px(parts[0], parts[1]);
-        shapes.push(Shape { glow: 0.0, path: circle_path(px, py, r), fill, stroke: None, image: None });
+        shapes.push(marker_shape(&marker, px, py, r, fill));
     }
     Ok(shapes)
 }
@@ -1043,13 +1251,46 @@ pub(crate) fn arrow_head(x: f32, y: f32, dx: f32, dy: f32, len: f32, color: Rgba
 
 /// Cercle exact à 0,03 % près avec 4 courbes de Bézier
 pub(crate) fn circle_path(cx: f32, cy: f32, r: f32) -> Vec<PathCmd> {
-    let k = 0.552_284_8 * r;
+    ellipse_path(cx, cy, r, r)
+}
+
+/// Ellipse de demi-axes rx (horizontal) et ry (vertical) : 4 arcs de Bézier
+pub(crate) fn ellipse_path(cx: f32, cy: f32, rx: f32, ry: f32) -> Vec<PathCmd> {
+    let (kx, ky) = (0.552_284_8 * rx, 0.552_284_8 * ry);
     vec![
-        PathCmd::MoveTo(cx + r, cy),
-        PathCmd::CubicTo(cx + r, cy + k, cx + k, cy + r, cx, cy + r),
-        PathCmd::CubicTo(cx - k, cy + r, cx - r, cy + k, cx - r, cy),
-        PathCmd::CubicTo(cx - r, cy - k, cx - k, cy - r, cx, cy - r),
-        PathCmd::CubicTo(cx + k, cy - r, cx + r, cy - k, cx + r, cy),
+        PathCmd::MoveTo(cx + rx, cy),
+        PathCmd::CubicTo(cx + rx, cy + ky, cx + kx, cy + ry, cx, cy + ry),
+        PathCmd::CubicTo(cx - kx, cy + ry, cx - rx, cy + ky, cx - rx, cy),
+        PathCmd::CubicTo(cx - rx, cy - ky, cx - kx, cy - ry, cx, cy - ry),
+        PathCmd::CubicTo(cx + kx, cy - ry, cx + rx, cy - ky, cx + rx, cy),
+        PathCmd::Close,
+    ]
+}
+
+/// Rectangle aux coins arrondis de rayon r (r = 0 : coins droits)
+fn rounded_rect_path(left: f32, top: f32, w: f32, h: f32, r: f32) -> Vec<PathCmd> {
+    let r = r.clamp(0.0, w.abs().min(h.abs()) / 2.0);
+    let (right, bottom) = (left + w, top + h);
+    if r <= 0.0 {
+        return vec![
+            PathCmd::MoveTo(left, top),
+            PathCmd::LineTo(right, top),
+            PathCmd::LineTo(right, bottom),
+            PathCmd::LineTo(left, bottom),
+            PathCmd::Close,
+        ];
+    }
+    let k = (1.0 - 0.552_284_8) * r;
+    vec![
+        PathCmd::MoveTo(left + r, top),
+        PathCmd::LineTo(right - r, top),
+        PathCmd::CubicTo(right - k, top, right, top + k, right, top + r),
+        PathCmd::LineTo(right, bottom - r),
+        PathCmd::CubicTo(right, bottom - k, right - k, bottom, right - r, bottom),
+        PathCmd::LineTo(left + r, bottom),
+        PathCmd::CubicTo(left + k, bottom, left, bottom - k, left, bottom - r),
+        PathCmd::LineTo(left, top + r),
+        PathCmd::CubicTo(left, top + k, left + k, top, left + r, top),
         PathCmd::Close,
     ]
 }
@@ -1181,15 +1422,20 @@ fn point_str(s: &str, scene: &Scene) -> Result<(f32, f32), String> {
     Ok((coord(parts[0], scene, true)?, coord(parts[1], scene, false)?))
 }
 
-/// Une coordonnée : "20%" (de la largeur ou de la hauteur) ou un nombre de px.
+/// Une coordonnée : "20%" (de la largeur ou de la hauteur). Pas de pixels absolus : l'image
+/// doit rester la même quelle que soit la taille de l'écran (0 est accepté, = 0%).
 /// y est converti : origine en bas (Didact) → origine en haut (pixels).
 fn coord(s: &str, scene: &Scene, is_x: bool) -> Result<f32, String> {
     let base = if is_x { scene.width } else { scene.height };
-    let v = if let Some(p) = s.strip_suffix('%') {
-        p.parse::<f32>().map_err(|_| format!("pourcentage invalide '{}'", s))? / 100.0 * base
-    } else {
-        let px = s.strip_suffix("px").unwrap_or(s);
-        px.parse::<f32>().map_err(|_| format!("coordonnée invalide '{}'", s))? * scene.px_scale
+    let v = match s.trim().strip_suffix('%') {
+        Some(p) => p.trim().parse::<f32>().map_err(|_| format!("pourcentage invalide '{}'", s))? / 100.0 * base,
+        None if s.trim().parse::<f32>() == Ok(0.0) => 0.0,
+        None => {
+            return Err(format!(
+                "position '{}' : les positions sont en % de l'écran (ex : 20%), ou dans un repère : repere(x, y)",
+                s
+            ))
+        }
     };
     Ok(if is_x { v } else { scene.height - v })
 }
@@ -1210,10 +1456,16 @@ pub(crate) fn length(v: &PropValue, scene: &Scene, base: f32) -> Result<f32, Str
     }
 }
 
-/// Angle en degrés : 90, "90deg" ou angle(fig)
-fn angle(v: &PropValue, refs: &Refs) -> Result<f32, String> {
+/// Angle en degrés : 90, "90deg", "1.57rad" ou angle(fig)
+pub(crate) fn angle(v: &PropValue, refs: &Refs) -> Result<f32, String> {
     match v {
         PropValue::Number(n) => Ok(*n as f32),
+        PropValue::Single(s) if s.ends_with("rad") => s
+            .trim_end_matches("rad")
+            .trim()
+            .parse::<f32>()
+            .map(f32::to_degrees)
+            .map_err(|_| format!("angle invalide '{}'", s)),
         PropValue::Single(s) if s.ends_with("deg") => s
             .trim_end_matches("deg")
             .parse()
@@ -1226,7 +1478,7 @@ fn angle(v: &PropValue, refs: &Refs) -> Result<f32, String> {
     }
 }
 
-/// Couleur : nom (red), hexadécimal (#F00, #FF0000, #FF000080) ou none.
+/// Couleur : nom (red), hexadécimal (#F00, #FF0000, #FF000080), hsl(200, 80%, 50%) ou none.
 /// `Ok(None)` = none (pas de couleur).
 pub fn parse_color(s: &str) -> Result<Option<Rgba>, String> {
     let s = s.trim();
@@ -1245,6 +1497,9 @@ pub fn parse_color(s: &str) -> Result<Option<Rgba>, String> {
             _ => None,
         };
         return c.map(Some).ok_or_else(|| format!("couleur hexadécimale invalide '{}'", s));
+    }
+    if let Some(inside) = s.strip_prefix("hsl(").and_then(|r| r.strip_suffix(')')) {
+        return hsl(inside).map(Some).map_err(|e| format!("couleur '{}' : {}", s, e));
     }
     let (r, g, b) = match s {
         "black" => (0, 0, 0),
@@ -1266,6 +1521,36 @@ pub fn parse_color(s: &str) -> Result<Option<Rgba>, String> {
     Ok(Some(Rgba::rgb8(r, g, b)))
 }
 
+/// `hsl(h, s%, l%)` ou `hsl(h, s%, l%, a)` : teinte en degrés, saturation et luminosité
+/// en %, opacité entre 0 et 1 (ou en %)
+fn hsl(inside: &str) -> Result<Rgba, String> {
+    let args: Vec<&str> = inside.split(',').map(str::trim).collect();
+    if !(3..=4).contains(&args.len()) {
+        return Err("attendu hsl(teinte, saturation%, luminosité%) ou hsl(t, s%, l%, opacité)".into());
+    }
+    let num = |a: &str, pct: bool| -> Result<f64, String> {
+        let (body, is_pct) = match a.strip_suffix('%') {
+            Some(b) => (b.trim(), true),
+            None => (a.strip_suffix("deg").unwrap_or(a).trim(), false),
+        };
+        let v: f64 = body.parse().map_err(|_| format!("nombre invalide '{}'", a))?;
+        Ok(if is_pct || pct { v / 100.0 } else { v })
+    };
+    let h = num(args[0], false)?.rem_euclid(360.0);
+    let (sat, l) = (num(args[1], true)?.clamp(0.0, 1.0), num(args[2], true)?.clamp(0.0, 1.0));
+    let a = match args.get(3) {
+        Some(a) => num(a, false)?.clamp(0.0, 1.0),
+        None => 1.0,
+    };
+    // Conversion standard (CSS)
+    let f = |n: f64| {
+        let k = (n + h / 30.0) % 12.0;
+        l - sat * l.min(1.0 - l) * (k - 3.0).min(9.0 - k).clamp(-1.0, 1.0)
+    };
+    let c = Rgba::rgb8((f(0.0) * 255.0).round() as u8, (f(8.0) * 255.0).round() as u8, (f(4.0) * 255.0).round() as u8);
+    Ok(Rgba { a: a as f32, ..c })
+}
+
 // ─────────────────────────────────────────────
 //  TESTS
 // ─────────────────────────────────────────────
@@ -1279,11 +1564,83 @@ mod tests {
     }
 
     #[test]
+    fn graduations_en_pi() {
+        let pi = std::f64::consts::PI;
+        assert_eq!(fmt_tick(pi / 2.0, pi / 2.0), "π/2");
+        assert_eq!(fmt_tick(pi, pi / 2.0), "π");
+        assert_eq!(fmt_tick(-3.0 * pi / 2.0, pi / 2.0), "−3π/2");
+        assert_eq!(fmt_tick(2.0 * pi / 3.0, pi / 3.0), "2π/3");
+        assert_eq!(fmt_tick(0.0, pi / 4.0), "0");
+        assert_eq!(fmt_tick(2.0 * pi, pi), "2π");
+        assert_eq!(fmt_tick(1.5, 0.5), "1.5");
+        assert_eq!(fmt_tick(-2.0, 1.0), "−2");
+        assert_eq!(ticks_in(-1.0, 1.0, 0.5), vec![-1.0, -0.5, 0.0, 0.5, 1.0]);
+    }
+
+    #[test]
+    fn coins_arrondis_et_ellipse() {
+        // Coins droits : 4 coins ; arrondis : 4 arcs, rayon limité à la moitié du plus petit côté
+        assert_eq!(rounded_rect_path(0.0, 0.0, 10.0, 4.0, 0.0).len(), 5);
+        let p = rounded_rect_path(0.0, 0.0, 10.0, 4.0, 99.0);
+        assert_eq!(p.iter().filter(|c| matches!(c, PathCmd::CubicTo(..))).count(), 4);
+        assert_eq!(p[0], PathCmd::MoveTo(2.0, 0.0));
+        let e = ellipse_path(0.0, 0.0, 3.0, 1.0);
+        assert_eq!(e[0], PathCmd::MoveTo(3.0, 0.0));
+        assert!(matches!(e[1], PathCmd::CubicTo(_, _, _, _, x, y) if x == 0.0 && y == 1.0));
+    }
+
+    #[test]
+    fn marqueurs() {
+        for m in MARKERS {
+            let s = marker_shape(m, 10.0, 10.0, 2.0, Some(Rgba::BLACK));
+            assert!(!s.path.is_empty(), "{}", m);
+            // les croix sont des traits, les autres des surfaces
+            assert_eq!(s.stroke.is_some(), matches!(*m, "cross" | "plus"), "{}", m);
+        }
+    }
+
+    #[test]
+    fn ancres() {
+        assert_eq!(anchor_frac("center").unwrap(), (0.5, 0.5));
+        assert_eq!(anchor_frac("bottomright").unwrap(), (1.0, 1.0));
+        assert!(anchor_frac("milieu").is_err());
+        // Carré [0,10]² : son coin haut-droit amené en (100, 50)
+        let sq = Shape {
+            path: vec![PathCmd::MoveTo(0.0, 0.0), PathCmd::LineTo(10.0, 0.0), PathCmd::LineTo(10.0, 10.0), PathCmd::Close],
+            fill: None,
+            stroke: None,
+            glow: 0.0,
+            image: None,
+        };
+        let (fx, fy) = anchor_frac("topright").unwrap();
+        let out = anchor_shapes(vec![sq], 100.0, 50.0, fx, fy);
+        assert_eq!(out[0].path[0], PathCmd::MoveTo(90.0, 50.0));
+        assert_eq!(out[0].path[2], PathCmd::LineTo(100.0, 60.0));
+    }
+
+    #[test]
+    fn couleurs_hsl() {
+        let c = |s: &str| parse_color(s).unwrap().unwrap();
+        assert_eq!(c("hsl(0, 100%, 50%)"), Rgba::rgb8(255, 0, 0));
+        assert_eq!(c("hsl(120, 100%, 25%)"), Rgba::rgb8(0, 128, 0));
+        assert_eq!(c("hsl(240deg, 100%, 50%)"), Rgba::rgb8(0, 0, 255));
+        assert_eq!(c("hsl(-120, 100%, 50%)"), Rgba::rgb8(0, 0, 255));
+        assert_eq!(c("hsl(0, 0%, 100%)"), Rgba::rgb8(255, 255, 255));
+        assert_eq!(c("hsl(60, 100%, 50%, 0.5)").a, 0.5);
+        assert_eq!(c("hsl(60, 100%, 50%, 25%)").a, 0.25);
+        assert!(parse_color("hsl(1, 2)").is_err());
+        assert!(parse_color("hsl(a, 50%, 50%)").is_err());
+    }
+
+    #[test]
     fn coordonnees_origine_en_bas() {
         let s = scene();
         assert_eq!(coord("0%", &s, false).unwrap(), 500.0); // bas de la scène
         assert_eq!(coord("100%", &s, false).unwrap(), 0.0); // haut
         assert_eq!(coord("25%", &s, true).unwrap(), 250.0);
+        assert_eq!(coord("0", &s, true).unwrap(), 0.0);
+        assert!(coord("200px", &s, true).unwrap_err().contains("en %"));
+        assert!(coord("3", &s, true).is_err());
     }
 
     #[test]

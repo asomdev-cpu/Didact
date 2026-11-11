@@ -18,7 +18,7 @@ const TEXT_PROPS: &[&str] = &[
 ];
 
 /// Unités acceptées après une expression
-const UNITS: &[&str] = &["px", "%", "deg"];
+const UNITS: &[&str] = &["px", "%", "deg", "rad"];
 
 /// L'expression sans son unité : "(k+1)px" → "(k+1)"
 pub fn strip_unit(s: &str) -> &str {
@@ -145,6 +145,25 @@ fn point_value(s: &str, names: &[String], vals: &HashMap<String, f64>) -> Option
     changed.then(|| format!("({})", vals.join(",")))
 }
 
+/// Couleur `hsl(...)` dont les composantes sont des expressions : `hsl(360*t, 80%, 50%)`
+fn color_value(s: &str, names: &[String], vals: &HashMap<String, f64>) -> Option<PropValue> {
+    let inside = s.trim().strip_prefix("hsl(")?.strip_suffix(')')?;
+    let call = format!("p({})", inside);
+    let (_, args) = super::geometry::split_call(&call);
+    let mut changed = false;
+    let parts: Vec<String> = args
+        .iter()
+        .map(|a| match item_value(a, names, vals) {
+            Some(v) => {
+                changed = true;
+                v
+            }
+            None => a.to_string(),
+        })
+        .collect();
+    changed.then(|| PropValue::Single(format!("hsl({})", parts.join(", "))))
+}
+
 /// La figure avec ses expressions de paramètres calculées et ses `#{...}` remplacés ;
 /// None si elle n'en a pas
 pub fn bind(fig: &ResolvedFigure, vals: &HashMap<String, f64>) -> Result<Option<ResolvedFigure>, String> {
@@ -166,6 +185,7 @@ pub fn bind(fig: &ResolvedFigure, vals: &HashMap<String, f64>) -> Result<Option<
                 Some(PropValue::List(r.map_err(|e| format!("{} : {}", key, e))?))
             }
             _ if text => None,
+            PropValue::Single(s) if s.trim_start().starts_with("hsl(") => color_value(s, &names, vals),
             PropValue::Single(s) => param_expr(s, &names).map(|(e, unit)| {
                 let n = e.eval(0.0, vals);
                 match unit {
@@ -219,6 +239,15 @@ mod tests {
         for s in ["3", "2px", "50%", "red", "#FF0000", "ease-in-out", "sin(k*x)", "center(a)", "repere(k, 1)"] {
             assert!(v(s).is_none(), "{}", s);
         }
+    }
+
+    #[test]
+    fn couleur_hsl_parametree() {
+        let vals: HashMap<String, f64> = [("k".to_string(), 0.5), ("n".to_string(), 2.0)].into();
+        let v = |s: &str| color_value(s, &names(), &vals);
+        assert_eq!(v("hsl(360*k, 80%, 50%)"), Some(PropValue::Single("hsl(180, 80%, 50%)".into())));
+        assert_eq!(v("hsl(0, (40*n)%, 50%, k)"), Some(PropValue::Single("hsl(0, 80%, 50%, 0.5)".into())));
+        assert_eq!(v("hsl(0, 80%, 50%)"), None);
     }
 
     #[test]

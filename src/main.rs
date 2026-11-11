@@ -140,6 +140,8 @@ fn main() {
     let content = fs::read_to_string(&filename).unwrap_or_else(|e| {
         fail(&format!("Erreur lors de la lecture du fichier '{}': {}", filename, e))
     });
+    // Les fichiers des figures `image` sont cherchés à côté du .dct
+    didact::renderer::image::set_base_dir(std::path::Path::new(&filename).parent().unwrap_or(std::path::Path::new("")));
 
     // ── Vérification seule (--check) ──
     if check_mode {
@@ -149,11 +151,20 @@ fn main() {
         } else if diags.is_empty() {
             println!("✓ {} : aucun problème", filename);
         } else {
-            let errors = diags.iter().filter(|d| d.severity == check::Severity::Error).count();
-            println!("{} : {} erreur(s), {} avertissement(s)", filename, errors, diags.len() - errors);
-            for d in &diags {
-                let mark = if d.severity == check::Severity::Error { "✗" } else { "⚠" };
-                println!("  {} {}", mark, d.to_text());
+            let count = |s| diags.iter().filter(|d| d.severity == s).count();
+            let (errors, warnings, infos) =
+                (count(check::Severity::Error), count(check::Severity::Warning), count(check::Severity::Info));
+            println!("{} : {} erreur(s), {} avertissement(s), {} remarque(s)", filename, errors, warnings, infos);
+            // Erreurs, puis avertissements, puis remarques
+            for sev in [check::Severity::Error, check::Severity::Warning, check::Severity::Info] {
+                for d in diags.iter().filter(|d| d.severity == sev) {
+                    let mark = match sev {
+                        check::Severity::Error => "✗",
+                        check::Severity::Warning => "⚠",
+                        check::Severity::Info => "·",
+                    };
+                    println!("  {} {}", mark, d.to_text());
+                }
             }
         }
         std::process::exit(check::exit_code(&diags));
@@ -326,6 +337,13 @@ fn audio_files(timeline: &runtime::Timeline, source: &std::path::Path) -> Vec<(S
             files.push((seg.file.clone(), base.join(&seg.file)));
         }
     }
+    // Images (type `image`) : incluses de la même façon dans une page autonome
+    for file in didact::renderer::image::files(timeline.figures()) {
+        if !files.iter().any(|(f, _)| *f == file) {
+            let path = base.join(&file);
+            files.push((file, path));
+        }
+    }
     files
 }
 
@@ -394,7 +412,8 @@ fn print_summary(resolved: &resolver::ResolvedDocument, timeline: &runtime::Time
             println!("              comment  : \"{}\"", c);
         }
         for a in &frame.audio {
-            println!("              audio    : {} (volume {}, à {:.3}s)", a.file, a.volume, a.position);
+            let boucle = if a.looping { ", en boucle" } else { "" };
+            println!("              audio    : {} (volume {}, à {:.3}s{})", a.file, a.volume, a.position, boucle);
         }
     }
 }

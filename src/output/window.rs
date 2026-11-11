@@ -281,6 +281,7 @@ impl DidactApp {
         };
         self.reload_errors.clear();
         self.warned.clear();
+        crate::renderer::image::forget(); // une image a pu changer aussi
         self.last_drawn = None; // le fichier a changé : à redessiner
 
         let t_timeline = self.holds_of(self.lang_idx()).to_timeline(self.t);

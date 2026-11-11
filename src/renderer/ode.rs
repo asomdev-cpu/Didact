@@ -9,7 +9,7 @@
 //!     duration : t              # temps d'intégration (un paramètre animé la fait grandir)
 //! ```
 //!
-//! Avec `count : n`, n trajectoires, `init` dépendant de `k` (0 à n - 1) : portrait de phase,
+//! Avec `count : n`, n trajectoires, `init` dépendant de `k` (1 à n) : portrait de phase,
 //! nuage de particules (`init : (randn(k), randn(k, 1))`, `trail : 0.5`, `head : 4px`).
 //!
 //! Les solutions sont gardées d'une image à l'autre : quand `duration` grandit, elles sont
@@ -114,7 +114,7 @@ fn integrate(sys: &System, steps: usize) -> Vec<Vec<V3>> {
         }
     };
     let mut curves = Vec::with_capacity(sys.count);
-    for k in 0..sys.count {
+    for k in 1..=sys.count {
         let mut s = [0.0f64; 6];
         for (i, init) in sys.init.iter().enumerate() {
             s[i] = init(&[k as f64]);
@@ -285,7 +285,8 @@ mod tests {
         let (c, _) = curves(&f, &HashMap::new(), 2).unwrap();
         assert_eq!(c.len(), 3);
         assert_eq!(c[2].len(), 51); // de t = 0,5 à t = 1
-        assert!((c[2].last().unwrap()[0] - 2.0 * (-1f64).exp()).abs() < 1e-8);
+        // k va de 1 à n : la troisième part de x = 3
+        assert!((c[2].last().unwrap()[0] - 3.0 * (-1f64).exp()).abs() < 1e-8);
     }
 
     #[test]

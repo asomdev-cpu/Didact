@@ -24,6 +24,7 @@ const FIGURE_TYPES: &[&str] = &[
     "line", "circle", "rect", "polygon", "arc", "star",
     "text", "equation", "latex", "table",
     "axes", "plot", "scatter", "histogram", "grid", "contour", "region", "pixels", "trajectory", "graph", "array",
+    "image",
     "raw.latex", "raw.matplotlib",
     "group",
     "scene3d", "surface", "curve3d", "iterate", "arrow", "field",
@@ -83,6 +84,8 @@ struct Validator {
     figure_refs: HashMap<String, Vec<String>>,
     /// Membres de chaque groupe (groupes imbriqués compris)
     groups: HashMap<String, Vec<String>>,
+    /// Groupe direct de chaque figure (une figure n'est que dans un groupe) : (groupe, ligne)
+    group_of: HashMap<String, (String, usize)>,
     /// Noms des paramètres (`defparam`)
     params: Vec<String>,
     /// Valeurs de départ des paramètres (pour composer un texte qui contient `#{...}`)
@@ -103,6 +106,7 @@ pub fn validate(doc: &Document) -> Result<(), Vec<String>> {
         defs: HashMap::new(),
         figure_refs: HashMap::new(),
         groups: HashMap::new(),
+        group_of: HashMap::new(),
         params: doc.params.iter().map(|p| p.name.clone()).collect(),
         param_values: doc.params.iter().map(|p| (p.name.clone(), p.value)).collect(),
         typeset: HashMap::new(),
@@ -440,6 +444,22 @@ impl Validator {
                 self.error(line_of(&key), format!("'{}' : {}", f.name, msg));
             }
 
+            if ftype == "image" {
+                for (key, msg) in crate::renderer::image::check(&merged) {
+                    self.error(line_of(&key), format!("'{}' : {}", f.name, msg));
+                }
+            }
+
+            // anchor : un des 9 points, et seulement là où il a un sens
+            if let Some(v) = merged.get("anchor") {
+                let placed = ["rect", "image", "text", "equation", "latex", "raw.latex", "table", "array", "graph"];
+                if let Err(e) = crate::renderer::geometry::anchor_frac(&crate::resolver::fmt_value(v)) {
+                    self.error(line_of("anchor"), format!("'{}' : {}", f.name, e));
+                } else if !placed.contains(&ftype) {
+                    self.error(line_of("anchor"), format!("'{}' : anchor ne s'applique pas à un {} ({})", f.name, ftype, placed.join(", ")));
+                }
+            }
+
             // Courbes de niveau et régions : formules en x et y
             for (key, msg) in crate::renderer::contour::check(ftype, &merged, &self.params) {
                 self.error(line_of(&key), format!("'{}' : {}", f.name, msg));
@@ -500,6 +520,23 @@ impl Validator {
                 // membres, groupes imbriqués compris (ils sont définis plus haut)
                 let mut members = Vec::new();
                 for item in items {
+                    // Une figure n'appartient qu'à un groupe (un groupe peut en contenir un autre)
+                    match self.group_of.get(item) {
+                        Some((g, _)) if *g == f.name => self.error(
+                            line_of("items"),
+                            format!("groupe '{}' : '{}' apparaît deux fois dans `items`", f.name, item),
+                        ),
+                        Some((g, l)) => self.error(
+                            line_of("items"),
+                            format!(
+                                "groupe '{}' : '{}' est déjà dans le groupe '{}' (ligne {}) ; une figure n'appartient qu'à un groupe — mettre '{}' dans '{}' pour combiner les deux",
+                                f.name, item, g, l, g, f.name
+                            ),
+                        ),
+                        None => {
+                            self.group_of.insert(item.clone(), (f.name.clone(), line_of("items")));
+                        }
+                    }
                     if !members.contains(item) {
                         members.push(item.clone());
                     }
@@ -536,7 +573,17 @@ impl Validator {
     fn check_call(&mut self, line: usize, from: &str, from_index: usize, value: &str) -> Option<String> {
         let (fname, args) = split_call(value);
 
-        if REF_FUNCTIONS.contains(&fname) {
+        if fname == "hsl" {
+            // Couleur : composantes numériques ou expressions de paramètres
+            if !(3..=4).contains(&args.len()) {
+                self.error(line, format!("'{}' : '{}' : attendu hsl(teinte, saturation%, luminosité%[, opacité])", from, value));
+            }
+            for arg in args {
+                let body = crate::renderer::params::strip_unit(arg);
+                self.check_expr(line, from, from_index, body, false);
+            }
+            None
+        } else if REF_FUNCTIONS.contains(&fname) {
             let target = args.first().copied().unwrap_or("");
             self.check_ref(line, from, from_index, target, Expected::Figure);
             Some(target.to_string())
@@ -604,7 +651,8 @@ impl Validator {
                     TimelineAction::Start(items) => start.extend(items.iter().map(|i| (line, i))),
                     TimelineAction::Anim(items) => anim.extend(items.iter().map(|i| (line, i))),
                     TimelineAction::Comment(texts) => {
-                        if texts.len() != nb_lang {
+                        // vide = `comment : none`
+                        if !texts.is_empty() && texts.len() != nb_lang {
                             self.error_t(
                                 line,
                                 t,
@@ -773,6 +821,9 @@ impl Validator {
                 for name in [figure, to.as_str()] {
                     if self.groups.contains_key(name) {
                         self.error_t(line, t, format!("transform : '{}' est un groupe (pas encore possible)", name));
+                    }
+                    if matches!(self.defs.get(name), Some(Def { kind: Kind::Figure { ftype }, .. }) if ftype == "image") {
+                        self.error_t(line, t, format!("transform : '{}' est une image (pas de contour à transformer ; utiliser un fondu)", name));
                     }
                 }
             }
@@ -948,6 +999,45 @@ mod tests {
     #[test]
     fn exemple_officiel_valide() {
         assert_eq!(check(include_str!("../exemple.dct")), Ok(()));
+    }
+
+    #[test]
+    fn image_verifiee() {
+        let src = "[figures]
+            deffigure im =
+                type : image
+                file : schema.jpg
+                pos  : (50%, 50%)
+            deffigure c =
+                type   : circle
+                center : (50%, 50%)
+                radius : 5%
+            [timeline]
+            0.000 => { start : [im, c] }
+            1.000 => { anim : [c transform(to=im, 1s)] }";
+        assert_error(src, "formats acceptés : .png et .svg");
+        assert_error(src, "propriété `size` manquante");
+        assert_error(src, "'im' est une image");
+    }
+
+    #[test]
+    fn figure_dans_un_seul_groupe() {
+        let base = "[figures]
+            deffigure a =
+                type   : circle
+                center : (50%, 50%)
+                radius : 5%
+            defgroup g1 =
+                items : [a]
+            defgroup g2 =
+                items : [a]
+            [timeline]";
+        assert_error(base, "'a' est déjà dans le groupe 'g1' (ligne 7)");
+        // Un groupe dans un groupe reste permis
+        assert_eq!(
+            check(&base.replace("items : [a]\n            [timeline]", "items : [g1]\n            [timeline]")),
+            Ok(())
+        );
     }
 
     #[test]

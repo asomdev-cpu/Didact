@@ -170,12 +170,21 @@ impl Anim {
 /// Lit un appel d'animation. Renvoie (ce qu'elle fait, durée, easing).
 pub fn parse_call(call: &AnimCall) -> Result<(AnimKind, f64, Ease), String> {
     let name = call.name.as_str();
-    let mut ease = Ease::Smooth;
+    // Figures : départ et arrivée lents ; paramètres (`to`) : vitesse constante
+    let mut ease = if name == "to" { Ease::Linear } else { Ease::Smooth };
     let mut duration: Option<f64> = None;
     let mut named: Vec<(&str, &str)> = Vec::new();
     let mut positional: Vec<&str> = Vec::new();
 
     for p in &call.params {
+        // Unités refusées : 2cm, 3cm/s, ...
+        let value = p.split_once('=').map(|(_, v)| v).unwrap_or(p).trim();
+        let unit = value.trim_start_matches(|c: char| c.is_ascii_digit() || c == '.' || c == '-');
+        if value.len() > unit.len() {
+            if let Some(msg) = crate::parser::unsupported_unit(unit.split('/').next().unwrap_or(unit)) {
+                return Err(format!("{} : {} : {}", name, value, msg));
+            }
+        }
         if let Some((k, v)) = p.split_once('=') {
             match k {
                 "ease" => ease = Ease::parse(v)?,
@@ -291,9 +300,13 @@ fn parse_duration(s: &str) -> Option<f64> {
     }
 }
 
+/// Nombre ; un angle peut être en degrés (90, 90deg) ou en radians (1.57rad)
 fn parse_number(s: Option<&&str>, err: &str) -> Result<f64, String> {
-    s.and_then(|v| v.trim_end_matches("deg").parse::<f64>().ok())
-        .ok_or_else(|| err.to_string())
+    s.and_then(|v| match v.strip_suffix("rad") {
+        Some(r) => r.trim().parse::<f64>().ok().map(f64::to_degrees),
+        None => v.trim_end_matches("deg").parse::<f64>().ok(),
+    })
+    .ok_or_else(|| err.to_string())
 }
 
 #[cfg(test)]
@@ -318,6 +331,8 @@ mod tests {
     #[test]
     fn lecture_des_appels() {
         assert_eq!(parse_call(&call("fadein", &["1s"])).unwrap(), (AnimKind::FadeIn, 1.0, Ease::Smooth));
+        assert_eq!(parse_call(&call("to", &["3", "2s"])).unwrap(), (AnimKind::To(3.0), 2.0, Ease::Linear));
+        assert_eq!(parse_call(&call("to", &["3", "2s", "ease=smooth"])).unwrap().2, Ease::Smooth);
         assert_eq!(
             parse_call(&call("move", &["to=(80%,50%)", "500ms", "ease=linear"])).unwrap(),
             (AnimKind::Move { to: "(80%,50%)".into() }, 0.5, Ease::Linear)
@@ -329,7 +344,10 @@ mod tests {
             parse_call(&call("move", &["down", "20%", "2s"])).unwrap().0,
             AnimKind::MoveBy { dir: Dir::Down, distance: 20.0 }
         );
-        assert!(parse_call(&call("move", &["down", "3cm/s"])).unwrap_err().contains("move(down, 20%, 2s)"));
+        assert!(parse_call(&call("move", &["down", "3cm/s"])).unwrap_err().contains("unité 'cm'"));
+        assert!(parse_call(&call("move", &["down", "2cm", "1s"])).unwrap_err().contains("unité 'cm'"));
+        let (kind, _, _) = parse_call(&call("rotate", &["3.14159265rad", "1s"])).unwrap();
+        assert!(matches!(kind, AnimKind::Rotate(a) if (a - 180.0).abs() < 1e-6));
         assert_eq!(parse_call(&call("slidein", &["left", "1s"])).unwrap().0, AnimKind::SlideIn { from: Dir::Left });
         assert!(parse_call(&call("slideout", &["dehors", "1s"])).is_err());
         assert_eq!(
@@ -341,7 +359,7 @@ mod tests {
             parse_call(&call("follow", &["path=c", "10s", "rotate=tangent"])).unwrap().0,
             AnimKind::Follow { path: "c".into(), tangent: true }
         );
-        assert!(parse_call(&call("follow", &["path=c", "speed=1cm/s"])).unwrap_err().contains("durée"));
+        assert!(parse_call(&call("follow", &["path=c", "speed=1px/s"])).unwrap_err().contains("durée"));
         assert_eq!(parse_call(&call("draw", &["1s"])).unwrap().0, AnimKind::Draw);
         assert_eq!(
             parse_call(&call("rotate3d", &["90", "axis=x", "2s"])).unwrap().0,

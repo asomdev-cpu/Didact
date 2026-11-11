@@ -30,6 +30,8 @@ pub struct Player {
     seen_warnings: HashSet<String>,
     /// Pauses de l'animation par langue, pour laisser finir les voix (vide sans voix)
     holds: HashMap<String, Holds>,
+    /// Fichiers des figures `image`
+    images: Vec<String>,
 }
 
 #[wasm_bindgen]
@@ -40,6 +42,7 @@ impl Player {
     pub fn new(source: &str) -> Result<Player, JsError> {
         let (resolved, timeline) = crate::load(source).map_err(|errors| JsError::new(&errors.join("\n")))?;
         Ok(Player {
+            images: crate::renderer::image::files(&resolved.figures),
             timeline,
             config: resolved.config.clone(),
             backend: None,
@@ -109,8 +112,20 @@ impl Player {
         self.timeline.frame_at(t, lang.as_deref()).comment.map(|s| s.to_string())
     }
 
-    /// Pistes audio, en JSON : `[{"file": "musique.mp3", "volume": 0.5, "start": 2, "end": 8}, ...]`
+    /// Pistes audio, en JSON : `[{"file": "musique.mp3", "volume": 0.5, "start": 2, "end": 8, "loop": false}, ...]`
     /// (`end` vaut null si la piste joue jusqu'à la fin). Le lecteur web les joue avec `<audio>`.
+    /// Fichiers des figures `image`, à télécharger puis à donner avec `addFile`
+    #[wasm_bindgen(js_name = imageFiles)]
+    pub fn image_files(&self) -> Vec<String> {
+        self.images.clone()
+    }
+
+    /// Contenu d'un fichier image (téléchargé par le lecteur)
+    #[wasm_bindgen(js_name = addFile)]
+    pub fn add_file(&mut self, name: &str, bytes: Vec<u8>) {
+        crate::renderer::image::register(name, bytes);
+    }
+
     #[wasm_bindgen(js_name = audioSegments)]
     pub fn audio_segments(&self) -> String {
         let items: Vec<String> = self
@@ -119,11 +134,12 @@ impl Player {
             .iter()
             .map(|s| {
                 format!(
-                    "{{\"file\":{},\"volume\":{},\"start\":{},\"end\":{}}}",
+                    "{{\"file\":{},\"volume\":{},\"start\":{},\"end\":{},\"loop\":{}}}",
                     json_string(&s.file),
                     s.volume,
                     s.start,
-                    s.end.map(|e| e.to_string()).unwrap_or("null".to_string())
+                    s.end.map(|e| e.to_string()).unwrap_or("null".to_string()),
+                    s.looping
                 )
             })
             .collect();
@@ -222,7 +238,7 @@ mod tests {
             "[figures]\n[timeline]\n1.000 => { start : [audio musique.mp3 volume=0.5] }\n3.000 => { end : [audio musique.mp3] }",
         )
         .unwrap_or_else(|_| panic!("chargement"));
-        assert_eq!(p.audio_segments(), r#"[{"file":"musique.mp3","volume":0.5,"start":1,"end":3}]"#);
+        assert_eq!(p.audio_segments(), r#"[{"file":"musique.mp3","volume":0.5,"start":1,"end":3,"loop":false}]"#);
         assert_eq!(json_string("x\"y"), r#""x\"y""#);
     }
 }

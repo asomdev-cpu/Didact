@@ -1,0 +1,225 @@
+# ─────────────────────────────────────────────
+#  Détails : graduations en π, coins arrondis, ellipses, étoiles, lignes brisées,
+#  marqueurs, gras et italique, images importées (SVG)
+#  didact demo_details.dct
+# ─────────────────────────────────────────────
+
+[config]
+window       : [16:9]
+background   : #0B0F19
+languages    : [FR, EN]
+default_lang : FR
+
+[figures]
+
+defparam s = 0          # forme des étoiles et des ellipses
+defparam n = 1          # pas de la méthode d'Euler : 1/n
+
+# --- Partie 1 : trigonométrie, graduée en multiples de π ---
+
+deffigure trigo =
+    type   : axes
+    from   : (4%, 30%)
+    to     : (96%, 80%)
+    xrange : [-6.6, 6.6]
+    yrange : [-1.4, 1.4]
+    step   : (pi/2, 0.5)
+    grid   : true
+    color  : #6B7280
+
+deffigure sinus =
+    type   : plot
+    axes   : trigo
+    expr   : sin(x)
+    color  : #60A5FA
+    stroke : 3px
+
+deffigure cosinus =
+    type   : plot
+    axes   : trigo
+    expr   : cos(x)
+    color  : #F59E0B
+    stroke : 3px
+
+deffigure carte =
+    type          : rect
+    pos           : (50%, 13%)
+    width         : 160%
+    height        : 13%
+    corner_radius : 2.5%
+    fill          : #111827
+    color         : #374151
+
+deffigure definition =
+    type    : latex
+    pos     : (50%, 13%)
+    color   : white
+    content : |
+        \textbf{Définition.} Le \emph{sinus} et le \emph{cosinus} sont $2\pi$-périodiques : $\sin(x + 2\pi) = \sin x$.
+
+deffigure titre1 =
+    type   : text
+    content : "\textbf{Graduations en π} : step : (pi/2, 0.5)"
+    pos    : (4%, 92%)
+    anchor : left
+    color  : #9CA3AF
+
+# --- Partie 2 : formes ---
+
+deffigure ellipse =
+    type   : circle
+    center : (16%, 62%)
+    radius : (12%, (4 + 6*s)%)
+    color  : #34D399
+    stroke : 3px
+
+deffigure etoile =
+    type   : star
+    pos    : (40%, 62%)
+    size   : 13%
+    points : 6
+    inner  : 0.25 + 0.5*s
+    fill   : hsl(45 + 300*s, 90%, 60%)
+    color  : none
+
+deffigure r2 =
+    type   : axes
+    from   : (55%, 35%)
+    to     : (97%, 92%)
+    xrange : [0, 2]
+    yrange : [0, 7.5]
+    equal  : false
+    color  : #6B7280
+
+deffigure exacte =
+    type   : plot
+    axes   : r2
+    expr   : exp(x)
+    color  : #60A5FA
+    stroke : 3px
+
+deffigure euler =
+    type   : scatter
+    axes   : r2
+    count  : 2*round(n) + 1
+    x      : (k - 1)/round(n)
+    y      : (1 + 1/round(n))^(k - 1)
+    marker : diamond
+    size   : 1.2%
+    color  : #F87171
+
+deffigure titre_euler =
+    type    : equation
+    expr    : y' = y,\quad y(0) = 1,\quad h = 1/#{round(n):0}
+    pos     : (76%, 97%)
+    size    : 30px
+    anchor  : top
+    color   : white
+
+deffigure marques =
+    type   : axes
+    from   : (4%, 6%)
+    to     : (50%, 30%)
+    xrange : [0, 7]
+    yrange : [0, 3]
+    ticks  : false
+    color  : #0B0F19
+
+deffigure m1 =
+    type   : scatter
+    axes   : marques
+    points : [(1, 1.5), (2, 1.5)]
+    size   : 1.6%
+    color  : #60A5FA
+
+deffigure m2 =
+    type   : scatter
+    axes   : marques
+    points : [(3, 1.5)]
+    marker : square
+    size   : 1.6%
+    color  : #F87171
+
+deffigure m3 =
+    type   : scatter
+    axes   : marques
+    points : [(4, 1.5)]
+    marker : triangle
+    size   : 1.6%
+    color  : #34D399
+
+deffigure m4 =
+    type   : scatter
+    axes   : marques
+    points : [(5, 1.5)]
+    marker : cross
+    size   : 1.6%
+    color  : #FBBF24
+
+deffigure m5 =
+    type   : scatter
+    axes   : marques
+    points : [(6, 1.5)]
+    marker : plus
+    size   : 1.6%
+    color  : #A78BFA
+
+deffigure ligne =
+    type   : polygon
+    points : [(56%, 20%), (64%, 28%), (72%, 12%), (80%, 24%), (88%, 10%), (96%, 22%)]
+    closed : false
+    color  : #9CA3AF
+    stroke : 2px
+
+# --- Partie 3 : une image importée ---
+
+deffigure schema =
+    type   : image
+    file   : images/triangle.svg
+    pos    : (30%, 50%)
+    size   : 60%
+
+deffigure legende =
+    type    : latex
+    pos     : (76%, 50%)
+    color   : white
+    content : |
+        Un schéma \textbf{SVG} fait ailleurs \\
+        (Inkscape, GeoGebra, ...) : \\
+        net à toute taille, \textit{mais figé}.
+
+[timeline]
+
+0.000 => {
+    start   : [trigo fadein(0.5s), sinus draw(1.5s), cosinus draw(1.5s), carte fadein(0.5s), definition write(1.5s), titre1 fadein(0.5s)]
+    comment : ["Les graduations peuvent suivre π : π/2, π, 3π/2...", "Ticks can follow π: π/2, π, 3π/2..."]
+}
+
+5.000 => {
+    end     : [trigo fadeout(0.5s), sinus fadeout(0.5s), cosinus fadeout(0.5s), carte fadeout(0.5s), definition fadeout(0.5s), titre1 fadeout(0.5s)]
+    start   : [ellipse grow(0.6s), etoile grow(0.6s), r2 fadein(0.5s), exacte draw(1s), euler fadein(0.5s), titre_euler fadein(0.5s), m1, m2, m3, m4, m5, ligne draw(1s)]
+    comment : none
+}
+
+6.000 => {
+    anim    : [s to(1, 3s), n to(10, 5s)]
+    comment : ["Ellipses, étoiles, marqueurs ; la méthode d'Euler s'approche de exp.", "Ellipses, stars, markers; Euler's method approaches exp."]
+}
+
+12.000 => {
+    end     : [ellipse fadeout(0.5s), etoile fadeout(0.5s), r2 fadeout(0.5s), exacte fadeout(0.5s), euler fadeout(0.5s), titre_euler fadeout(0.5s), m1 fadeout(0.5s), m2 fadeout(0.5s), m3 fadeout(0.5s), m4 fadeout(0.5s), m5 fadeout(0.5s), ligne fadeout(0.5s)]
+    start   : [schema draw(1s), legende write(1.5s)]
+    comment : none
+}
+
+14.000 => {
+    anim    : [schema rotate(-8, 1s)]
+}
+
+15.000 => {
+    anim    : [schema rotate(8, 1s)]
+}
+
+17.000 => {
+    end     : [schema fadeout(0.5s), legende fadeout(0.5s)]
+}

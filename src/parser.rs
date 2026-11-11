@@ -813,10 +813,13 @@ impl Parser {
                 self.advance();
                 // Vérifier si suivi de px, s, cm, etc.
                 if let Token::Ident(unit) = self.peek().clone() {
-                    if matches!(unit.as_str(), "px" | "pt" | "s" | "ms" | "cm" | "mm" | "em") {
+                    if matches!(unit.as_str(), "px" | "s" | "ms" | "deg" | "rad") {
                         let val = format!("{}{}", n, unit);
                         self.advance();
                         return Ok(PropValue::Single(val));
+                    }
+                    if let Some(msg) = unsupported_unit(&unit) {
+                        return Err(format!("ligne {} : {}{} : {}", self.line(), n, unit, msg));
                     }
                 }
                 Ok(PropValue::Number(n))
@@ -917,6 +920,11 @@ impl Parser {
                         "end"     => TimelineAction::End(self.parse_end_list()?),
                         "destroy" => TimelineAction::Destroy(self.parse_ident_array()?),
                         "anim"    => TimelineAction::Anim(self.parse_anim_list()?),
+                        // `comment : none` efface le sous-titre (liste vide)
+                        "comment" if matches!(self.peek(), Token::Ident(s) if s == "none") => {
+                            self.advance();
+                            TimelineAction::Comment(Vec::new())
+                        }
                         "comment" => TimelineAction::Comment(self.parse_string_list()?),
                         _ => {
                             eprintln!("Attention (ligne {}) : action timeline inconnue '{}' ignorée", action_line, key);
@@ -947,19 +955,27 @@ impl Parser {
                 Token::Ident(s) => {
                     self.advance();
                     if s == "audio" {
-                        // audio nom_fichier.mp3 [volume=x]
+                        // audio nom_fichier.mp3 [volume=x] [loop], dans n'importe quel ordre
                         let file = self.parse_ident_or_string()?;
                         let mut volume = None;
-                        if let Token::Ident(k) = self.peek().clone() {
-                            if k == "volume" {
-                                self.advance();
-                                self.expect(&Token::Equals)?;
-                                if let Token::Number(v) = self.advance() {
-                                    volume = Some(v);
+                        let mut looping = false;
+                        while let Token::Ident(k) = self.peek().clone() {
+                            match k.as_str() {
+                                "volume" => {
+                                    self.advance();
+                                    self.expect(&Token::Equals)?;
+                                    if let Token::Number(v) = self.advance() {
+                                        volume = Some(v);
+                                    }
                                 }
+                                "loop" => {
+                                    self.advance();
+                                    looping = true;
+                                }
+                                _ => break,
                             }
                         }
-                        items.push(StartItem::Audio { file, volume });
+                        items.push(StartItem::Audio { file, volume, looping });
                     } else {
                         // Optionnellement une animation d'entrée : fig fadein(1s)
                         let anim = self.parse_optional_anim()?;
@@ -1089,7 +1105,7 @@ impl Parser {
                 let mut val = n.to_string();
                 // unité collée : s, ms, px, deg, ...
                 if let Token::Ident(unit) = self.peek().clone() {
-                    if matches!(unit.as_str(), "s" | "ms" | "px" | "cm" | "deg" | "deg/s" | "cm/s" | "px/s") {
+                    if matches!(unit.as_str(), "s" | "ms" | "px" | "deg" | "rad" | "cm" | "mm" | "pt" | "em" | "cm/s" | "deg/s" | "px/s") {
                         val.push_str(&unit);
                         self.advance();
                     }
@@ -1215,6 +1231,13 @@ impl Parser {
         }
     }
 }
+/// Unités refusées, avec ce qu'il faut écrire à la place
+pub fn unsupported_unit(unit: &str) -> Option<String> {
+    matches!(unit, "cm" | "mm" | "pt" | "em" | "in").then(|| {
+        format!("unité '{}' non prise en charge (unités : %, px, deg, rad, s, ms) : utiliser % de l'écran ou px", unit)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

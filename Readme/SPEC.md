@@ -258,6 +258,8 @@ Format : `secondes.millisecondes`.
 | `1.500` | 1 seconde, 500 ms |
 | `61.500` | 61 secondes, 500 ms |
 
+**Précision :** la milliseconde (une image dure déjà 16,7 ms à 60 images/s).
+
 **Unicité :** chaque timestamp n'apparaît qu'une fois. Deux blocs avec le même instant produisent une erreur de compilation : tout ce qui se passe à un instant donné est regroupé dans un seul bloc.
 
 **Décaler la suite :** pour ajouter ou retirer du temps au milieu, inutile de réécrire chaque timestamp :
@@ -291,7 +293,7 @@ Un événement timeline regroupe **tout ce qui se passe au même instant** :
 | `end` | Cache (mais garde en mémoire) |
 | `destroy` | Supprime complètement, libère la mémoire |
 | `anim` | Déclenche une animation |
-| `comment` | Affiche un sous-titre multilingue |
+| `comment` | Affiche un sous-titre multilingue ; `comment : none` l'efface |
 
 **Ordre d'exécution :** dans un bloc, les commandes s'exécutent toujours dans cet ordre, **quel que soit l'ordre d'écriture** :
 
@@ -389,6 +391,8 @@ Pour les graphes, on peut référencer le repère d'une figure `axes` :
 pos : axes_xy(3, 4)    # position (3, 4) dans le repère de la figure axes_xy
 ```
 
+Pas de position en pixels absolus : l'image doit rester la même quelle que soit la taille de l'écran. `pos : (200px, 300px)` est refusé avec un message clair (seul `0` est accepté sans `%`).
+
 ### 7.4 Convention des angles
 
 ```
@@ -397,6 +401,19 @@ angle négatif  →  sens horaire
 ```
 
 Le sens est implicite dans le signe, pas besoin de paramètre `direction`.
+
+Un angle est en degrés par défaut : `rotate : 30`, `rotate : 30deg`, ou en radians : `rotate : 0.5rad`, `rotate(1.57rad, 1s)`.
+
+### 7.6 Unités
+
+| Unité | Pour |
+|---|---|
+| `%` | positions (de la largeur / hauteur) et tailles (du plus petit côté) |
+| `px` | épaisseurs et petites tailles : pixels d'une scène de référence (taille de `window`, sinon 1080 px de haut), mis à l'échelle avec l'écran |
+| `deg`, `rad` | angles (sans unité : degrés) |
+| `s`, `ms` | durées |
+
+`cm`, `mm`, `pt`, `em` n'ont pas de sens sur un écran et sont refusés avec un message qui indique quoi écrire.
 
 ### 7.5 Positions vs tailles
 
@@ -413,19 +430,23 @@ Conséquence : sur un écran 16:9, une même valeur en % de position ne fait pas
 
 ## 8. Types de figures
 
-Cette section liste les types et propriétés **explicitement décidés**. Les détails supplémentaires possibles sont dans la section §15 "À décider".
+Cette section liste les types et propriétés **explicitement décidés**. Les détails supplémentaires possibles sont dans la section §16 "À décider".
 
 ### 8.1 Propriétés communes
 
 ```
-color    : red / #FF0000
-fill     : none / red / #FF0000
+color    : red / #FF0000 / hsl(200, 80%, 50%)
+fill     : none / red / #FF0000 / hsl(200, 80%, 50%, 0.5)
 opacity  : 0.0 → 1.0
 stroke   : épaisseur du trait (ex: 2px)
 style    : nom d'un style à appliquer
 layer    : ordre d'affichage
 anchor   : point d'ancrage (ex: center)
 ```
+
+**Couleurs :** un nom (`black`, `white`, `red`, `green`, `blue`, `yellow`, `orange`, `purple`, `pink`, `brown`, `gray`, `gold`, `cyan`, `navy`), `#RGB`, `#RRGGBB`, `#RRGGBBAA`, `none`, ou `hsl(teinte, saturation%, luminosité%)` / `hsl(t, s%, l%, opacité)`. La teinte est en degrés (0 rouge, 120 vert, 240 bleu), l'opacité entre 0 et 1 (ou en %). Les composantes de `hsl` peuvent utiliser des paramètres : `fill : hsl(360*t, 80%, 50%)`.
+
+**`anchor` :** quel point de la figure est placé en `pos` — `topleft`, `top`, `topright`, `left`, `center`, `right`, `bottomleft`, `bottom`, `bottomright`. Par défaut `center`. Valable pour `rect` et les figures de texte ou de contenu (`text`, `equation`, `latex`, `raw.latex`, `table`, `array`, `graph`) ; pour ces dernières, c'est la boîte englobante qui est ancrée.
 
 **`stroke` vs `width` :** `stroke` est l'épaisseur du trait, pour toutes les figures. `width` et `height` sont uniquement les dimensions d'un `rect`.
 
@@ -457,6 +478,8 @@ deffigure mon_cercle =
     opacity : 0.5
 ```
 
+**Ellipse :** `radius : (12%, 6%)` (demi-axes horizontal et vertical).
+
 #### `rect`
 
 ```
@@ -467,7 +490,10 @@ deffigure mon_rect =
     height : 20%
     color  : green
     fill   : none
+    corner_radius : 2%       # coins arrondis (défaut 0), en % du plus petit côté ou en px
 ```
+
+`pos` est le centre (`anchor` pour un autre point). `corner_radius` est limité à la moitié du plus petit côté.
 
 #### `polygon`
 
@@ -480,6 +506,8 @@ deffigure mon_triangle =
 ```
 
 Les points peuvent aussi être dans un repère : `points : [repere(0, 0), repere(1, 0), repere(1, 2)]`.
+
+**Ligne brisée :** `closed : false` (pas de segment de retour, pas de remplissage ; 2 points suffisent).
 
 #### `arc`
 
@@ -505,6 +533,7 @@ deffigure mon_etoile =
     points : 5
     pos    : (50%, 50%)
     size   : 2%
+    inner  : 0.382     # rayon intérieur / extérieur (défaut 0.382 : étoile régulière)
     color  : gold
     fill   : gold
 ```
@@ -527,6 +556,7 @@ deffigure mon_texte =
 - Police : Latin Modern (celle de LaTeX), embarquée.
 - **Plusieurs lignes** : un vrai retour à la ligne dans la chaîne (pas de `\n`, pour que `$\nu$` reste la lettre ν).
 - **Maths en ligne** entre `$...$` : du vrai LaTeX (fractions, racines, sommes, matrices, ...), composé dans la ligne de texte.
+- **Gras et italique** : `\textbf{...}`, `\textit{...}`, `\emph{...}` (imbricables), aussi dans `latex` et les cases de `table`.
 
 #### `equation`
 
@@ -587,10 +617,11 @@ deffigure mes_axes =
     grid   : true / false     # défaut : false
     ticks  : true / false     # défaut : true
     equal  : true / false     # défaut : true
+    step   : auto             # pas des graduations : 0.5, pi/2, (pi/2, 0.5), auto
 ```
 
 - Le repère s'inscrit dans la boîte `from` / `to`. Avec `equal : true` (défaut), l'échelle est **la même en x et en y** et le repère est centré dans la boîte ; avec `equal : false`, il remplit la boîte (échelles différentes).
-- Les axes passent par 0 si 0 est dans l'intervalle, sinon par le bord. Graduations automatiques (pas de 1, 2 ou 5 × 10ⁿ, environ 8 graduations).
+- Les axes passent par 0 si 0 est dans l'intervalle, sinon par le bord. Graduations automatiques (pas de 1, 2 ou 5 × 10ⁿ, environ 8 graduations, qui suivent le zoom), ou `step` fixe pour les deux axes (`step : 0.25`) ou chacun (`step : (pi/2, 0.5)`). Un pas multiple de π (`pi/2`, `pi/3`, ...) écrit les graduations en π : `π/2`, `π`, `3π/2`, `−π`.
 - Position dans le repère : `pos : mes_axes(3, 4)`.
 - **Caméra 2D :** `center : (x, y)` (point au centre, défaut : milieu de xrange × yrange) et `zoom : z` (2 = deux fois plus près, défaut 1). Avec des paramètres, on zoome et on se déplace en les animant : `zoom : 10^k` puis `k to(3, 5s)` donne un zoom régulier jusqu'à × 1000. Les graduations, les nombres (autant de décimales que nécessaire), les courbes et les figures du repère suivent. xrange et yrange acceptent aussi des paramètres.
 - **Découpe :** toute figure qui a `axes : mes_axes` est coupée au cadre xrange × yrange du repère (`clip : false` pour l'empêcher).
@@ -629,7 +660,7 @@ deffigure quadrillage =
     xrange : [-2, 2]     # défaut : celui du repère
 ```
 
-Droites x = k·pas et y = k·pas du repère. Fait pour être déformé par `matrix`, `map` ou `cmap` (§15.8). `step : auto` : même pas que les graduations (suit le zoom).
+Droites x = k·pas et y = k·pas du repère. Fait pour être déformé par `matrix`, `map` ou `cmap` (§15.8). `step : auto` : même pas que les graduations du repère.
 
 #### `scatter`
 
@@ -642,7 +673,7 @@ deffigure mon_scatter =
     size   : 5px
 ```
 
-Les points sont en coordonnées du repère. `size` = rayon des points.
+Les points sont en coordonnées du repère. `size` = rayon des points. `marker : circle` (défaut), `square`, `diamond`, `triangle`, `cross`, `plus` : pour distinguer des séries sans compter sur la couleur.
 
 **Points tirés par formule :** `count : n`, `x : rand(2k)`, `y : rand(2k + 1)` (fonctions de k = 1, ..., n), et un filtre facultatif `where : x^2 + y^2 <= 1` (seuls les points qui le vérifient sont dessinés). Avec `count` animé, les points apparaissent au fur et à mesure (Monte-Carlo).
 
@@ -662,6 +693,24 @@ Les données sont réparties en `bins` classes de même largeur entre le minimum
 - **Valeurs tirées par formule :** `count : n` et `sample : randn(k)` (fonction de k = 1, ..., n) à la place de `data`.
 - `range : [a, b]` : classes fixes entre a et b (un histogramme qui se remplit ne bouge pas).
 - `density : true` : hauteurs divisées par (nombre × largeur) : l'aire vaut 1, comparable à une densité tracée par `plot`.
+
+### 8.5 Images
+
+```
+deffigure schema =
+    type   : image
+    file   : images/triangle.svg    # relatif au fichier .dct ; .png ou .svg
+    pos    : (50%, 50%)
+    size   : 40%                    # le plus grand côté, en % du plus petit côté de l'écran (ou en px)
+    anchor : center                 # défaut
+```
+
+- Les proportions du fichier sont gardées.
+- **SVG** : dessiné à la taille de l'écran, net à toute taille ; ses textes sont composés avec les polices de Didact (Latin Modern). **PNG** : affiché tel quel, mis à l'échelle.
+- Animations : fondu, déplacement, `scale`, `grow`, `rotate` (l'image tourne avec son cadre) ; `draw` et `write` deviennent un fondu. Pas de `transform` (pas de contour à transformer), ni de `color(part=...)`, ni de déformation (`matrix`, `map`).
+- Sur le web, le lecteur télécharge les fichiers à côté du `.dct` ; `--export html` les inclut dans la page.
+- Un fichier introuvable ou illisible est une erreur de `--check`.
+- Pour tout ce qui doit bouger ou se transformer, mieux vaut le dessiner en Didact ; l'image sert pour ce qui reste fixe (schéma, photo, logo).
 
 ---
 
@@ -733,7 +782,7 @@ Un groupe se déplace, s'anime et apparaît/disparaît comme un seul objet.
 - **`start` / `end` / `destroy`** d'un groupe s'appliquent à toutes ses figures. On peut toujours démarrer une figure du groupe seule. Un `end` de groupe ne touche pas les figures déjà cachées (elles ne réapparaissent pas pour sa sortie). Pratique : un groupe par chapitre, puis `end : [chapitre fadeout(1s)]`.
 - **Animations** (`move`, `rotate`, `scale`, `fadein`, `draw`, ...) : appliquées à l'ensemble, autour du **centre de l'ensemble** des figures affichées. `draw` et `write` révèlent les figures l'une après l'autre.
 - **Références** : `center(groupe)` = centre de l'ensemble ; `center(figure)` suit le groupe pour les figures définies **après** le groupe.
-- Une figure peut être dans plusieurs groupes : les effets s'additionnent (provisoire, cf. §15).
+- Une figure n'appartient qu'à **un seul groupe** (erreur sinon). Pour combiner deux groupes, mettre l'un dans l'autre.
 - `transform` n'est pas encore possible sur un groupe.
 
 ---
@@ -793,7 +842,7 @@ anim  : [a fadein(1s), b move(to=center(a), 1s)]  # séparées par une virgule :
 ### 11.7 Paramètres
 
 - **Durée** : `2s` ou `500ms` (ou `duration=2s`). Obligatoire.
-- **Easing** : `ease=smooth` (défaut : démarre et finit lentement), `ease=linear`, `ease=ease_in`, `ease=ease_out`.
+- **Easing** : `ease=smooth` (défaut des figures : démarre et finit lentement), `ease=linear` (défaut de `to` sur un paramètre : vitesse constante, pratique pour un temps ou un zoom), `ease=ease_in`, `ease=ease_out`.
 - Une animation terminée **garde son effet** : une figure déplacée reste à sa nouvelle position.
 
 | Animation | Effet |
@@ -903,7 +952,7 @@ deffigure point =
 }
 ```
 
-- **Animation :** seule `to(valeur, durée)` s'applique à un paramètre (avec `ease=...` si besoin, enchaînable). Un paramètre garde sa valeur à la fin. `start`, `end` et `destroy` ne le concernent pas.
+- **Animation :** seule `to(valeur, durée)` s'applique à un paramètre, à vitesse constante par défaut (`ease=smooth` pour démarrer et finir lentement ; enchaînable). Un paramètre garde sa valeur à la fin. `start`, `end` et `destroy` ne le concernent pas.
 - **Où l'utiliser :** partout où un nombre est attendu, avec son unité : `radius : (2*k)%`, `stroke : (k + 1)px`, `opacity : k/4`, `rotate : 30k`, `pos : (k*10%, 50%)`, `points : [(10%, 10%), (k*15%, 30%)]`, `matrix : (1, k, 0, 1)`. Aussi dans `expr` d'un `plot` et les coordonnées d'un repère (`repere(a - 1, sin(a))`, `move(to=...)`). Mêmes opérations et fonctions que `expr`, sans `x`. Un calcul qui ne se lit pas est signalé à sa ligne (« valeur '2*q' non comprise »).
 - **Nombres dans le texte :** dans `content`, l'`expr` d'une `equation`, `rows`, ... `#{expr}` est remplacé par la valeur à chaque image : `content : "n = #{n}"`. `#{k}` affiche au plus 2 décimales, `#{k:0}` un entier arrondi, `#{k:3}` 3 décimales. Ex. : `expr : \sum_{i=1}^{#{round(n):0}} i = #{round(n)*(round(n)+1)/2:0}`.
 - **Nom :** lettres, chiffres et `_`, sans les noms réservés des formules (`x`, `e`, `pi`, `sin`, ...). Comme tout élément, un paramètre doit être défini plus haut que ce qui l'utilise.
@@ -926,6 +975,7 @@ deffigure point =
 
 - Le chemin est relatif au fichier `.dct`. Formats : mp3, wav, ogg, flac, m4a.
 - `volume` : 1 par défaut (0.3 = plus bas).
+- `loop` : la piste recommence à la fin du fichier, jusqu'à son `end` (musique de fond) : `start : [audio musique.mp3 loop volume=0.3]`.
 - Une piste joue de son `start` jusqu'à son `end` (ou la fin de la timeline). Un nouveau `start` du même fichier la relance depuis le début.
 - Le son suit la lecture : pause, saut dans la barre de lecture, retour en arrière.
 - Joué dans la fenêtre, sur le web (`<audio>`), mixé dans l'export MP4 et inclus dans la page HTML autonome.
@@ -1238,7 +1288,7 @@ deffigure pendule =
 ```
 
 - Résolution par Runge–Kutta d'ordre 4, pas `dt` (défaut 0.01). Variables `x`, `y` (et `z`), le temps `t`, les paramètres. Autres noms : `vars : (theta, omega)` (de 1 à 6 variables ; les deux premières sont dessinées).
-- `count : n` : n trajectoires, `init` dépendant de `k` (0 à n - 1) : portrait de phase (`init : (-4 + 8*mod(k, 9)/8, -3 + 6*floor(k/9)/8)`, `count : 81`), nuage de particules (`init : (randn(k), randn(k, 1))`).
+- `count : n` : n trajectoires, `init` dépendant de `k` (1 à n, comme partout : `sum`, `scatter`, `histogram`) : portrait de phase (`init : (-4 + 8*mod(k - 1, 9)/8, -3 + 6*floor((k - 1)/9)/8)`, `count : 81`), nuage de particules (`init : (randn(k), randn(k, 1))`).
 - `duration` animé : les courbes s'allongent. `trail : 1.5` : seulement la dernière 1,5 unité de temps (particules avec traînée). `head : 4px` : un point à la position actuelle.
 - `colormap` : une couleur par trajectoire ; sinon `color`, `stroke`, `tube`, `glow` comme les autres courbes. En 3D, `follow(path=...)` suit la première trajectoire.
 - Les solutions sont gardées d'une image à l'autre : quand `duration` grandit, le calcul n'est refait que lorsqu'elle double. Au plus 6 millions de points (trajectoires × pas).
@@ -1319,8 +1369,9 @@ didact cours.dct --check --format json
   - une figure qui sort du cadre (à partir de 2 px sur une image de 1080 px de haut) ;
   - deux textes (`text`, `equation`, `latex`, `table`) qui se chevauchent alors qu'ils sont tous les deux pleinement affichés (un fondu enchaîné au même endroit n'est pas signalé).
 - Si c'est voulu (une figure qui entre par le bord, deux étiquettes superposées exprès) : `allow : outside`, `allow : overlap` ou `allow : [outside, overlap]` sur la figure.
-- `--format json` : une liste d'objets `{"severity": "error" | "warning", "code": "parse" | "validation" | "render" | "outside" | "overlap", "line", "time", "figure", "other", "message"}` (`null` quand l'information n'existe pas ; `other` : l'autre texte d'un chevauchement).
-- Code de retour : 0 aucun problème, 2 seulement des avertissements, 1 au moins une erreur.
+- **Remarques** (hygiène, sans effet sur le code de retour) : figure jamais affichée ni utilisée par une autre, style jamais utilisé, paramètre jamais utilisé.
+- `--format json` : une liste d'objets `{"severity": "error" | "warning" | "info", "code": "parse" | "validation" | "render" | "outside" | "overlap" | "unused_figure" | "unused_style" | "unused_param", "line", "time", "figure", "other", "message"}` (`null` quand l'information n'existe pas ; `other` : l'autre texte d'un chevauchement ; `figure` : le nom de la figure, du style ou du paramètre).
+- Code de retour : 0 aucun problème (ou seulement des remarques), 2 des avertissements, 1 au moins une erreur.
 
 ---
 
@@ -1332,78 +1383,16 @@ Cette section liste les points évoqués pendant le design mais qui n'ont pas é
 
 Sur les figures déjà définies, des propriétés supplémentaires pourraient être utiles :
 
-- `rect` : un `corner_radius` pour des coins arrondis ?
-- `circle` : différencier `circle` et `ellipse` (radius_x, radius_y) ?
-- `star` : un ratio rayon intérieur / extérieur ?
-- `text` : `bold`, `italic`, `font_family` ?
-- `scatter` : forme des marqueurs (cercle, carré, croix, ...) ?
-- `axes` : pas des graduations (`tick_step`) ?
-- `table` : style des bordures ?
-- `polygon` : possibilité de ne pas fermer la forme ?
-- `audio` : option `loop` ?
-
-### Format des couleurs
-
-On utilise des noms (`red`, `blue`) et le hexadécimal (`#FF0000`) dans les exemples, mais on n'a pas formellement décidé quels formats sont acceptés. À trancher : `rgb()`, `rgba()`, `hsl()` ?
-
-### Valeurs valides pour `anchor`
-
-`center` a été utilisé, mais on n'a pas listé les autres valeurs possibles (`topleft`, `bottomright`, etc.).
-
-### Précision des timestamps
-
-On a décidé du format `XX.XXX` (secondes.millisecondes) mais la précision exacte au-delà du millième n'est pas définie. Arrondir ? Tolérer plus ?
-
-### Une figure dans plusieurs groupes (implémenté, à valider)
-
-Permis pour l'instant : les décalages et animations des groupes s'additionnent, dans l'ordre de définition des groupes.
-
-### Effacer un commentaire sans le remplacer
-
-Comment terminer un sous-titre sans en afficher un nouveau ? `comment : []` ? Une commande explicite ?
+- `text` : autre police (`font_family`) ? (gras et italique : `\textbf`, `\textit`)
+- `table` : style des bordures ? (pas retenu pour l'instant)
 
 ### Règles de rendu provisoires (implémentées, à valider)
 
 Choisies pour pouvoir dessiner ; à confirmer ou changer :
 
-- **`pos` d'un rect** : coin bas-gauche par défaut ; `anchor : center` → centre.
-- **`px`** : pixels d'une scène de référence (taille de `window`, sinon 1080 px de haut), mis à l'échelle avec la fenêtre.
 - **Valeurs par défaut** : `color : black`, `stroke : 2px`, `fill : none`, `opacity : 1`, `layer : 0`.
 - **Étoile** : rayon intérieur = 0,382 × rayon extérieur (étoile régulière).
-- **Couleurs** : noms (`red`, `blue`, `gold`, ...), `#RGB`, `#RRGGBB`, `#RRGGBBAA`, `none`.
-
-### Type `image` : importer un visuel externe
-
-Une figure `type : image` qui affiche un fichier PNG ou SVG :
-
-```
-deffigure schema =
-    type : image
-    file : schema.svg
-    pos  : (50%, 50%)
-    size : 40%
-```
-
-Permettrait d'utiliser des visuels produits par n'importe quel outil (Manim pour une image fixe, GeoGebra, Inkscape, ...) sans dépendance dans Didact. Le SVG serait dessiné avec `resvg` (même moteur que la scène, tiny-skia). À préciser : chemins relatifs au fichier `.dct`, `size` = largeur ou plus grand côté, embarquement web.
-
-### Effets de bord du compilateur
-
-Quels avertissements (non bloquants) le compilateur produit-il ? Par exemple :
-- Figure définie mais jamais utilisée dans la timeline
-- Style défini mais jamais référencé
-
-### Unités acceptées
-
-On a vu `%`, `px`, `s`, `ms`, `cm`, `deg`. Lesquelles sont obligatoirement supportées ? D'autres (`pt`, `em`, `rad`) ?
-
-### Easing par défaut (implémenté, à valider)
-
-Implémenté : `smooth` par défaut (démarre et finit lentement, comme 3Blue1Brown), au choix `linear`, `ease_in`, `ease_out` via `ease=...`. Les noms utilisent `_` car `-` n'est pas autorisé dans un identifiant.
-
-### Coordonnées en pixels absolus
-
-On a décidé que les positions étaient en pourcentages. Mais peut-on aussi utiliser des pixels absolus quand nécessaire ? Avec quelle syntaxe ?
 
 ### Détection des erreurs
 
-Le compilateur produit des erreurs claires, mais on n'a pas formalisé la liste exhaustive ni le format des messages.
+Le compilateur produit des erreurs claires, mais on n'a pas formalisé la liste exhaustive ni le format des messages.

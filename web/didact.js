@@ -167,6 +167,8 @@ class DidactPlayer extends HTMLElement {
       this.player = null;
       return this.showMessage("error", "Erreurs dans le fichier Didact :\n\n" + (e.message ?? e));
     }
+    await this.setupImages(src);
+    if (token !== this.loadToken) return;
     this.showMessage(null);
 
     const ratio = this.player.aspectRatio();
@@ -182,6 +184,21 @@ class DidactPlayer extends HTMLElement {
     this.updateControls();
   }
 
+  /** Télécharge les fichiers des figures `image` (à côté du .dct, ou inclus dans la page) */
+  async setupImages(src) {
+    const base = new URL(src || ".", document.baseURI);
+    const embedded = globalThis.__DIDACT_AUDIO__ || {}; // page autonome : fichiers inclus
+    await Promise.all(this.player.imageFiles().map(async (file) => {
+      try {
+        const response = await fetch(embedded[file] || new URL(file, base).href);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        this.player.addFile(file, new Uint8Array(await response.arrayBuffer()));
+      } catch (e) {
+        console.warn("Didact : image introuvable :", file, e);
+      }
+    }));
+  }
+
   /** Crée un <audio> par piste. `src` : adresse du .dct (null si écrit dans la page) */
   setupAudio(src) {
     const base = new URL(src || ".", document.baseURI);
@@ -189,6 +206,7 @@ class DidactPlayer extends HTMLElement {
     this.tracks = JSON.parse(this.player.audioSegments()).map((seg) => {
       const el = new Audio(embedded[seg.file] || new URL(seg.file, base).href);
       el.preload = "auto";
+      el.loop = !!seg.loop; // `audio fichier loop` : recommence à la fin
       el.addEventListener("error", () => console.warn("Didact : audio introuvable :", seg.file));
       return { ...seg, el };
     });
@@ -279,6 +297,11 @@ class DidactPlayer extends HTMLElement {
 
   /** Joue / arrête / recale chaque piste selon le temps courant */
   syncAudio() {
+    // écart de lecture ; en boucle, la fin et le début du fichier sont voisins
+    const drift = (tr, want) => {
+      const d = Math.abs(tr.el.currentTime - want);
+      return tr.loop && tr.el.duration > 0 ? Math.min(d, tr.el.duration - d) : d;
+    };
     if (this.voiceFiles && this.voiceLang !== this.currentLang) this.updateVoiceLang();
     for (const tr of [...(this.tracks || []), ...(this.voiceTracks || [])]) {
       // instants de la timeline → temps réel (pauses laissées aux voix)
@@ -289,14 +312,16 @@ class DidactPlayer extends HTMLElement {
         if (!tr.el.paused) tr.el.pause();
         continue;
       }
-      const want = this.t - start;
+      let want = this.t - start;
+      // en boucle : position dans le fichier modulo sa durée
+      if (tr.loop && tr.el.duration > 0) want %= tr.el.duration;
       tr.el.volume = Math.min(1, Math.max(0, tr.volume));
       if (tr.el.paused) {
         if (want < (tr.el.duration || Infinity)) {
           tr.el.currentTime = want;
           tr.el.play().catch(() => {}); // bloqué tant que le visiteur n'a pas cliqué
         }
-      } else if (Math.abs(tr.el.currentTime - want) > 0.3) {
+      } else if (drift(tr, want) > 0.3) {
         tr.el.currentTime = want; // saut dans la barre de lecture
       }
     }

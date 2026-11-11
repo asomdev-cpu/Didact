@@ -25,6 +25,9 @@ typst-svg = "0.15"
 mitex = "0.2"
 # Lecture du SVG produit par Typst (contours des lettres et traits)
 usvg = { version = "0.49", default-features = false }
+# Type `image` : dessin des fichiers SVG (même moteur que la scène) ; `text` : textes du SVG,
+# composés avec les polices embarquées (Latin Modern)
+resvg = { version = "0.49", default-features = false, features = ["text"] }
 # Interface JavaScript (WebAssembly) ; sans effet en natif
 wasm-bindgen = "=0.2.129"
 
@@ -43,3 +46,11 @@ opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 3
+
+# Moteur web (web/build.ps1) : optimisation sur tout le programme d'un coup (LTO, une seule
+# unité de compilation) : plus petit et aussi rapide. Plus long à compiler : réservé au web.
+[profile.web]
+inherits = "release"
+lto = true
+codegen-units = 1
+panic = "abort"

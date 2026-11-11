@@ -22,6 +22,7 @@ pub mod contour;
 pub mod discrete;
 pub mod expr;
 pub mod geometry;
+pub mod image;
 pub mod memo;
 pub mod morph;
 pub mod ode;
@@ -479,9 +480,10 @@ fn build_figure(st: &FigureState, t: f64, scene: &Scene, refs: &Refs) -> Result<
     let base_center = bbox_center(&shapes);
 
     // ── Animations ──
-    // Rotation fixe écrite sur la figure : rotate : 30
+    // Rotation fixe écrite sur la figure : rotate : 30, 30deg, 0.5rad
     let base_rotation = match fig.properties.get("rotate") {
         Some(PropValue::Number(n)) => *n as f32,
+        Some(v @ PropValue::Single(s)) if s.ends_with("deg") || s.ends_with("rad") => geometry::angle(v, refs)?,
         _ => 0.0,
     };
     let mut fx = compute_effect(st, t, base_center, base_rotation, scene, refs)?;

@@ -41,6 +41,14 @@ Résultat dans `web/pkg/` :
 
 `web/pkg/` est un résultat de compilation : il n'est pas versionné dans git.
 
+La compilation utilise le profil `web` de `Cargo.toml` (optimisation sur tout le programme : plus long à compiler, un peu plus petit) et enlève les noms de fonctions, qui ne servent qu'à déboguer (7 Mo). `.\web\build.ps1 -Opt` (ou `OPT=1 ./web/build.sh`) passe en plus `wasm-opt -O2` s'il est installé.
+
+**Taille** (mesurée sur le moteur du 29 octobre) : 37,2 Mo → 29,9 Mo sans les noms. Ce qui compte pour un visiteur, c'est la taille transférée : les hébergeurs compressent le fichier (gzip), il fait alors environ 10,4 Mo, et `wasm-opt` n'y change presque rien. Le reste vient surtout du compositeur LaTeX (Typst), qui embarque des données qu'on ne peut pas désactiver. Le navigateur garde le moteur en cache : seule la première visite paie ce téléchargement.
+
+**À éviter : `wasm-opt -Oz`** (le plus petit) : 27,1 Mo, mais le rendu est environ trois fois plus lent.
+
+**Le moteur web ne se met pas à jour tout seul** : après chaque modification du code Rust, relancer `.\web\build.ps1`, sinon la page web et l'export `--export html` utilisent l'ancien moteur.
+
 ### Tester en local
 
 Le navigateur refuse de charger du WebAssembly depuis un fichier ouvert directement (`file://`). Il faut un petit serveur web, lancé depuis la racine du projet :
@@ -161,4 +169,5 @@ Produit un fichier `.html` qui contient tout (le cours, le lecteur et le moteur)
 
 - Voix : si `didact cours.dct --voice` a été lancé, mettre le dossier `cours_voix/` à côté du `.dct` sur le site ; la voix suit la langue choisie.
 - Son : les navigateurs bloquent souvent le son tant que le visiteur n'a pas cliqué ; il démarre alors au premier clic sur ▶. Les fichiers audio sont cherchés à côté du `.dct` (ou de la page pour un fichier écrit dans la page) ; la page autonome (`--export html`) les inclut.
+- Images (`type : image`) : le lecteur télécharge les fichiers PNG et SVG à côté du `.dct` avant la première image ; la page autonome les inclut aussi. Les polices grasse et italique et le dessin des SVG (resvg) ajoutent environ 1 Mo au moteur (moins compressé).
 - `raw.matplotlib` n'existe pas sur le web (pas de Python dans le navigateur).

@@ -53,6 +53,7 @@ deffigure t1 =
 deffigure f_rect =
     type   : rect
     pos    : (6%, 50%)
+    anchor : bottomleft
     width  : 24%
     height : 24%
     fill   : #3B82F6

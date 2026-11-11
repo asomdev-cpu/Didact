@@ -44,6 +44,12 @@ pub fn reveal(shapes: Vec<Shape>, mode: Mode, e: f32, first: usize, total: usize
             out.push(shape);
             continue;
         }
+        // Une image n'a pas de contour à tracer : elle apparaît en fondu
+        if shape.image.is_some() {
+            let fill = shape.fill.map(|c| Rgba { a: c.a * local, ..c });
+            out.push(Shape { fill, ..shape });
+            continue;
+        }
         let trace = (local / trace_part).min(1.0);
         let fill_part = ((local - trace_part) / (1.0 - trace_part)).clamp(0.0, 1.0);
 

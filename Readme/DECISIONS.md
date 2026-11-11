@@ -119,6 +119,20 @@ Améliorations techniques, sans impact sur le langage, à faire quand le besoin 
 
 **Quand :** avant de mettre Didact en ligne.
 
+**Mesures** (moteur du 29 octobre, 37,2 Mo : 19,1 Mo de code, 10,7 Mo de données dont 0,85 Mo de polices, 7,3 Mo de noms de fonctions pour le débogage) :
+
+| Variante | Taille | Compressé (gzip) | Vitesse de rendu |
+|---|---|---|---|
+| actuel | 37,2 Mo | 11,2 Mo | référence |
+| sans les noms de fonctions | 29,9 Mo | 10,4 Mo | identique |
+| `wasm-opt -Oz` | 27,1 Mo | 10,4 Mo | environ 3 fois plus lent |
+
+Les trois variantes donnent exactement la même image.
+
+**Fait :** profil Cargo `web` (LTO, une seule unité de compilation, `panic = "abort"` : effet sur la taille non mesurable ici, la cible WebAssembly n'est pas installable dans cet environnement), noms de fonctions retirés par `wasm-bindgen`, `wasm-opt -O2` facultatif (`-Opt`). Écarté : `-Oz` et `opt-level = "z"` (trop lents pour un moteur de rendu).
+
+**Ce qui reste :** environ 10 Mo transférés, à cause de Typst (bibliographies, coloration de code, dictionnaires de césure, impossibles à désactiver). Aller plus bas demande de changer de compositeur pour le web (voir « À décider »).
+
 #### Vérifier le cadre et les chevauchements avant le rendu ✅ (`--check`)
 
 **Constat :** le validateur ne regarde que la structure (noms, références, timestamps, `destroy`…). Une figure qui sort du cadre ou en recouvre une autre n'est visible qu'en regardant l'animation. Pour qu'une IA (ou un humain) puisse se corriger sans rendre d'image, il faut le détecter avant.
@@ -613,6 +627,90 @@ Une figure placée dans un repère est coupée à son cadre (voir « Caméra 2D 
 
 **Raisonnement :** coloration de domaine, fractales et cartes de chaleur ne se dessinent pas avec des traits. Calculer à la taille de l'écran (et non sur une grille fixe) garde des détails nets à tout zoom, avec la caméra 2D.
 
+### `pos` = centre, 9 ancres
+
+**Décision :** `pos` désigne le centre de la figure, y compris pour `rect` (avant : coin bas-gauche). `anchor` accepte 9 valeurs (`topleft`, `top`, `topright`, `left`, `center`, `right`, `bottomleft`, `bottom`, `bottomright`), pour `rect` et les figures de texte ou de contenu (boîte englobante).
+
+**Raisonnement :** cercles, étoiles, textes et équations étaient déjà placés par leur centre ; le rect était la seule exception. Les 9 ancres permettent d'aligner un texte sur un bord sans calculer sa taille.
+
+### Couleurs : `hsl()` en plus des noms et de l'hexadécimal
+
+**Décision :** `hsl(teinte, s%, l%)` et `hsl(t, s%, l%, opacité)`, avec paramètres dans les composantes. Pas de `rgb()` pour l'instant (l'hexadécimal le couvre).
+
+**Raisonnement :** la teinte se règle et s'anime avec un seul nombre (`hsl(360*t, 80%, 50%)`), ce qui est pratique pour colorier une suite d'objets ou un balayage.
+
+### Numérotation : k va de 1 à n
+
+**Décision :** dans `trajectory` (`init` avec `count`), k va de 1 à n, comme dans `scatter`/`histogram` et `sum`.
+
+**Raisonnement :** une seule convention dans tout le langage, celle des maths (u₁ … uₙ).
+
+### Easing : `smooth` pour les figures, `linear` pour les paramètres
+
+**Décision :** une animation de figure démarre et finit lentement ; `to` sur un paramètre va à vitesse constante. `ease=...` change l'un ou l'autre.
+
+**Raisonnement :** un mouvement doux est le style 3Blue1Brown. Mais un paramètre est souvent un temps ou un zoom : avec `smooth`, le temps ralentissait au début et à la fin.
+
+### Une figure dans un seul groupe
+
+**Décision :** une figure ne peut être que dans un groupe (erreur claire sinon) ; un groupe peut contenir un autre groupe.
+
+**Raisonnement :** avec deux groupes, les effets s'additionnaient et les cas étaient ambigus (un groupe disparaît en fondu, l'autre reste : la figure doit-elle partir ?). Les groupes imbriqués couvrent le besoin sans ambiguïté.
+
+### `comment : none` efface le sous-titre
+
+**Décision :** `comment : none`, une seule valeur pour toutes les langues.
+
+**Raisonnement :** plus lisible qu'une liste de chaînes vides, une par langue.
+
+### Unités : `%`, `px`, `deg`, `rad`, `s`, `ms` ; pas de position en pixels absolus
+
+**Décision :** ces six unités seulement ; `cm`, `mm`, `pt`, `em` sont refusés avec un message qui dit quoi écrire. Les positions sont en % (ou dans un repère) : `pos : (200px, 300px)` est refusé.
+
+**Raisonnement :** une longueur physique n'a pas de sens sur un écran de taille inconnue. Une position en pixels ne garde pas la même image quand la taille ou les proportions de l'écran changent. `rad` est naturel en maths.
+
+### Timestamps au millième
+
+**Décision :** la précision des timestamps reste la milliseconde.
+
+**Raisonnement :** suffisant (une image dure 16,7 ms à 60 images/s) et précis.
+
+### `allow` gardé dans `--check`
+
+**Décision :** `allow : outside | overlap` reste, et seuls les chevauchements texte contre texte sont signalés.
+
+**Raisonnement :** une personne peut ignorer un avertissement, mais une IA qui relance `--check` le verrait à chaque fois, « corrigerait » un effet voulu, et le code de retour ne serait jamais 0. Un texte sur une forme (étiquette sur une courbe) est normal, donc pas signalé.
+
+### Remarques d'hygiène dans `--check`
+
+**Décision :** figure jamais affichée ni utilisée, style ou paramètre jamais utilisé : signalés comme remarques (`info`), sans changer le code de retour.
+
+**Raisonnement :** utile pour nettoyer un fichier, mais ce n'est jamais une faute : un fichier de styles partagés en définit forcément qui ne servent pas partout.
+
+### Web : Typst gardé dans le moteur
+
+**Décision :** le moteur web garde Typst (environ 10 Mo compressés, en cache après la première visite).
+
+**Raisonnement :** rendu identique au bureau et au MP4, texte modifiable dans le navigateur (nécessaire pour un éditeur en ligne), aucun travail en plus. Un lecteur léger (textes précomposés) reste possible plus tard ; KaTeX est écarté (rendu différent, pas de morphing lettre par lettre).
+
+### Petites propriétés : le minimum utile
+
+**Décision :** `corner_radius` (rect), `radius : (rx, ry)` (ellipse, sans nouveau type), `inner` (étoile), `marker` (scatter), `step` (axes, graduations en π quand le pas en est un multiple), `closed : false` (polygon), `loop` (audio). Pas de style de bordure pour `table`, pas de choix de police.
+
+**Raisonnement :** chacune répond à un besoin courant d'un cours de maths (trigonométrie, méthode d'Euler, séries de points distinguées sans la couleur). L'ellipse reste un `circle` : un type de moins à apprendre.
+
+### Gras et italique : par LaTeX, pas par des propriétés
+
+**Décision :** `\textbf{...}`, `\textit{...}`, `\emph{...}` dans `text`, `latex` et `table` ; pas de `bold : true`. Les polices grasse et italique de Latin Modern sont embarquées.
+
+**Raisonnement :** le gras ne porte souvent que sur un mot (« **Théorème.** ... ») : une propriété sur toute la figure ne suffirait pas, et la syntaxe LaTeX est déjà connue. Avant, `\textbf` était ignoré faute de police grasse.
+
+### Type `image` : PNG et SVG, posés comme un rect
+
+**Décision :** `file`, `pos`, `size` (plus grand côté), `anchor` ; SVG dessiné par resvg à la taille de l'écran ; animations de fondu, déplacement, échelle, rotation ; `draw` devient un fondu ; pas de `transform`.
+
+**Raisonnement :** pouvoir réutiliser un schéma fait ailleurs sans le redessiner. Une image n'a pas de contour : ce qui doit se transformer se dessine en Didact.
+
 ### Licence MIT
 
 **Décision :** Le projet est sous licence MIT.
@@ -730,6 +828,9 @@ Idées qui ont été discutées et rejetées explicitement.
 ## Changelog des versions du langage
 
 ### v0.2 (en cours)
+- Type `image` (PNG, SVG via resvg ; `src/renderer/image.rs`) ; `corner_radius`, ellipses (`radius : (rx, ry)`), `inner` (étoile), `marker` (scatter), `step` des axes et graduations en π, `closed : false`, `audio ... loop` ; gras et italique (`\textbf`, `\textit`, `\emph`) avec les polices Latin Modern grasse et italique ; `demo_details.dct`
+- `to` sur un paramètre à vitesse constante par défaut ; une figure dans un seul groupe ; `comment : none` ; unités `%`, `px`, `deg`, `rad`, `s`, `ms` (`rotate : 30deg` / `0.5rad` marche enfin), `cm`/`mm`/`pt`/`em` et positions en px refusés ; remarques `unused_figure` / `unused_style` / `unused_param` dans `--check`
+- `pos` d'un `rect` = son centre (avant : coin bas-gauche) ; `anchor` à 9 valeurs pour `rect` et les figures de texte (`text`, `equation`, `latex`, `raw.latex`, `table`, `array`, `graph`) ; couleurs `hsl(t, s%, l%[, a])` (paramètres acceptés) ; k de 1 à n dans `trajectory`
 - `--check` (figures hors du cadre, textes qui se chevauchent, figures non dessinables ; `allow : outside | overlap`) et `--format json`, codes de retour 0 / 2 / 1 (`src/check.rs`) ; seules les figures affichées et leurs dépendances sont calculées à chaque image
 - `trajectory` : équations différentielles (RK4), portraits de phase, particules avec traînée, attracteurs 3D (`src/renderer/ode.rs`) ; `rand`, `randn`, `fact`, `binom`, `gamma`, `erf` ; `scatter` et `histogram` tirés par formule (`count`, `range`, `density`, `where`) ; formules compilées, sommes comprises
 - `graph` (dispositions cercle, grille, arbre, forces) et `array` (matrices), morceaux surlignés par `color(part=...)` (`src/renderer/discrete.rs`)
@@ -781,4 +882,4 @@ Idées qui ont été discutées et rejetées explicitement.
 - Animations principales
 - Audio et commentaires multilingues
 - Escape hatches `raw.latex` et `raw.matplotlib`
-- Implémentation lexer, AST, parser en Rust
+- Implémentation lexer, AST, parser en Rust

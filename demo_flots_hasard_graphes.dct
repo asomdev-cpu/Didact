@@ -29,7 +29,7 @@ deffigure pendule =
     type     : trajectory
     axes     : r1
     ode      : (y, -sin(x) - 0.25*y)
-    init     : (-4 + 8*mod(k, 9)/8, -3 + 6*floor(k/9)/8)
+    init     : (-4 + 8*mod(k - 1, 9)/8, -3 + 6*floor((k - 1)/9)/8)
     count    : 81
     duration : T
     trail    : 2
@@ -58,7 +58,7 @@ deffigure lorenz =
     type     : trajectory
     scene    : espace
     ode      : (10*(y - x), x*(28 - z) - y, x*y - 8/3*z)
-    init     : (1 + 0.001*k, 1, 1)
+    init     : (1 + 0.001*(k - 1), 1, 1)
     count    : 2
     duration : 3*T
     dt       : 0.005

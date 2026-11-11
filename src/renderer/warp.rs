@@ -428,7 +428,7 @@ mod tests {
     fn segments_courbes() {
         let params = HashMap::new();
         let w = of(&fig(&[("cmap", PropValue::Single("z^2".into()))]), &params, 2).unwrap().unwrap();
-        let m = AxesMap { ox: 0.0, oy: 100.0, ux: 10.0, uy: 10.0, xrange: (-5.0, 5.0), yrange: (-5.0, 5.0) };
+        let m = AxesMap { ox: 0.0, oy: 100.0, ux: 10.0, uy: 10.0, xrange: (-5.0, 5.0), yrange: (-5.0, 5.0), step: (1.0, 1.0) };
         // Segment vertical x = 1, de y = -1 à 1 : devient un arc de parabole
         let (a, b) = (m.to_px(1.0, -1.0), m.to_px(1.0, 1.0));
         let mut shapes = vec![Shape { path: vec![PathCmd::MoveTo(a.0, a.1), PathCmd::LineTo(b.0, b.1)], fill: None, stroke: None, glow: 0.0, image: None }];

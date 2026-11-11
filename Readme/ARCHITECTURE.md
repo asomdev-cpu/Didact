@@ -201,11 +201,12 @@ L'export n'est pas le mode normal d'utilisation. C'est une fonctionnalité opt-i
 **Renderer (`src/renderer/`) — ✅ tous les types sauf `raw.matplotlib`**
 - `geometry.rs` : figure → formes en pixels (chemins, remplissage, trait), indépendant de la bibliothèque de dessin
 - `skia.rs` : backend tiny-skia, dessine les formes dans une image en mémoire (sur processeur)
-- `typeset.rs` : moteur de composition — LaTeX → Typst (`mitex`) → Typst compose → SVG (`typst-svg`) → contours (`usvg`), avec cache
+- `typeset.rs` : moteur de composition — LaTeX → Typst (`mitex`) → Typst compose → SVG (`typst-svg`) → contours (`usvg`), avec cache ; polices Latin Modern normale, grasse, italique, grasse italique et maths ; `\textbf` / `\textit` / `\emph` hors maths dans un `text`
+- `image.rs` : type `image` — PNG (tiny-skia) ou SVG (resvg, à la taille de l'écran, cache) ; fichiers lus à côté du `.dct` (`set_base_dir`) ou donnés par le lecteur web (`register`)
 - `text.rs` : point d'entrée simple vers `typeset` pour le type `text`
 - `expr.rs` : évaluateur des expressions de `plot` (lu une fois, évalué pour chaque x)
 - `mod.rs` : trait `RenderBackend` + `render_frame` (dessine une frame, liste les figures non dessinables). Seules les figures affichées et celles dont elles dépendent sont calculées (`needed_figures`)
-- `src/check.rs` : `--check` — un backend qui ne dessine rien et note la boîte de chaque figure (`begin_figure`), échantillonnage du temps, avertissements hors cadre et chevauchements, sortie texte ou JSON
+- `src/check.rs` : `--check` — un backend qui ne dessine rien et note la boîte de chaque figure (`begin_figure`), échantillonnage du temps, avertissements hors cadre et chevauchements, remarques d'hygiène (`unused`, sur l'AST), sortie texte ou JSON
 - Délègue à LaTeX/Matplotlib pour les contenus complexes (à faire)
 
 **Rechargement (`src/output/reload.rs`) — ✅ implémenté**
@@ -267,6 +268,7 @@ didact/
     │   ├── ode.rs           # Équations différentielles (RK4) : type trajectory
     │   ├── discrete.rs      # Graphes, arbres, tableaux ; morceaux nommés pour part=
     │   ├── pixels.rs        # Une couleur par pixel (chaleur, domaine, fractales)
+    │   ├── image.rs         # Fichiers PNG / SVG posés sur la scène
     │   ├── text.rs          # Rendu texte simple
     │   ├── latex.rs         # Intégration LaTeX
     │   ├── math_plot.rs     # Rendu des graphes
@@ -485,4 +487,4 @@ Quand l'utilisateur lance `didact cours.dct`, voici ce qui se passe :
 9. Si l'utilisateur ferme la fenêtre :
    └─ event loop termine
    └─ programme quitte proprement
-```
+```

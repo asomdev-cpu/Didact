@@ -23,6 +23,11 @@ use typst::{Library, LibraryExt, World};
 use typst_layout::PagedDocument;
 
 static FONT_REGULAR: &[u8] = include_bytes!("../../assets/fonts/lmroman10-regular.otf");
+static FONT_BOLD: &[u8] = include_bytes!("../../assets/fonts/lmroman10-bold.otf");
+static FONT_ITALIC: &[u8] = include_bytes!("../../assets/fonts/lmroman10-italic.otf");
+static FONT_BOLD_ITALIC: &[u8] = include_bytes!("../../assets/fonts/lmroman10-bolditalic.otf");
+/// Polices du texte (pour les textes des images SVG)
+pub(crate) static TEXT_FONTS: [&[u8]; 4] = [FONT_REGULAR, FONT_BOLD, FONT_ITALIC, FONT_BOLD_ITALIC];
 static FONT_MATH: &[u8] = include_bytes!("../../assets/fonts/latinmodern-math.otf");
 
 static MITEX_MOD: &str = include_str!("../../assets/typst/mitex/specs/mod.typ");
@@ -83,7 +88,7 @@ struct Engine {
 fn engine() -> &'static Engine {
     static ENGINE: OnceLock<Engine> = OnceLock::new();
     ENGINE.get_or_init(|| {
-        let fonts: Vec<Font> = [FONT_REGULAR, FONT_MATH]
+        let fonts: Vec<Font> = [FONT_REGULAR, FONT_BOLD, FONT_ITALIC, FONT_BOLD_ITALIC, FONT_MATH]
             .iter()
             .flat_map(|data| Font::iter(Bytes::new(data.to_vec())))
             .collect();
@@ -162,8 +167,48 @@ fn text_line(line: &str) -> Result<String, String> {
         if i % 2 == 1 {
             out.push_str(&math_call(part, false)?);
         } else {
-            out.push_str(&format!("#{}", typst_str(part)));
+            out.push_str(&styled(part)?);
         }
+    }
+    Ok(out)
+}
+
+/// Texte hors maths : `\textbf{...}` (gras), `\textit{...}` et `\emph{...}` (italique),
+/// imbriquables ; tout le reste est écrit tel quel
+fn styled(text: &str) -> Result<String, String> {
+    const STYLES: [(&str, &str); 3] = [("\\textbf{", "strong"), ("\\textit{", "emph"), ("\\emph{", "emph")];
+    let mut out = String::new();
+    let mut rest = text;
+    while !rest.is_empty() {
+        // Prochaine commande de style
+        let next = STYLES.iter().filter_map(|(cmd, f)| rest.find(cmd).map(|i| (i, *cmd, *f))).min_by_key(|x| x.0);
+        let Some((i, cmd, func)) = next else {
+            out.push_str(&format!("#{}", typst_str(rest)));
+            break;
+        };
+        if i > 0 {
+            out.push_str(&format!("#{}", typst_str(&rest[..i])));
+        }
+        // Accolade fermante correspondante
+        let body_start = i + cmd.len();
+        let mut depth = 1;
+        let mut end = None;
+        for (j, c) in rest[body_start..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(body_start + j);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let end = end.ok_or_else(|| format!("'{}' sans '}}' dans « {} »", cmd, text))?;
+        out.push_str(&format!("#{}[{}]", func, styled(&rest[body_start..end])?));
+        rest = &rest[end + 1..];
     }
     Ok(out)
 }
@@ -393,6 +438,17 @@ pub fn check(content: &Content) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gras_et_italique_dans_le_texte() {
+        assert_eq!(styled("a").unwrap(), "#\"a\"");
+        assert_eq!(styled("x \\textbf{y} z").unwrap(), "#\"x \"#strong[#\"y\"]#\" z\"");
+        assert_eq!(styled("\\textbf{\\emph{y}}").unwrap(), "#strong[#emph[#\"y\"]]");
+        assert!(styled("\\textit{sans fin").is_err());
+        // Les variantes de la police existent : le gras est plus large que le normal
+        let w = |s: &str| measure(&Content::Text(s.into()), 10.0).unwrap().0;
+        assert!(w("\\textbf{Didact}") > w("Didact") * 1.03);
+    }
 
     #[test]
     fn formules() {

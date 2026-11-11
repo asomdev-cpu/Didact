@@ -38,6 +38,8 @@ struct Track {
     volume: f32,
     start: f64,
     end: Option<f64>,
+    /// Recommence à la fin du fichier
+    looping: bool,
     /// Voix d'une langue (jouée seulement dans cette langue) ; None = toujours
     lang: Option<usize>,
 }
@@ -92,7 +94,14 @@ impl AudioPlayer {
                     }
                 },
             };
-            tracks.push(Track { clip, volume: seg.volume as f32, start: seg.start, end: seg.end, lang: *seg_lang });
+            tracks.push(Track {
+                clip,
+                volume: seg.volume as f32,
+                start: seg.start,
+                end: seg.end,
+                looping: seg.looping,
+                lang: *seg_lang,
+            });
         }
 
         let device = cpal::default_host().default_output_device().ok_or("aucune sortie audio trouvée")?;
@@ -201,7 +210,10 @@ impl Mixer {
                     continue;
                 }
                 let clip = &tr.clip;
-                let pos = (time - tr.start) * clip.rate as f64;
+                let mut pos = (time - tr.start) * clip.rate as f64;
+                if tr.looping && clip.frames() > 1 {
+                    pos %= (clip.frames() - 1) as f64;
+                }
                 let i0 = pos.floor() as usize;
                 if i0 + 1 >= clip.frames() {
                     continue;
@@ -323,7 +335,7 @@ mod tests {
         let clip = Arc::new(clip);
         let clock = Arc::new(Mutex::new(Clock { t: 0.0, at: Instant::now(), playing: true }));
         let mut m = Mixer {
-            tracks: vec![Track { clip, volume: 0.5, start: 2.0, end: Some(3.0), lang: None }],
+            tracks: vec![Track { clip, volume: 0.5, start: 2.0, end: Some(3.0), looping: false, lang: None }],
             clock: clock.clone(),
             lang: Arc::new(AtomicUsize::new(0)),
             out_channels: 2,
@@ -340,6 +352,13 @@ mod tests {
         let e = energy(&mut m, 2.2);
         assert!(e > 0.2 && e <= 0.26, "{}", e); // 0.5 × 0.5
         assert_eq!(energy(&mut m, 3.5), 0.0); // après `end`
+
+        // En boucle : un fichier d'1 s joue encore 5 s après son début
+        m.tracks[0].end = None;
+        assert_eq!(energy(&mut m, 7.2), 0.0, "sans loop : fini");
+        m.tracks[0].looping = true;
+        let e = energy(&mut m, 7.2);
+        assert!(e > 0.2 && e <= 0.26, "{}", e);
         std::fs::remove_dir_all(&dir).ok();
     }
 }

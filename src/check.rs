@@ -8,8 +8,11 @@
 //!   Ce n'est pas forcément une faute (une figure qui entre par le bord) : `allow : outside`,
 //!   `allow : overlap` ou `allow : [outside, overlap]` sur la figure les fait taire.
 //!
-//! Sortie lisible (défaut) ou JSON (`--format json`) ; code de retour : 0 rien, 2 seulement des
-//! avertissements, 1 des erreurs.
+//! - Remarques (sans effet sur le code de retour) : figure, style ou paramètre défini mais jamais
+//!   utilisé.
+//!
+//! Sortie lisible (défaut) ou JSON (`--format json`) ; code de retour : 0 rien (ou seulement des
+//! remarques), 2 des avertissements, 1 des erreurs.
 
 use crate::ast::PropValue;
 use crate::renderer::{self, RenderBackend, Rgba, Scene, Shape};
@@ -21,13 +24,26 @@ use std::collections::HashMap;
 pub enum Severity {
     Error,
     Warning,
+    /// Remarque d'hygiène : ne change pas le code de retour
+    Info,
+}
+
+impl Severity {
+    pub fn name(self) -> &'static str {
+        match self {
+            Severity::Error => "error",
+            Severity::Warning => "warning",
+            Severity::Info => "info",
+        }
+    }
 }
 
 /// Un problème trouvé
 #[derive(Debug, Clone, PartialEq)]
 pub struct Diagnostic {
     pub severity: Severity,
-    /// Nature du problème : "parse", "validation", "outside", "overlap", "render"
+    /// Nature du problème : "parse", "validation", "outside", "overlap", "render",
+    /// "unused_figure", "unused_style", "unused_param"
     pub code: &'static str,
     pub line: Option<usize>,
     pub time: Option<f64>,
@@ -98,7 +114,7 @@ impl Diagnostic {
         let opt_str = |v: &Option<String>| v.as_ref().map(|s| json_str(s)).unwrap_or_else(|| "null".into());
         format!(
             "{{\"severity\": \"{}\", \"code\": \"{}\", \"line\": {}, \"time\": {}, \"figure\": {}, \"other\": {}, \"message\": {}}}",
-            if self.severity == Severity::Error { "error" } else { "warning" },
+            self.severity.name(),
             self.code,
             self.line.map(|l| l.to_string()).unwrap_or_else(|| "null".into()),
             self.time.map(|t| format!("{:.3}", t)).unwrap_or_else(|| "null".into()),
@@ -151,10 +167,10 @@ pub fn to_json(diags: &[Diagnostic]) -> String {
 pub fn exit_code(diags: &[Diagnostic]) -> i32 {
     if diags.iter().any(|d| d.severity == Severity::Error) {
         1
-    } else if diags.is_empty() {
-        0
-    } else {
+    } else if diags.iter().any(|d| d.severity == Severity::Warning) {
         2
+    } else {
+        0
     }
 }
 
@@ -374,7 +390,95 @@ pub fn check(source: &str, lang: Option<&str>) -> Vec<Diagnostic> {
     }
     let resolved = crate::resolver::resolve(&doc);
     let timeline = Timeline::new(&resolved);
-    layout(&resolved, &timeline, lang)
+    let mut diags = layout(&resolved, &timeline, lang);
+    diags.extend(unused(&doc));
+    diags
+}
+
+/// Les mots (noms) d'un texte ; `2k` (multiplication implicite) donne `k`
+fn words(text: &str, out: &mut std::collections::HashSet<String>) {
+    for w in text.split(|c: char| !(c.is_alphanumeric() || c == '_')) {
+        let w = w.trim_start_matches(|c: char| c.is_ascii_digit());
+        if !w.is_empty() {
+            out.insert(w.to_string());
+        }
+    }
+}
+
+/// Remarques d'hygiène : figures, styles et paramètres définis mais jamais utilisés
+pub fn unused(doc: &crate::ast::Document) -> Vec<Diagnostic> {
+    use std::collections::HashSet;
+    let info = |code, line, figure: &str, message: String| Diagnostic {
+        severity: Severity::Info,
+        code,
+        line: Some(line),
+        time: None,
+        figure: Some(figure.to_string()),
+        other: None,
+        message,
+    };
+    // Mots de la timeline, et des propriétés de chaque figure et de chaque style
+    let mut in_timeline = HashSet::new();
+    words(&format!("{:?}", doc.timeline), &mut in_timeline);
+    let props_words = |p: &HashMap<String, PropValue>| {
+        let mut w = HashSet::new();
+        for v in p.values() {
+            words(&format!("{:?}", v), &mut w);
+        }
+        w
+    };
+    let fig_words: Vec<HashSet<String>> = doc.figures.iter().map(|f| props_words(&f.properties)).collect();
+    let style_words: Vec<HashSet<String>> = doc.styles.iter().map(|s| props_words(&s.properties)).collect();
+
+    // Figures : affichées par la timeline, utilisées par une autre figure, ou dans un groupe utilisé
+    let mut used: HashSet<&str> = doc
+        .figures
+        .iter()
+        .enumerate()
+        .filter(|(i, f)| {
+            in_timeline.contains(&f.name)
+                || fig_words.iter().enumerate().any(|(j, w)| j != *i && w.contains(&f.name))
+        })
+        .map(|(_, f)| f.name.as_str())
+        .collect();
+    loop {
+        let before = used.len();
+        for (f, w) in doc.figures.iter().zip(&fig_words) {
+            if used.contains(f.name.as_str()) && f.properties.get("type").map(fmt_value).as_deref() == Some("group") {
+                for g in &doc.figures {
+                    if w.contains(&g.name) {
+                        used.insert(g.name.as_str());
+                    }
+                }
+            }
+        }
+        if used.len() == before {
+            break;
+        }
+    }
+    let mut out = Vec::new();
+    for f in &doc.figures {
+        if !used.contains(f.name.as_str()) {
+            out.push(info("unused_figure", f.line, &f.name, "figure jamais affichée ni utilisée par une autre".into()));
+        }
+    }
+    for s in &doc.styles {
+        let referenced = fig_words.iter().any(|w| w.contains(&s.name))
+            || doc.styles.iter().zip(&style_words).any(|(o, w)| {
+                o.name != s.name && (o.extends.as_deref() == Some(s.name.as_str()) || w.contains(&s.name))
+            });
+        if !referenced {
+            out.push(info("unused_style", s.line, &s.name, "style jamais utilisé".into()));
+        }
+    }
+    for p in &doc.params {
+        let referenced = in_timeline.contains(&p.name)
+            || fig_words.iter().chain(&style_words).any(|w| w.contains(&p.name));
+        if !referenced {
+            out.push(info("unused_param", p.line, &p.name, "paramètre jamais utilisé".into()));
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -413,5 +517,26 @@ mod tests {
         let diags = check("[figures]\n[timeline]\n0.000 => { start : [x] }\n", None);
         assert_eq!(exit_code(&diags), 1);
         assert_eq!(diags[0].line, Some(3));
+    }
+
+    #[test]
+    fn remarques_hygiene() {
+        let src = "[config]\nwindow : [16:9]\n[figures]\n\
+            defparam k = 1\ndefparam inutile = 2\n\
+            defstyle gras =\n    stroke : 4px\n\
+            defstyle oublie =\n    stroke : 1px\n\
+            deffigure a =\n    type : circle\n    center : (50%, 50%)\n    radius : (2k)%\n    style : gras\n\
+            deffigure b =\n    type : circle\n    center : center(a)\n    radius : 5%\n\
+            deffigure seule =\n    type : circle\n    center : (20%, 50%)\n    radius : 5%\n\
+            deffigure g =\n    type : group\n    items : [b]\n\
+            [timeline]\n0.000 => { start : [a, g] }\n";
+        let diags = check(src, None);
+        let infos: Vec<(&str, &str)> = diags
+            .iter()
+            .filter(|d| d.severity == Severity::Info)
+            .map(|d| (d.code, d.figure.as_deref().unwrap()))
+            .collect();
+        assert_eq!(infos, [("unused_figure", "seule"), ("unused_style", "oublie"), ("unused_param", "inutile")], "{:?}", diags);
+        assert_eq!(exit_code(&diags), 0, "les remarques ne changent pas le code de retour");
     }
 }

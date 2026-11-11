@@ -162,20 +162,36 @@ impl SkiaBackend {
             let Some(src) = tiny_skia::PixmapRef::from_bytes(&img.data, img.width, img.height) else { return };
             // Même taille que le cadre, sans rotation ni échelle : copie directe (bien plus rapide)
             let plain = transform.sx == 1.0 && transform.sy == 1.0 && transform.kx == 0.0 && transform.ky == 0.0;
+            // ... et cadre droit, pas tourné (un carré tourné de 90° a la même boîte)
+            let upright = match shape.path.as_slice() {
+                [PathCmd::MoveTo(x0, y0), PathCmd::LineTo(x1, y1), _, PathCmd::LineTo(x3, y3), PathCmd::Close] => {
+                    x1 > x0 && (y1 - y0).abs() < 0.01 && (x3 - x0).abs() < 0.01 && y3 > y0
+                }
+                _ => true,
+            };
+            let plain = plain && upright;
             if plain && (b.width() - img.width as f32).abs() < 0.5 && (b.height() - img.height as f32).abs() < 0.5 {
                 let (x, y) = ((b.left() + transform.tx).round() as i32, (b.top() + transform.ty).round() as i32);
                 let paint = PixmapPaint { opacity, blend_mode: BlendMode::SourceOver, quality: tiny_skia::FilterQuality::Nearest };
                 self.pixmap.draw_pixmap(x, y, src, &paint, Transform::identity(), mask);
                 return;
             }
-            let to_box = Transform::from_row(
-                b.width() / img.width as f32,
-                0.0,
-                0.0,
-                b.height() / img.height as f32,
-                b.left(),
-                b.top(),
-            );
+            // Cadre à 4 coins (haut-gauche, haut-droit, bas-droit, bas-gauche) : l'image suit ses
+            // côtés, même tourné ; sinon, la boîte du chemin
+            let to_box = match shape.path.as_slice() {
+                [PathCmd::MoveTo(x0, y0), PathCmd::LineTo(x1, y1), PathCmd::LineTo(_, _), PathCmd::LineTo(x3, y3), PathCmd::Close] => {
+                    let (w, h) = (img.width as f32, img.height as f32);
+                    Transform::from_row((x1 - x0) / w, (y1 - y0) / w, (x3 - x0) / h, (y3 - y0) / h, *x0, *y0)
+                }
+                _ => Transform::from_row(
+                    b.width() / img.width as f32,
+                    0.0,
+                    0.0,
+                    b.height() / img.height as f32,
+                    b.left(),
+                    b.top(),
+                ),
+            };
             let mut p = tiny_skia::Paint::default();
             p.anti_alias = true;
             p.shader = tiny_skia::Pattern::new(src, tiny_skia::SpreadMode::Pad, tiny_skia::FilterQuality::Bilinear, opacity, to_box);

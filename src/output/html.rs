@@ -87,7 +87,7 @@ pub fn export(source: &str, opts: &HtmlOptions) -> Result<HtmlReport, String> {
     Ok(HtmlReport { engine_dir, size: page.len() })
 }
 
-/// Fichier audio en adresse `data:` (lisible par <audio> sans serveur)
+/// Fichier audio ou image en adresse `data:` (lisible par <audio> ou fetch, sans serveur)
 fn data_url(path: &Path, bytes: &[u8]) -> String {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
     let mime = match ext.as_str() {
@@ -97,6 +97,8 @@ fn data_url(path: &Path, bytes: &[u8]) -> String {
         "m4a" | "aac" | "mp4" => "audio/mp4",
         "flac" => "audio/flac",
         "opus" => "audio/opus",
+        "png" => "image/png",
+        "svg" => "image/svg+xml",
         _ => "application/octet-stream",
     };
     format!("data:{};base64,{}", mime, base64::engine::general_purpose::STANDARD.encode(bytes))

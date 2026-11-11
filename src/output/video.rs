@@ -88,7 +88,10 @@ pub fn export(
     cmd.args(["-y", "-hide_banner", "-loglevel", "error"]);
     cmd.args(["-f", "rawvideo", "-pix_fmt", "rgba"]);
     cmd.args(["-s", &format!("{}x{}", w, h), "-r", &opts.fps.to_string(), "-i", "-"]);
-    for path in &audio_inputs {
+    for (path, seg) in audio_inputs.iter().zip(&segments) {
+        if seg.looping {
+            cmd.args(["-stream_loop", "-1"]); // relue sans fin, coupée par atrim
+        }
         cmd.arg("-i").arg(path);
     }
     if !segments.is_empty() {
@@ -217,6 +220,9 @@ pub fn export_audio(
         let path = base_dir.join(&seg.file);
         if !path.is_file() {
             return Err(format!("fichier audio introuvable : {}", path.display()));
+        }
+        if seg.looping {
+            cmd.args(["-stream_loop", "-1"]); // relue sans fin, coupée par atrim
         }
         cmd.arg("-i").arg(path);
     }

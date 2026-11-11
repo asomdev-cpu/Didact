@@ -153,7 +153,8 @@ pub enum TimelineAction {
 pub enum StartItem {
     /// fig, ou fig fadein(1s) (animation d'entrée)
     Figure { name: String, anim: Option<AnimCall> },
-    Audio { file: String, volume: Option<f64> },
+    /// `loop` : la piste recommence à la fin du fichier
+    Audio { file: String, volume: Option<f64>, looping: bool },
 }
 
 /// Un élément dans end (peut inclure une animation de sortie)
@@ -184,4 +185,4 @@ pub struct AnimCall {
     pub params: Vec<String>,
     /// Ligne où l'appel est écrit
     pub line: usize,
-}
+}

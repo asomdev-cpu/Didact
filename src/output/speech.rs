@@ -315,7 +315,13 @@ pub fn plan(timeline: &Timeline, dct: &Path, lang: &str) -> VoicePlan {
     let holds = Holds::new(&lines, duration_of);
     let segments = lines
         .iter()
-        .map(|l| AudioSegment { file: format!("{}/{}", dir_name, l.file), volume: 1.0, start: l.t, end: None })
+        .map(|l| AudioSegment {
+            file: format!("{}/{}", dir_name, l.file),
+            volume: 1.0,
+            start: l.t,
+            end: None,
+            looping: false,
+        })
         .collect();
     VoicePlan { segments, holds }
 }

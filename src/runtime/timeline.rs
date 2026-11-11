@@ -66,8 +66,8 @@ struct Snapshot {
     last_start: HashMap<String, f64>,
     /// Dernier commentaire affiché (toutes langues), reste jusqu'au suivant
     comment: Option<Vec<String>>,
-    /// Pistes audio en cours : fichier → (volume, instant de démarrage)
-    audio: HashMap<String, (f64, f64)>,
+    /// Pistes audio en cours : fichier → (volume, instant de démarrage, en boucle)
+    audio: HashMap<String, (f64, f64, bool)>,
 }
 
 /// Une piste audio en cours de lecture
@@ -77,6 +77,8 @@ pub struct AudioTrack {
     pub volume: f64,
     /// Position de lecture dans le fichier (secondes depuis son `start`)
     pub position: f64,
+    /// Recommence à la fin du fichier
+    pub looping: bool,
 }
 
 /// Une piste audio sur toute sa durée de lecture
@@ -88,6 +90,8 @@ pub struct AudioSegment {
     pub start: f64,
     /// Instant d'arrêt (None = jusqu'à la fin de la vidéo)
     pub end: Option<f64>,
+    /// Recommence à la fin du fichier
+    pub looping: bool,
 }
 
 /// Une figure à l'instant t, avec ses animations déjà commencées
@@ -272,8 +276,8 @@ impl Timeline {
                                     schedule(&mut anims, &mut swaps, name, call, t);
                                 }
                             }
-                            StartItem::Audio { file, volume } => {
-                                current.audio.insert(file.clone(), (volume.unwrap_or(1.0), t));
+                            StartItem::Audio { file, volume, looping } => {
+                                current.audio.insert(file.clone(), (volume.unwrap_or(1.0), t, *looping));
                             }
                         }
                     }
@@ -361,6 +365,11 @@ impl Timeline {
     }
 
     /// Timestamps de tous les blocs, triés
+    /// Toutes les figures, dans l'ordre de dessin
+    pub fn figures(&self) -> &[ResolvedFigure] {
+        &self.figures
+    }
+
     pub fn times(&self) -> &[f64] {
         &self.times
     }
@@ -371,15 +380,15 @@ impl Timeline {
         let mut open: Vec<AudioSegment> = Vec::new();
         for &t in self.times() {
             let frame = self.frame_at(t, None);
-            let now: Vec<(String, f64, f64)> = frame
+            let now: Vec<(String, f64, f64, bool)> = frame
                 .audio
                 .iter()
-                .map(|a| (a.file.clone(), a.volume, round_ms(t - a.position)))
+                .map(|a| (a.file.clone(), a.volume, round_ms(t - a.position), a.looping))
                 .collect();
             // Pistes arrêtées (ou relancées) à t
             let mut still = Vec::new();
             for mut seg in open.drain(..) {
-                if now.iter().any(|(f, v, s)| *f == seg.file && *v == seg.volume && *s == seg.start) {
+                if now.iter().any(|(f, v, s, l)| *f == seg.file && *v == seg.volume && *s == seg.start && *l == seg.looping) {
                     still.push(seg);
                 } else {
                     seg.end = Some(t);
@@ -388,9 +397,9 @@ impl Timeline {
             }
             open = still;
             // Nouvelles pistes
-            for (file, volume, start) in now {
+            for (file, volume, start, looping) in now {
                 if !open.iter().any(|s| s.file == file && s.start == start) {
-                    open.push(AudioSegment { file, volume, start, end: None });
+                    open.push(AudioSegment { file, volume, start, end: None, looping });
                 }
             }
         }
@@ -492,7 +501,7 @@ impl Timeline {
         let mut audio: Vec<AudioTrack> = snap
             .audio
             .iter()
-            .map(|(file, &(volume, start))| AudioTrack { file: file.clone(), volume, position: t - start })
+            .map(|(file, &(volume, start, looping))| AudioTrack { file: file.clone(), volume, position: t - start, looping })
             .collect();
         audio.sort_by(|a, b| a.file.cmp(&b.file));
 
@@ -634,6 +643,24 @@ mod tests {
     }
 
     #[test]
+    fn commentaire_efface() {
+        let tl = timeline(
+            "[config]
+            languages    : [FR, EN]
+            default_lang : FR
+            [figures]
+            [timeline]
+            1.000 => { comment : [\"un\", \"one\"] }
+            2.000 => { comment : none }
+            3.000 => { comment : [\"trois\", \"three\"] }",
+        );
+        assert_eq!(tl.frame_at(1.5, Some("EN")).comment, Some("one"));
+        assert_eq!(tl.frame_at(2.5, None).comment, None);
+        assert_eq!(tl.frame_at(2.5, Some("EN")).comment, None);
+        assert_eq!(tl.frame_at(3.5, None).comment, Some("trois"));
+    }
+
+    #[test]
     fn audio_demarre() {
         let tl = timeline(
             "[figures]
@@ -763,14 +790,14 @@ mod tests {
             "[config]\nwindow : [16:9]\n[figures]\n[timeline]
             2.000 => { start : [audio musique.mp3 volume=0.3] }
             8.000 => { end : [audio musique.mp3] }
-            9.000 => { start : [audio bip.wav] }",
+            9.000 => { start : [audio bip.wav loop volume=0.5] }",
         );
         let segs = tl.audio_segments();
         assert_eq!(
             segs,
             vec![
-                AudioSegment { file: "musique.mp3".into(), volume: 0.3, start: 2.0, end: Some(8.0) },
-                AudioSegment { file: "bip.wav".into(), volume: 1.0, start: 9.0, end: None },
+                AudioSegment { file: "musique.mp3".into(), volume: 0.3, start: 2.0, end: Some(8.0), looping: false },
+                AudioSegment { file: "bip.wav".into(), volume: 0.5, start: 9.0, end: None, looping: true },
             ]
         );
     }
