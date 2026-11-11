@@ -1,0 +1,242 @@
+# ─────────────────────────────────────────────
+#  Équations différentielles, hasard, graphes, couleur par pixel
+#  didact demo_flots_hasard_graphes.dct
+# ─────────────────────────────────────────────
+
+[config]
+window       : [16:9]
+background   : #0B0F19
+languages    : [FR, EN]
+default_lang : FR
+
+[figures]
+
+defparam T = 0          # temps des équations différentielles
+defparam n = 1          # nombre de tirages
+defparam p = 0          # zoom de la fractale : 10^p
+
+# --- Partie 1 : portrait de phase et attracteur de Lorenz ---
+
+deffigure r1 =
+    type   : axes
+    from   : (3%, 10%)
+    to     : (47%, 86%)
+    xrange : [-4, 4]
+    yrange : [-3, 3]
+    color  : #6B7280
+
+deffigure pendule =
+    type     : trajectory
+    axes     : r1
+    ode      : (y, -sin(x) - 0.25*y)
+    init     : (-4 + 8*mod(k, 9)/8, -3 + 6*floor(k/9)/8)
+    count    : 81
+    duration : T
+    trail    : 2
+    head     : 3px
+    colormap : turbo
+    stroke   : 1.5px
+
+deffigure titre1 =
+    type    : equation
+    expr    : \ddot\theta = -\sin\theta - 0.25\,\dot\theta \qquad t = #{T:1}
+    pos     : (25%, 93%)
+    color   : white
+
+deffigure espace =
+    type   : scene3d
+    from   : (52%, 6%)
+    to     : (98%, 94%)
+    xrange : [-25, 25]
+    yrange : [-30, 30]
+    zrange : [0, 50]
+    camera : (20, -50)
+    axes   : lines
+    color  : #6B7280
+
+deffigure lorenz =
+    type     : trajectory
+    scene    : espace
+    ode      : (10*(y - x), x*(28 - z) - y, x*y - 8/3*z)
+    init     : (1 + 0.001*k, 1, 1)
+    count    : 2
+    duration : 3*T
+    dt       : 0.005
+    colormap : [#F472B6, #38BDF8]
+    stroke   : 1.5px
+    head     : 5px
+    glow     : 6px
+
+# --- Partie 2 : Monte-Carlo et loi normale ---
+
+deffigure r2 =
+    type   : axes
+    from   : (4%, 10%)
+    to     : (46%, 86%)
+    xrange : [0, 1]
+    yrange : [0, 1]
+    color  : #9CA3AF
+
+deffigure dedans =
+    type  : scatter
+    axes  : r2
+    count : n
+    x     : rand(2k)
+    y     : rand(2k + 1)
+    where : x^2 + y^2 <= 1
+    size  : 3px
+    color : #60A5FA
+
+deffigure dehors =
+    type  : scatter
+    axes  : r2
+    count : n
+    x     : rand(2k)
+    y     : rand(2k + 1)
+    where : x^2 + y^2 > 1
+    size  : 3px
+    color : #F87171
+
+deffigure estimation =
+    type  : equation
+    expr  : \pi \approx 4\,\frac{\text{points bleus}}{n} = #{4*sum(j, 1, round(n), rand(2j)^2 + rand(2j+1)^2 <= 1)/max(round(n), 1):3} \quad (n = #{round(n):0})
+    pos   : (25%, 93%)
+    color : white
+
+deffigure r3 =
+    type   : axes
+    from   : (54%, 10%)
+    to     : (96%, 86%)
+    xrange : [-4, 4]
+    yrange : [0, 0.5]
+    equal  : false
+    color  : #9CA3AF
+
+deffigure moyennes =
+    type    : histogram
+    axes    : r3
+    count   : n
+    sample  : sum(j, 1, 12, rand(12k + j)) - 6
+    range   : [-4, 4]
+    bins    : 32
+    density : true
+    color   : #60A5FA
+
+deffigure gauss =
+    type   : plot
+    axes   : r3
+    expr   : exp(-x^2/2)/sqrt(2pi)
+    color  : #F59E0B
+    stroke : 3px
+
+deffigure titre2 =
+    type  : equation
+    expr  : \textstyle\sum_{j=1}^{12} U_j - 6 \;\approx\; \mathcal{N}(0, 1)
+    pos   : (75%, 93%)
+    color : white
+
+# --- Partie 3 : plus court chemin dans un graphe ---
+
+deffigure reseau =
+    type        : graph
+    nodes       : [A, B, C, D, E, F]
+    edges       : [A-B, A-C, B-D, C-D, C-E, D-F, E-F]
+    weights     : [4, 2, 5, 8, 10, 6, 3]
+    positions   : [(0, 1), (1, 2), (1, 0), (2, 1), (2, -1), (3, 0)]
+    pos         : (28%, 50%)
+    size        : 46%
+    fill        : #1F2937
+    color       : #9CA3AF
+    label_color : white
+
+deffigure distances =
+    type        : array
+    values      : [[A, B, C, D, E, F], [0, 4, 2, 9, 12, 15]]
+    pos         : (74%, 50%)
+    cell        : 7%
+    color       : white
+    grid_color  : #4B5563
+
+deffigure titre3 =
+    type  : equation
+    expr  : \text{Dijkstra : distances depuis } A
+    pos   : (50%, 90%)
+    color : white
+
+# --- Partie 4 : une couleur par pixel ---
+
+deffigure r4 =
+    type   : axes
+    from   : (2%, 6%)
+    to     : (49%, 94%)
+    xrange : [-2.2, 0.8]
+    yrange : [-1.5, 1.5]
+    ticks  : false
+    color  : #0B0F19
+    center : (-0.7436439, 0.1318259)
+    zoom   : 10^p
+
+deffigure mandelbrot =
+    type       : pixels
+    axes       : r4
+    escape     : z^2 + c
+    iterations : 100 + 80*p
+    colormap   : magma
+
+deffigure r5 =
+    type   : axes
+    from   : (51%, 6%)
+    to     : (98%, 94%)
+    xrange : [-2.5, 2.5]
+    yrange : [-2.5, 2.5]
+    ticks  : false
+    color  : #0B0F19
+
+deffigure domaine =
+    type   : pixels
+    axes   : r5
+    domain : (z^2 - 1)*(z - 2 - i)^2 / (z^2 + 2 + 2i)
+
+[timeline]
+
+0.000 => {
+    start   : [r1 fadein(0.5s), pendule, titre1 fadein(0.5s), espace fadein(0.5s), lorenz]
+    anim    : [T to(12, 8s)]
+    comment : ["Chaque point suit l'équation du pendule amorti ; à droite, l'attracteur de Lorenz.", "Each point follows the damped pendulum; on the right, the Lorenz attractor."]
+}
+
+9.000 => {
+    end     : [r1 fadeout(0.5s), pendule fadeout(0.5s), titre1 fadeout(0.5s), espace fadeout(0.5s), lorenz fadeout(0.5s)]
+    start   : [r2 fadein(0.5s), dedans, dehors, estimation fadein(0.5s), r3 fadein(0.5s), moyennes, gauss draw(1s), titre2 fadein(0.5s)]
+}
+
+9.500 => {
+    anim    : [n to(5000, 6s)]
+    comment : ["Des points au hasard estiment π ; des moyennes de tirages forment une cloche.", "Random points estimate π; averages of draws form a bell curve."]
+}
+
+17.000 => {
+    end     : [r2 fadeout(0.5s), dedans fadeout(0.5s), dehors fadeout(0.5s), estimation fadeout(0.5s), r3 fadeout(0.5s), moyennes fadeout(0.5s), gauss fadeout(0.5s), titre2 fadeout(0.5s)]
+    start   : [reseau fadein(0.5s), distances fadein(0.5s), titre3 fadein(0.5s)]
+}
+
+18.000 => { anim : [reseau color(to=#16A34A, 0.4s, part=A), distances color(to=#14532D, 0.4s, part="(2,1)")] }
+19.000 => { anim : [reseau color(to=#16A34A, 0.4s, part="A-C"), reseau color(to=#16A34A, 0.4s, part=C), distances color(to=#14532D, 0.4s, part="(2,3)")] }
+20.000 => { anim : [reseau color(to=#16A34A, 0.4s, part="A-B"), reseau color(to=#16A34A, 0.4s, part=B), distances color(to=#14532D, 0.4s, part="(2,2)")] }
+21.000 => { anim : [reseau color(to=#16A34A, 0.4s, part="B-D"), reseau color(to=#16A34A, 0.4s, part=D), distances color(to=#14532D, 0.4s, part="(2,4)")] }
+22.000 => { anim : [reseau color(to=#16A34A, 0.4s, part="C-E"), reseau color(to=#16A34A, 0.4s, part=E), distances color(to=#14532D, 0.4s, part="(2,5)")] }
+23.000 => { anim : [reseau color(to=#16A34A, 0.4s, part="E-F"), reseau color(to=#16A34A, 0.4s, part=F), distances color(to=#14532D, 0.4s, part="(2,6)")] }
+
+24.500 => {
+    end     : [reseau fadeout(0.5s), distances fadeout(0.5s), titre3 fadeout(0.5s)]
+    start   : [r4, mandelbrot fadein(0.5s), r5, domaine fadein(0.5s)]
+}
+
+25.500 => {
+    anim    : [p to(3, 6s)]
+    comment : ["Un zoom × 1000 dans l'ensemble de Mandelbrot ; à droite, une fonction complexe : zéros et pôles.", "A × 1000 zoom into the Mandelbrot set; on the right, a complex function: zeros and poles."]
+}
+
+32.500 => {
+    end : [r4, mandelbrot, r5, domaine]
+}

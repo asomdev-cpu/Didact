@@ -6,6 +6,7 @@
 //! - En WebAssembly, le module `web` expose un lecteur à JavaScript.
 
 pub mod ast;
+pub mod check;
 pub mod lexer;
 pub mod model;
 pub mod parser;

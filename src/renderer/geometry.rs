@@ -61,6 +61,16 @@ pub struct Shape {
     pub stroke: Option<(Rgba, f32)>,
     /// Rayon du halo lumineux en pixels (0 : pas de halo)
     pub glow: f32,
+    /// Image (couleur par pixel) posée sur la boîte du chemin ; `fill` en donne l'opacité
+    pub image: Option<std::sync::Arc<Raster>>,
+}
+
+/// Image calculée pixel par pixel : RGBA prémultiplié, ligne par ligne, de haut en bas
+#[derive(Debug, Clone, PartialEq)]
+pub struct Raster {
+    pub width: u32,
+    pub height: u32,
+    pub data: Vec<u8>,
 }
 
 /// Géométrie calculée d'une figure à l'instant t, utilisée par les références
@@ -186,7 +196,7 @@ impl Scene {
         }
     }
 
-    fn min_side(&self) -> f32 {
+    pub(crate) fn min_side(&self) -> f32 {
         self.width.min(self.height)
     }
 }
@@ -239,9 +249,34 @@ pub fn figure_shapes(f: &ResolvedFigure, scene: &Scene, refs: &Refs) -> Result<V
         "table" => table(f, scene, refs, &look),
         "axes" => axes(f, scene, refs, &look),
         "plot" => plot(f, scene, refs, &look),
+        "grid" => grid(f, scene, refs, &look),
+        "graph" | "array" => Ok(super::discrete::build(f, scene, refs)?.0),
+        "pixels" => {
+            let axes = f.properties.get("axes").map(fmt_value).and_then(|a| refs.get(&a).and_then(|g| g.axes));
+            let extra = format!("{:?} {} {} {} {} {}", axes, scene.width, scene.height, scene.px_scale, opacity, super::pixels::geometry_only());
+            let key = super::memo::key(&f.properties, &refs.params, &extra);
+            super::memo::get_or(&format!("2d:{}", f.name), key, || super::pixels::shapes(f, scene, refs, opacity))
+        }
+        "contour" | "region" => {
+            let color = if f.properties.contains_key("color") { look.color } else { None };
+            // Calcul gardé d'une image à l'autre tant que rien dont il dépend ne change
+            let axes = f.properties.get("axes").map(fmt_value).and_then(|a| refs.get(&a).and_then(|g| g.axes));
+            let extra = format!("{} {:?} {} {} {}", f.ftype, axes, scene.width, scene.height, scene.px_scale);
+            let key = super::memo::key(&f.properties, &refs.params, &extra);
+            super::memo::get_or(&format!("2d:{}", f.name), key, || super::contour::shapes(f, refs, color, look.fill, look.stroke, opacity))
+        }
+        // Tirés par formule (count) : calcul gardé tant que rien ne change
+        "scatter" | "histogram" if f.properties.contains_key("count") => {
+            let axes = f.properties.get("axes").map(fmt_value).and_then(|a| refs.get(&a).and_then(|g| g.axes));
+            let extra = format!("{} {:?} {} {} {}", f.ftype, axes, scene.width, scene.height, scene.px_scale);
+            let key = super::memo::key(&f.properties, &refs.params, &extra);
+            super::memo::get_or(&format!("2d:{}", f.name), key, || {
+                if f.ftype == "scatter" { scatter(f, scene, refs, &look) } else { histogram(f, scene, refs, &look) }
+            })
+        }
         "scatter" => scatter(f, scene, refs, &look),
         "histogram" => histogram(f, scene, refs, &look),
-        "arrow" | "field" | "iterate" => super::three::shapes_2d(f, scene, refs),
+        "arrow" | "field" | "iterate" | "trajectory" => super::three::shapes_2d(f, scene, refs),
         other => Err(format!("type '{}' pas encore dessiné", other)),
     }
 }
@@ -276,6 +311,7 @@ fn line(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<V
             path: vec![PathCmd::MoveTo(ax, ay), PathCmd::LineTo(bx, by)],
             fill: None,
             stroke: look.color.map(|c| (c, look.stroke)),
+            image: None,
         },
     );
     Ok(shapes)
@@ -288,6 +324,7 @@ fn circle(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result
         path: circle_path(cx, cy, r),
         fill: look.fill,
         stroke: look.color.map(|c| (c, look.stroke)),
+        image: None,
     }])
 }
 
@@ -314,6 +351,7 @@ fn rect(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<V
         ],
         fill: look.fill,
         stroke: look.color.map(|c| (c, look.stroke)),
+        image: None,
     }])
 }
 
@@ -331,7 +369,7 @@ fn polygon(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Resul
         path.push(if i == 0 { PathCmd::MoveTo(x, y) } else { PathCmd::LineTo(x, y) });
     }
     path.push(PathCmd::Close);
-    Ok(vec![Shape { glow: 0.0, path, fill: look.fill, stroke: look.color.map(|c| (c, look.stroke)) }])
+    Ok(vec![Shape { glow: 0.0, path, fill: look.fill, stroke: look.color.map(|c| (c, look.stroke)), image: None }])
 }
 
 fn arc(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<Vec<Shape>, String> {
@@ -363,7 +401,7 @@ fn arc(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<Ve
         path.push(if i == 0 { PathCmd::MoveTo(x, y) } else { PathCmd::LineTo(x, y) });
     }
 
-    let mut shapes = vec![Shape { glow: 0.0, path, fill: None, stroke: look.color.map(|c| (c, look.stroke)) }];
+    let mut shapes = vec![Shape { glow: 0.0, path, fill: None, stroke: look.color.map(|c| (c, look.stroke)), image: None }];
     let head = arrow_length(look.stroke, scene);
     if end_arrow {
         let (x, y) = at(a1);
@@ -398,7 +436,7 @@ fn star(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<V
         path.push(if i == 0 { PathCmd::MoveTo(x, y) } else { PathCmd::LineTo(x, y) });
     }
     path.push(PathCmd::Close);
-    Ok(vec![Shape { glow: 0.0, path, fill: look.fill, stroke: look.color.map(|c| (c, look.stroke)) }])
+    Ok(vec![Shape { glow: 0.0, path, fill: look.fill, stroke: look.color.map(|c| (c, look.stroke)), image: None }])
 }
 
 /// Taille de police par défaut (px de la scène de référence)
@@ -490,7 +528,7 @@ fn table(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<
 // ─────────────────────────────────────────────
 
 /// Intervalle [a, b] écrit comme une liste
-fn range(f: &ResolvedFigure, key: &str) -> Result<(f64, f64), String> {
+pub(crate) fn range(f: &ResolvedFigure, key: &str) -> Result<(f64, f64), String> {
     match require(f, key)? {
         PropValue::List(items) if items.len() == 2 => {
             let a: f64 = items[0].parse().map_err(|_| format!("{} : nombre invalide '{}'", key, items[0]))?;
@@ -518,8 +556,7 @@ fn flag(f: &ResolvedFigure, key: &str, default: bool) -> Result<bool, String> {
 pub fn axes_map(f: &ResolvedFigure, scene: &Scene, refs: &Refs) -> Result<AxesMap, String> {
     let (x1, y1) = point(require(f, "from")?, scene, refs)?;
     let (x2, y2) = point(require(f, "to")?, scene, refs)?;
-    let xrange = range(f, "xrange")?;
-    let yrange = range(f, "yrange")?;
+    let (xrange, yrange) = view(f)?;
     let (left, right) = (x1.min(x2), x1.max(x2));
     let (top, bottom) = (y1.min(y2), y1.max(y2));
     let (box_w, box_h) = (right - left, bottom - top);
@@ -545,6 +582,27 @@ pub fn axes_map(f: &ResolvedFigure, scene: &Scene, refs: &Refs) -> Result<AxesMa
     })
 }
 
+/// Fenêtre d'un repère : xrange × yrange, recentrée sur `center : (x, y)` et agrandie
+/// `zoom` fois (caméra 2D ; avec des paramètres, on zoome et on se déplace en les animant)
+fn view(f: &ResolvedFigure) -> Result<((f64, f64), (f64, f64)), String> {
+    let (xr, yr) = (range(f, "xrange")?, range(f, "yrange")?);
+    let zoom = match f.properties.get("zoom") {
+        None => 1.0,
+        Some(PropValue::Number(z)) if *z > 0.0 && z.is_finite() => *z,
+        Some(v) => return Err(format!("zoom invalide '{}' : un nombre > 0 (2 = deux fois plus près)", fmt_value(v))),
+    };
+    let (cx, cy) = match f.properties.get("center") {
+        None => ((xr.0 + xr.1) / 2.0, (yr.0 + yr.1) / 2.0),
+        Some(PropValue::Tuple(v)) if v.len() == 2 => {
+            let n = |s: &str| s.trim().parse::<f64>().map_err(|_| format!("center invalide '{}' : (x, y) dans le repère", s));
+            (n(&v[0])?, n(&v[1])?)
+        }
+        Some(v) => return Err(format!("center invalide '{}' : (x, y) dans le repère", fmt_value(v))),
+    };
+    let (hx, hy) = ((xr.1 - xr.0) / 2.0 / zoom, (yr.1 - yr.0) / 2.0 / zoom);
+    Ok(((cx - hx, cx + hx), (cy - hy, cy + hy)))
+}
+
 /// Pas de graduation « joli » (1, 2 ou 5 × 10^k) pour environ 8 graduations
 fn nice_step(span: f64) -> f64 {
     let raw = span / 8.0;
@@ -557,19 +615,28 @@ fn nice_step(span: f64) -> f64 {
 /// Valeurs des graduations dans [a, b]
 fn ticks_in(a: f64, b: f64) -> Vec<f64> {
     let step = nice_step(b - a);
-    let mut v = (a / step).ceil() * step;
-    let mut out = Vec::new();
-    while v <= b + step * 1e-9 {
-        out.push(if v.abs() < step * 1e-9 { 0.0 } else { v });
-        v += step;
+    let first = (a / step - 1e-9).ceil() as i64;
+    let last = (b / step + 1e-9).floor() as i64;
+    if last - first > 1000 {
+        return Vec::new();
     }
-    out
+    // k × pas (et non une somme de pas) : pas d'erreur qui s'accumule quand on zoome loin de 0
+    (first..=last).map(|k| if k == 0 { 0.0 } else { k as f64 * step }).collect()
 }
 
-/// 2.0 → "2", 0.5 → "0.5", -1.25 → "−1.25"
-fn fmt_number(v: f64) -> String {
-    let s = format!("{:.4}", v);
-    let s = s.trim_end_matches('0').trim_end_matches('.');
+/// Nombre de décimales qui suffit pour écrire les multiples de `step`
+fn decimals_for(step: f64) -> usize {
+    (0..=12).find(|d| {
+        let v = step * 10f64.powi(*d as i32);
+        (v - v.round()).abs() < 1e-6 * v.abs().max(1.0)
+    }).unwrap_or(12)
+}
+
+/// 2.0 → "2", 0.5 → "0.5", -1.25 → "−1.25" ; `decimals` : au plus
+fn fmt_number(v: f64, decimals: usize) -> String {
+    let s = format!("{:.*}", decimals, v);
+    let s = if s.contains('.') { s.trim_end_matches('0').trim_end_matches('.') } else { &s };
+    let s = if s == "-0" { "0" } else { s };
     s.replace('-', "−")
 }
 
@@ -597,7 +664,7 @@ fn axes(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<V
             let (a, b) = (m.to_px(xa, y), m.to_px(xb, y));
             path.extend([PathCmd::MoveTo(a.0, a.1), PathCmd::LineTo(b.0, b.1)]);
         }
-        shapes.push(Shape { glow: 0.0, path, fill: None, stroke: Some((grid, 1.0 * scene.px_scale)) });
+        shapes.push(Shape { glow: 0.0, path, fill: None, stroke: Some((grid, 1.0 * scene.px_scale)), image: None });
     }
 
     // Axes fléchés
@@ -608,6 +675,7 @@ fn axes(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<V
             path: vec![PathCmd::MoveTo(from.0, from.1), PathCmd::LineTo(to.0 - dx * head * 0.8, to.1 - dy * head * 0.8)],
             fill: None,
             stroke: Some((color, look.stroke)),
+            image: None,
         });
         shapes.push(arrow_head(to.0, to.1, dx, dy, head, color));
     }
@@ -616,22 +684,22 @@ fn axes(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<V
     if flag(f, "ticks", true)? {
         let mut path = Vec::new();
         for x in ticks_in(xa, xb) {
-            if x == x0 || x == xb {
+            if x == x0 || (x - xb).abs() < nice_step(xb - xa) * 1e-6 {
                 continue;
             }
             let (px, py) = m.to_px(x, y0);
             path.extend([PathCmd::MoveTo(px, py - tick), PathCmd::LineTo(px, py + tick)]);
-            shapes.extend(super::text::text_shapes(&fmt_number(x), px, py + tick + font * 0.8, font, super::text::Align::Center, color)?);
+            shapes.extend(super::text::text_shapes(&fmt_number(x, decimals_for(nice_step(xb - xa)).max(4)), px, py + tick + font * 0.8, font, super::text::Align::Center, color)?);
         }
         for y in ticks_in(ya, yb) {
-            if y == y0 || y == yb {
+            if y == y0 || (y - yb).abs() < nice_step(yb - ya) * 1e-6 {
                 continue;
             }
             let (px, py) = m.to_px(x0, y);
             path.extend([PathCmd::MoveTo(px - tick, py), PathCmd::LineTo(px + tick, py)]);
-            shapes.extend(super::text::text_shapes(&fmt_number(y), px - tick - font * 0.4, py, font, super::text::Align::Right, color)?);
+            shapes.extend(super::text::text_shapes(&fmt_number(y, decimals_for(nice_step(yb - ya)).max(4)), px - tick - font * 0.4, py, font, super::text::Align::Right, color)?);
         }
-        shapes.push(Shape { glow: 0.0, path, fill: None, stroke: Some((color, look.stroke * 0.75)) });
+        shapes.push(Shape { glow: 0.0, path, fill: None, stroke: Some((color, look.stroke * 0.75)), image: None });
     }
 
     // Noms des axes
@@ -662,6 +730,7 @@ fn plot(f: &ResolvedFigure, _scene: &Scene, refs: &Refs, look: &Look) -> Result<
     let e = super::expr::parse_with(&src, &refs.param_names())?;
     let (xa, xb) = m.xrange;
     let (ya, yb) = m.yrange;
+    let f_has_samples = f.properties.contains_key("samples");
     let samples = match f.properties.get("samples") {
         Some(PropValue::Number(n)) if *n >= 2.0 => *n as usize,
         Some(v) => return Err(format!("samples doit être un entier ≥ 2, trouvé '{}'", fmt_value(v))),
@@ -669,12 +738,27 @@ fn plot(f: &ResolvedFigure, _scene: &Scene, refs: &Refs, look: &Look) -> Result<
         None => (((xb - xa) as f32 * m.ux / 2.0) as usize).clamp(100, 2000),
     };
 
-    // Échantillonnage, en coupant la courbe hors de yrange et là où elle n'est pas définie
-    let mut path = Vec::new();
-    let mut prev: Option<(f64, f64)> = None;
+    // Échantillonnage régulier, affiné là où la courbe s'écarte de plus d'un demi-pixel
+    // d'un segment droit (oscillations rapides, zoom), sauf si `samples` est donné
+    let f = |x: f64| e.eval(x, &refs.params);
+    let mut pts: Vec<(f64, f64)> = Vec::with_capacity(samples + 1);
+    let adaptive = !f_has_samples;
     for i in 0..=samples {
         let x = xa + (xb - xa) * i as f64 / samples as f64;
-        let y = e.eval(x, &refs.params);
+        let y = f(x);
+        if adaptive && i > 0 {
+            // Au plus 64 points ajoutés par intervalle : répartis sur toute la courbe
+            let mut budget = 64usize;
+            let (x0, y0) = *pts.last().unwrap();
+            refine(&f, (x0, y0), (x, y), m, 0, &mut budget, &mut pts);
+        }
+        pts.push((x, y));
+    }
+
+    // Tracé, en coupant la courbe hors de yrange et là où elle n'est pas définie
+    let mut path = Vec::new();
+    let mut prev: Option<(f64, f64)> = None;
+    for (x, y) in pts {
         let cur = if y.is_finite() { Some((x, y)) } else { None };
         if let (Some(a), Some(b)) = (prev, cur) {
             if let Some((p, q)) = clip_y(a, b, ya, yb) {
@@ -688,7 +772,84 @@ fn plot(f: &ResolvedFigure, _scene: &Scene, refs: &Refs, look: &Look) -> Result<
         }
         prev = cur;
     }
-    Ok(vec![Shape { glow: 0.0, path, fill: None, stroke: look.color.map(|c| (c, look.stroke)) }])
+    Ok(vec![Shape { glow: 0.0, path, fill: None, stroke: look.color.map(|c| (c, look.stroke)), image: None }])
+}
+
+/// grid : quadrillage d'un repère (droites x = k·pas et y = k·pas), à déformer avec matrix / map / cmap.
+/// `step : 1` ou `step : (1, 0.5)` ; `xrange` / `yrange` : étendue (par défaut celle du repère).
+fn grid(f: &ResolvedFigure, _scene: &Scene, refs: &Refs, look: &Look) -> Result<Vec<Shape>, String> {
+    let m = axes_of(f, refs)?;
+    let (xa, xb) = if f.properties.contains_key("xrange") { range(f, "xrange")? } else { m.xrange };
+    let (ya, yb) = if f.properties.contains_key("yrange") { range(f, "yrange")? } else { m.yrange };
+    let (sx, sy) = match f.properties.get("step") {
+        None => (1.0, 1.0),
+        // Comme les graduations : suit le zoom
+        Some(PropValue::Single(a)) if a == "auto" => (nice_step(xb - xa), nice_step(yb - ya)),
+        Some(PropValue::Number(n)) => (*n, *n),
+        Some(PropValue::Tuple(v)) if v.len() == 2 => {
+            let p = |s: &str| s.trim().parse::<f64>().map_err(|_| format!("step invalide '{}'", s));
+            (p(&v[0])?, p(&v[1])?)
+        }
+        Some(v) => return Err(format!("step invalide '{}' (ex : 1, (1, 0.5) ou auto)", fmt_value(v))),
+    };
+    if !(sx > 0.0 && sy > 0.0) {
+        return Err("step doit être positif".to_string());
+    }
+    let lines = |a: f64, b: f64, s: f64| {
+        let first = (a / s - 1e-9).ceil() as i64;
+        let last = (b / s + 1e-9).floor() as i64;
+        (first..=last).map(move |k| k as f64 * s)
+    };
+    if lines(xa, xb, sx).count() + lines(ya, yb, sy).count() > 2000 {
+        return Err("grid : trop de lignes, augmenter `step`".to_string());
+    }
+    let mut path = Vec::new();
+    for x in lines(xa, xb, sx) {
+        let (p, q) = (m.to_px(x, ya), m.to_px(x, yb));
+        path.push(PathCmd::MoveTo(p.0, p.1));
+        path.push(PathCmd::LineTo(q.0, q.1));
+    }
+    for y in lines(ya, yb, sy) {
+        let (p, q) = (m.to_px(xa, y), m.to_px(xb, y));
+        path.push(PathCmd::MoveTo(p.0, p.1));
+        path.push(PathCmd::LineTo(q.0, q.1));
+    }
+    Ok(vec![Shape { glow: 0.0, path, fill: None, stroke: look.color.map(|c| (c, look.stroke)), image: None }])
+}
+
+/// Ajoute entre a et b (exclus) les points nécessaires pour que la courbe ne s'écarte pas
+/// de plus d'un demi-pixel des segments tracés
+fn refine(
+    f: &dyn Fn(f64) -> f64,
+    a: (f64, f64),
+    b: (f64, f64),
+    m: &AxesMap,
+    depth: u32,
+    budget: &mut usize,
+    out: &mut Vec<(f64, f64)>,
+) {
+    if depth >= 12 || *budget == 0 {
+        return;
+    }
+    let xm = (a.0 + b.0) / 2.0;
+    let ym = f(xm);
+    // Une extrémité non définie : on ne cherche pas la frontière
+    if !(a.1.is_finite() && b.1.is_finite() && ym.is_finite()) {
+        return;
+    }
+    // Hors de yrange des deux côtés et au milieu : rien de visible
+    let (lo, hi) = m.yrange;
+    if (a.1 > hi && b.1 > hi && ym > hi) || (a.1 < lo && b.1 < lo && ym < lo) {
+        return;
+    }
+    let dev = ((ym - (a.1 + b.1) / 2.0) * m.uy as f64).abs();
+    if dev <= 0.5 {
+        return;
+    }
+    *budget -= 1;
+    refine(f, a, (xm, ym), m, depth + 1, budget, out);
+    out.push((xm, ym));
+    refine(f, (xm, ym), b, m, depth + 1, budget, out);
 }
 
 /// Partie du segment [a, b] comprise entre y = lo et y = hi (None si entièrement dehors)
@@ -712,11 +873,56 @@ fn clip_y(a: (f64, f64), b: (f64, f64), lo: f64, hi: f64) -> Option<((f64, f64),
     Some((at(t0), at(t1)))
 }
 
+/// Valeurs tirées par formule : `count` valeurs de `key` (fonction de k = 1, 2, ..., count)
+fn sampled(f: &ResolvedFigure, refs: &Refs, keys: &[&str]) -> Result<Vec<Vec<f64>>, String> {
+    let count = match f.properties.get("count") {
+        Some(PropValue::Number(n)) if *n >= 0.0 && *n <= 1e6 => n.round() as usize,
+        Some(v) => return Err(format!("count : nombre de tirages entre 0 et 1000000, trouvé '{}'", fmt_value(v))),
+        None => return Err("`count` manquant : nombre de tirages".to_string()),
+    };
+    let mut names = refs.param_names();
+    names.push("k".into());
+    let slots = vec!["k".to_string()];
+    let fs = keys
+        .iter()
+        .map(|k| {
+            let src = f.properties.get(*k).map(raw_text).ok_or_else(|| format!("`{}` manquant (formule en k)", k))?;
+            super::expr::parse_with(&src, &names)
+                .and_then(|e| super::expr::compile(&e, &slots, &refs.params))
+                .map_err(|e| format!("{} '{}' : {}", k, src, e))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((1..=count).map(|k| fs.iter().map(|g| g(&[k as f64])).collect()).collect())
+}
+
 fn scatter(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<Vec<Shape>, String> {
     let m = axes_of(f, refs)?;
-    let items = match require(f, "points")? {
-        PropValue::List(items) => items,
-        v => return Err(format!("points doit être une liste de points, trouvé '{}'", fmt_value(v))),
+    // Points tirés par formule : count, x, y (fonctions de k), et un filtre `where` facultatif
+    let generated: Vec<String>;
+    let items = if f.properties.contains_key("count") {
+        let pts = sampled(f, refs, &["x", "y"])?;
+        let keep = match f.properties.get("where") {
+            Some(v) => {
+                let src = raw_text(v);
+                let mut names = refs.param_names();
+                names.push("y".into());
+                let e = super::expr::parse_with(&src, &names).map_err(|e| format!("where '{}' : {}", src, e))?;
+                let c = super::expr::compile(&e, &["x".to_string(), "y".to_string()], &refs.params)?;
+                Some(c)
+            }
+            None => None,
+        };
+        generated = pts
+            .into_iter()
+            .filter(|p| keep.as_ref().is_none_or(|c| c(&[p[0], p[1]]) != 0.0))
+            .map(|p| format!("({}, {})", p[0], p[1]))
+            .collect();
+        &generated
+    } else {
+        match require(f, "points")? {
+            PropValue::List(items) => items,
+            v => return Err(format!("points doit être une liste de points, trouvé '{}'", fmt_value(v))),
+        }
     };
     let r = match f.properties.get("size") {
         Some(v) => length(v, scene, scene.min_side())?,
@@ -732,34 +938,48 @@ fn scatter(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Resul
             return Err(format!("point invalide '{}', attendu (x, y)", item));
         }
         let (px, py) = m.to_px(parts[0], parts[1]);
-        shapes.push(Shape { glow: 0.0, path: circle_path(px, py, r), fill, stroke: None });
+        shapes.push(Shape { glow: 0.0, path: circle_path(px, py, r), fill, stroke: None, image: None });
     }
     Ok(shapes)
 }
 
 fn histogram(f: &ResolvedFigure, _scene: &Scene, refs: &Refs, look: &Look) -> Result<Vec<Shape>, String> {
     let m = axes_of(f, refs)?;
-    let data: Vec<f64> = match require(f, "data")? {
-        PropValue::List(items) => items.iter().map(|v| v.parse::<f64>()).collect::<Result<_, _>>()
-            .map_err(|_| "data doit être une liste de nombres".to_string())?,
-        v => return Err(format!("data doit être une liste de nombres, trouvé '{}'", fmt_value(v))),
+    // Valeurs données (`data`) ou tirées par formule (`count` et `sample`, fonction de k)
+    let data: Vec<f64> = if f.properties.contains_key("count") {
+        sampled(f, refs, &["sample"])?.into_iter().map(|v| v[0]).filter(|v| v.is_finite()).collect()
+    } else {
+        match require(f, "data")? {
+            PropValue::List(items) => items.iter().map(|v| v.parse::<f64>()).collect::<Result<_, _>>()
+                .map_err(|_| "data doit être une liste de nombres".to_string())?,
+            v => return Err(format!("data doit être une liste de nombres, trouvé '{}'", fmt_value(v))),
+        }
     };
     if data.is_empty() {
         return Ok(Vec::new());
     }
+    // `range : [a, b]` : classes fixes (un histogramme qui se remplit ne bouge pas)
     let bins = match f.properties.get("bins") {
         Some(PropValue::Number(n)) if *n >= 1.0 => *n as usize,
         Some(v) => return Err(format!("bins doit être un entier ≥ 1, trouvé '{}'", fmt_value(v))),
         None => 10,
     };
-    let lo = data.iter().cloned().fold(f64::MAX, f64::min);
-    let hi = data.iter().cloned().fold(f64::MIN, f64::max);
+    let (lo, hi) = if f.properties.contains_key("range") {
+        range(f, "range")?
+    } else {
+        (data.iter().cloned().fold(f64::MAX, f64::min), data.iter().cloned().fold(f64::MIN, f64::max))
+    };
     let width = if hi > lo { (hi - lo) / bins as f64 } else { 1.0 };
     let mut counts = vec![0usize; bins];
     for v in &data {
+        if *v < lo || *v > hi {
+            continue;
+        }
         let i = (((v - lo) / width) as usize).min(bins - 1);
         counts[i] += 1;
     }
+    // `density : true` : aire totale 1, comparable à une densité tracée par `plot`
+    let scale = if flag(f, "density", false)? { 1.0 / (data.len() as f64 * width) } else { 1.0 };
     let fill = look.fill.or(look.color.map(|c| Rgba { a: c.a * 0.8, ..c }));
     let edge = Rgba { a: 1.0, ..Rgba::WHITE };
     Ok(counts
@@ -768,7 +988,7 @@ fn histogram(f: &ResolvedFigure, _scene: &Scene, refs: &Refs, look: &Look) -> Re
         .filter(|(_, c)| **c > 0)
         .map(|(i, c)| {
             let x0 = lo + i as f64 * width;
-            let (a, b) = (m.to_px(x0, 0.0), m.to_px(x0 + width, *c as f64));
+            let (a, b) = (m.to_px(x0, 0.0), m.to_px(x0 + width, *c as f64 * scale));
             Shape { glow: 0.0,
                 path: vec![
                     PathCmd::MoveTo(a.0, a.1),
@@ -779,6 +999,7 @@ fn histogram(f: &ResolvedFigure, _scene: &Scene, refs: &Refs, look: &Look) -> Re
                 ],
                 fill,
                 stroke: Some((edge, 1.0)),
+                image: None,
             }
         })
         .collect())
@@ -816,6 +1037,7 @@ pub(crate) fn arrow_head(x: f32, y: f32, dx: f32, dy: f32, len: f32, color: Rgba
         ],
         fill: Some(color),
         stroke: None,
+        image: None,
     }
 }
 

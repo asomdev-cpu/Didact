@@ -23,7 +23,7 @@ use std::collections::HashMap;
 const FIGURE_TYPES: &[&str] = &[
     "line", "circle", "rect", "polygon", "arc", "star",
     "text", "equation", "latex", "table",
-    "axes", "plot", "scatter", "histogram",
+    "axes", "plot", "scatter", "histogram", "grid", "contour", "region", "pixels", "trajectory", "graph", "array",
     "raw.latex", "raw.matplotlib",
     "group",
     "scene3d", "surface", "curve3d", "iterate", "arrow", "field",
@@ -44,7 +44,8 @@ const REF_FUNCTIONS: &[&str] = &["center", "angle", "offset", "auto_tangent"];
 
 /// Propriétés dont la valeur est du texte libre (LaTeX, maths, code) :
 /// on n'y cherche pas de références. Ex : `expr : sin(x)` n'est pas un appel.
-const FREE_TEXT_PROPS: &[&str] = &["type", "expr", "content", "code", "rows", "header", "color_by", "update", "init", "vars"];
+const FREE_TEXT_PROPS: &[&str] =
+    &["type", "expr", "content", "code", "rows", "header", "color_by", "update", "init", "vars", "map", "cmap", "matrix", "amount", "upper", "lower", "where", "domain", "escape", "z0", "ode", "nodes", "edges", "weights", "values", "positions", "layout", "root", "labels", "sample", "x", "y", "allow"];
 
 // ─────────────────────────────────────────────
 //  STRUCTURES INTERNES
@@ -84,8 +85,12 @@ struct Validator {
     groups: HashMap<String, Vec<String>>,
     /// Noms des paramètres (`defparam`)
     params: Vec<String>,
+    /// Valeurs de départ des paramètres (pour composer un texte qui contient `#{...}`)
+    param_values: HashMap<String, f64>,
     /// Type et contenu composé des figures de texte (pour `part="..."`)
     typeset: HashMap<String, (String, crate::renderer::typeset::Content)>,
+    /// Noms des morceaux des graphes et tableaux (pour `part=...`)
+    discrete: HashMap<String, Vec<String>>,
 }
 
 // ─────────────────────────────────────────────
@@ -99,7 +104,9 @@ pub fn validate(doc: &Document) -> Result<(), Vec<String>> {
         figure_refs: HashMap::new(),
         groups: HashMap::new(),
         params: doc.params.iter().map(|p| p.name.clone()).collect(),
+        param_values: doc.params.iter().map(|p| (p.name.clone(), p.value)).collect(),
         typeset: HashMap::new(),
+        discrete: HashMap::new(),
     };
 
     v.check_config(&doc.config);
@@ -318,8 +325,44 @@ impl Validator {
             keys.sort_by_key(|k| line_of(k));
 
             for key in keys {
-                // Texte et LaTeX : on vérifie qu'ils se composent (et le cache est prêt pour le rendu)
-                if let Some(content) = typeset_content(ftype, key, f) {
+                // Nombres dynamiques dans le texte : #{expr} ou #{expr:décimales}
+                let texts: Vec<String> = match &f.properties[key] {
+                    PropValue::Single(s) | PropValue::Block(s) => vec![s.clone()],
+                    PropValue::List(items) => items.clone(),
+                    _ => Vec::new(),
+                };
+                let mut dynamic = false;
+                for text in texts.iter().filter(|t| t.contains("#{")) {
+                    dynamic = true;
+                    match crate::renderer::params::interpolations(text) {
+                        Ok(parts) => {
+                            for (_, _, src, _) in parts {
+                                self.check_expr(line_of(key), &f.name, f.index, &src, false);
+                            }
+                        }
+                        Err(e) => self.error(line_of(key), format!("'{}' : {}", f.name, e)),
+                    }
+                }
+                // Texte et LaTeX : on vérifie qu'ils se composent (et le cache est prêt pour le rendu),
+                // avec les valeurs de départ des paramètres à la place des #{...}
+                let content = if dynamic {
+                    let mut g = f.clone();
+                    let mut names = self.params.clone();
+                    names.sort();
+                    let v = &self.param_values;
+                    let sub = |t: &String| crate::renderer::params::interpolate(t, &names, v).unwrap_or_else(|_| t.clone());
+                    let new = match &f.properties[key] {
+                        PropValue::Single(s) => PropValue::Single(sub(s)),
+                        PropValue::Block(s) => PropValue::Block(sub(s)),
+                        PropValue::List(items) => PropValue::List(items.iter().map(sub).collect()),
+                        other => other.clone(),
+                    };
+                    g.properties.insert(key.clone(), new);
+                    typeset_content(ftype, key, &g)
+                } else {
+                    typeset_content(ftype, key, f)
+                };
+                if let Some(content) = content {
                     if let Err(e) = crate::renderer::typeset::check(&content) {
                         self.error(line_of(key), format!("'{}' : {}", f.name, e));
                     }
@@ -369,6 +412,19 @@ impl Validator {
                             }
                         }
                     }
+                    // Expression de paramètres : radius : 2*k, stroke : (k + 1)px
+                    (_, PropValue::Single(s)) if crate::renderer::params::param_expr(s, &self.params).is_some() => {
+                        let body = crate::renderer::params::strip_unit(s).to_string();
+                        self.check_expr(line, &f.name, f.index, &body, false);
+                    }
+                    (_, PropValue::Tuple(items)) => {
+                        for item in items {
+                            if crate::renderer::params::param_expr(item, &self.params).is_some() {
+                                let body = crate::renderer::params::strip_unit(item).to_string();
+                                self.check_expr(line, &f.name, f.index, &body, false);
+                            }
+                        }
+                    }
                     (_, PropValue::Single(s)) if s.contains('(') => {
                         if let Some(r) = self.check_call(line, &f.name, f.index, s) {
                             refs.push(r);
@@ -382,6 +438,54 @@ impl Validator {
             let merged = with_style_props(f, &styles_by_name);
             for (key, msg) in crate::renderer::three::check(ftype, &merged, &self.params) {
                 self.error(line_of(&key), format!("'{}' : {}", f.name, msg));
+            }
+
+            // Courbes de niveau et régions : formules en x et y
+            for (key, msg) in crate::renderer::contour::check(ftype, &merged, &self.params) {
+                self.error(line_of(&key), format!("'{}' : {}", f.name, msg));
+            }
+            if ftype == "trajectory" {
+                for (key, msg) in crate::renderer::ode::check(&merged, &self.params) {
+                    self.error(line_of(&key), format!("'{}' : {}", f.name, msg));
+                }
+            }
+            if matches!(ftype, "graph" | "array") {
+                let g = crate::resolver::ResolvedFigure {
+                    name: f.name.clone(),
+                    index: f.index,
+                    ftype: ftype.to_string(),
+                    layer: 0.0,
+                    line: f.line,
+                    properties: merged.clone(),
+                    prop_lines: HashMap::new(),
+                };
+                match crate::renderer::discrete::part_names(&g) {
+                    Ok(names) => {
+                        self.discrete.insert(f.name.clone(), names);
+                    }
+                    Err(e) => {
+                        let key = ["edges", "nodes", "values"].into_iter().find(|k| merged.contains_key(*k)).unwrap_or("type");
+                        self.error(line_of(key), format!("'{}' : {}", f.name, e));
+                    }
+                }
+                if !merged.contains_key("pos") {
+                    self.error(f.line, format!("'{}' : `pos : (50%, 50%)` manquant (centre)", f.name));
+                }
+            }
+            if ftype == "pixels" {
+                for (key, msg) in crate::renderer::pixels::check(&merged, &self.params) {
+                    self.error(line_of(&key), format!("'{}' : {}", f.name, msg));
+                }
+            }
+
+            // Transformation du plan ou de l'espace : matrix / map / cmap (+ amount)
+            if let Some(key) = ["matrix", "map", "cmap", "amount"].into_iter().find(|k| merged.contains_key(*k)) {
+                let dims = if merged.contains_key("scene") { 3 } else { 2 };
+                if let Err(e) = crate::renderer::warp::check(&merged, &self.params, dims) {
+                    self.error(line_of(key), format!("'{}' : {}", f.name, e));
+                } else if dims == 2 && !merged.contains_key("axes") {
+                    self.error(line_of(key), format!("'{}' : une transformation (matrix, map, cmap) se fait dans un repère : ajouter `axes : nom_du_repere`", f.name));
+                }
             }
 
             self.figure_refs.insert(f.name.clone(), refs);
@@ -593,6 +697,18 @@ impl Validator {
     /// color(..., part="...") : la figure est un texte et contient ce morceau
     fn check_part(&mut self, line: usize, t: f64, figure: &str, part: &str) {
         use crate::renderer::{morph, typeset, Rgba};
+        if let Some(names) = self.discrete.get(figure) {
+            let p = crate::renderer::discrete::normalize_part(part);
+            if !names.contains(&p) {
+                let mut shown: Vec<&str> = names.iter().map(|s| s.as_str()).take(12).collect();
+                if names.len() > 12 {
+                    shown.push("...");
+                }
+                let msg = format!("'{}' : part « {} » introuvable (morceaux : {})", figure, part, shown.join(", "));
+                self.error_t(line, t, msg);
+            }
+            return;
+        }
         let Some((ftype, content)) = self.typeset.get(figure) else {
             self.error_t(line, t, format!("'{}' : part ne s'applique qu'à un texte ou une équation", figure));
             return;

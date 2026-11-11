@@ -254,6 +254,7 @@ fn draw_subtitle(backend: &mut SkiaBackend, comment: &str) -> Result<(), String>
         path: rounded_rect(cx - tw / 2.0 - pad, cy - th / 2.0 - pad, tw + 2.0 * pad, th + 2.0 * pad, size * 0.25),
         fill: Some(Rgba { r: 0.0, g: 0.0, b: 0.0, a: 0.67 }),
         stroke: None,
+        image: None,
     };
     backend.draw(&bg);
     for shape in text::text_shapes(&text, cx, cy, size, Align::Center, Rgba::WHITE)? {

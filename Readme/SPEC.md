@@ -592,6 +592,8 @@ deffigure mes_axes =
 - Le repère s'inscrit dans la boîte `from` / `to`. Avec `equal : true` (défaut), l'échelle est **la même en x et en y** et le repère est centré dans la boîte ; avec `equal : false`, il remplit la boîte (échelles différentes).
 - Les axes passent par 0 si 0 est dans l'intervalle, sinon par le bord. Graduations automatiques (pas de 1, 2 ou 5 × 10ⁿ, environ 8 graduations).
 - Position dans le repère : `pos : mes_axes(3, 4)`.
+- **Caméra 2D :** `center : (x, y)` (point au centre, défaut : milieu de xrange × yrange) et `zoom : z` (2 = deux fois plus près, défaut 1). Avec des paramètres, on zoome et on se déplace en les animant : `zoom : 10^k` puis `k to(3, 5s)` donne un zoom régulier jusqu'à × 1000. Les graduations, les nombres (autant de décimales que nécessaire), les courbes et les figures du repère suivent. xrange et yrange acceptent aussi des paramètres.
+- **Découpe :** toute figure qui a `axes : mes_axes` est coupée au cadre xrange × yrange du repère (`clip : false` pour l'empêcher).
 
 #### `plot`
 
@@ -605,8 +607,29 @@ deffigure mon_plot =
 ```
 
 - `expr` est lue telle quelle jusqu'à la fin de la ligne : `expr : x^2 + 2x - 1` (pas de guillemets).
-- Variable `x`, constantes `pi` et `e`, `+ - * / ^`, parenthèses, multiplication implicite (`2x`, `3(x+1)`, `2sin(x)`), fonctions `sin cos tan asin acos atan sinh cosh tanh exp ln log sqrt abs floor ceil`.
-- Tracée sur tout `xrange` du repère ; coupée hors de `yrange` et là où elle n'est pas définie. `samples` : nombre de points (défaut : un point tous les 2 pixels environ).
+- Variable `x`, constantes `pi` et `e`, `+ - * / ^`, parenthèses, multiplication implicite (`2x`, `3(x+1)`, `2sin(x)`).
+- Fonctions à un argument : `sin cos tan asin acos atan sinh cosh tanh exp ln log sqrt abs floor ceil round sign`.
+- Fonctions à plusieurs arguments : `min(a, b, ...)`, `max(a, b, ...)`, `atan2(y, x)`, `mod(a, b)` (toujours positif), `hypot(a, b)`, `clamp(v, bas, haut)`.
+- Comparaisons `< > <= >= == !=` (valent 1 ou 0), `and(a, b)`, `or(a, b)`, `not(a)`.
+- Par morceaux : `if(condition, alors, sinon)`, ex. `if(x < 0, -x, x^2)` ; ou `(x > 0) * x`.
+- Sommes et produits : `sum(k, 1, n, sin(k*x)/k)`, `prod(j, 1, k, j)` (imbricables ; la variable n'existe qu'à l'intérieur). Avec une borne animée non entière (`n` = 3,4), le terme suivant compte pour 0,4 : les termes apparaissent en douceur. Au plus 100 000 termes.
+- Nombres complexes (dans `cmap`, `domain`, `escape`) : variable `z`, unité `i`, `re im arg conj abs`, `exp ln sqrt sin cos ...`.
+- Probabilités : `fact(n)`, `binom(n, k)`, `gamma(x)`, `erf(x)`.
+- Hasard reproductible : `rand(k)` (uniforme dans [0, 1[) et `randn(k)` (loi normale centrée réduite) ; la même formule donne toujours la même valeur, `rand(1)`, `rand(2)`, ... sont des tirages indépendants. Graine facultative : `rand(k, 7)`. Ex. : `sum(k, 1, n, rand(k))/n` tend vers 1/2 quand n grandit.
+- Tracée sur tout `xrange` du repère ; coupée hors de `yrange` et là où elle n'est pas définie.
+- Points : un tous les 2 pixels environ, puis des points ajoutés là où la courbe s'écarte de plus d'un demi-pixel d'un segment droit (oscillations rapides, tangente verticale, zoom). `samples : n` impose n points réguliers.
+
+#### `grid`
+
+```
+deffigure quadrillage =
+    type   : grid
+    axes   : mes_axes
+    step   : 1           # ou (1, 0.5)
+    xrange : [-2, 2]     # défaut : celui du repère
+```
+
+Droites x = k·pas et y = k·pas du repère. Fait pour être déformé par `matrix`, `map` ou `cmap` (§15.8). `step : auto` : même pas que les graduations (suit le zoom).
 
 #### `scatter`
 
@@ -621,6 +644,8 @@ deffigure mon_scatter =
 
 Les points sont en coordonnées du repère. `size` = rayon des points.
 
+**Points tirés par formule :** `count : n`, `x : rand(2k)`, `y : rand(2k + 1)` (fonctions de k = 1, ..., n), et un filtre facultatif `where : x^2 + y^2 <= 1` (seuls les points qui le vérifient sont dessinés). Avec `count` animé, les points apparaissent au fur et à mesure (Monte-Carlo).
+
 #### `histogram`
 
 ```
@@ -633,6 +658,10 @@ deffigure mon_histo =
 ```
 
 Les données sont réparties en `bins` classes de même largeur entre le minimum et le maximum ; la hauteur d'une barre = nombre de valeurs. Couleur : `fill`, sinon `color`.
+
+- **Valeurs tirées par formule :** `count : n` et `sample : randn(k)` (fonction de k = 1, ..., n) à la place de `data`.
+- `range : [a, b]` : classes fixes entre a et b (un histogramme qui se remplit ne bouge pas).
+- `density : true` : hauteurs divisées par (nombre × largeur) : l'aire vaut 1, comparable à une densité tracée par `plot`.
 
 ---
 
@@ -875,7 +904,8 @@ deffigure point =
 ```
 
 - **Animation :** seule `to(valeur, durée)` s'applique à un paramètre (avec `ease=...` si besoin, enchaînable). Un paramètre garde sa valeur à la fin. `start`, `end` et `destroy` ne le concernent pas.
-- **Où l'utiliser :** `expr` d'un `plot`, et coordonnées d'un repère (`repere(a - 1, sin(a))`, aussi dans `move(to=...)` et les `points` d'un `polygon`). Les coordonnées acceptent les mêmes opérations et fonctions que `expr`, sans `x`. Les autres propriétés (`radius`, `to_angle`, `equation`, ...) ne prennent pas encore de paramètre.
+- **Où l'utiliser :** partout où un nombre est attendu, avec son unité : `radius : (2*k)%`, `stroke : (k + 1)px`, `opacity : k/4`, `rotate : 30k`, `pos : (k*10%, 50%)`, `points : [(10%, 10%), (k*15%, 30%)]`, `matrix : (1, k, 0, 1)`. Aussi dans `expr` d'un `plot` et les coordonnées d'un repère (`repere(a - 1, sin(a))`, `move(to=...)`). Mêmes opérations et fonctions que `expr`, sans `x`. Un calcul qui ne se lit pas est signalé à sa ligne (« valeur '2*q' non comprise »).
+- **Nombres dans le texte :** dans `content`, l'`expr` d'une `equation`, `rows`, ... `#{expr}` est remplacé par la valeur à chaque image : `content : "n = #{n}"`. `#{k}` affiche au plus 2 décimales, `#{k:0}` un entier arrondi, `#{k:3}` 3 décimales. Ex. : `expr : \sum_{i=1}^{#{round(n):0}} i = #{round(n)*(round(n)+1)/2:0}`.
 - **Nom :** lettres, chiffres et `_`, sans les noms réservés des formules (`x`, `e`, `pi`, `sin`, ...). Comme tout élément, un paramètre doit être défini plus haut que ce qui l'utilise.
 
 ---
@@ -1110,6 +1140,187 @@ Sur un groupe, l'animation s'applique à tous ses objets 3D autour du centre de 
 - Une ligne posée sur une surface passe devant les faces voisines (pour rester visible) : vue de dessous, elle peut se voir à travers la surface.
 - Pas d'ombres portées ni de reflets : éclairage simple selon l'orientation des faces.
 - Le nombre de pas d'une trajectoire et la finesse d'un maillage sont fixés pour toute l'animation (ils ne peuvent pas suivre un paramètre animé).
+
+### 15.8 Transformations du plan et de l'espace
+
+Une figure peut être déformée point par point, dans les coordonnées de son repère (2D : `axes : repere` obligatoire ; 3D : celles de sa scène). Une seule transformation par figure :
+
+```
+defparam t = 0
+
+deffigure quadrillage =
+    type   : grid               # droites x = k·pas et y = k·pas
+    axes   : r
+    step   : 0.5                # ou (1, 0.5)
+    xrange : [-2, 2]            # défaut : celui du repère
+    yrange : [-2, 2]
+    matrix : (1, 1, 0, 1)       # (x, y) → (x + y, y)
+    amount : t                  # 0 : d'origine, 1 : transformée
+
+deffigure conforme =
+    type : grid
+    axes : r
+    cmap : z^2                  # fonction complexe, z = x + iy
+
+deffigure cube_tordu =
+    type  : cube
+    scene : espace
+    map   : (x + 0.4*z*sin(2y), y, z + 0.3*x^2)
+```
+
+- `matrix : (a, b, c, d)` : (x, y) → (a·x + b·y, c·x + d·y) ; en 3D, 9 nombres ligne par ligne.
+- `map : (u, v)` en fonction de `x`, `y` (et `(u, v, w)` en `x`, `y`, `z` en 3D), avec les paramètres.
+- `cmap : f(z)` : application conforme (2D seulement), formule complexe lue jusqu'à la fin de la ligne.
+- `amount` (défaut 1) : interpolation entre chaque point et son image. Animer un paramètre (`amount : t`, `t to(1, 3s)`) déforme la figure progressivement.
+- Marche sur toute figure 2D placée dans un repère (`grid`, `plot`, `line`, `circle`, `polygon`, `arrow`, ...) et sur tout objet 3D. Traits et faces sont redécoupés finement avant la transformation : une droite devient courbe si l'application n'est pas linéaire. Un point non défini (division par zéro) coupe le trait.
+- La figure transformée est coupée au cadre du repère (`clip : false` pour tout garder).
+
+### 15.9 Régions et courbes de niveau
+
+**`contour`** — courbes de niveau f(x, y) = c dans un repère 2D, ou courbe implicite :
+
+```
+deffigure niveaux =
+    type     : contour
+    axes     : r
+    expr     : 0.3*x^2 + (y - 0.6*x^2)^2
+    levels   : 14                 # ou [0.5, 1, 2]
+    colormap : viridis
+
+deffigure lemniscate =
+    type  : contour
+    axes  : r
+    expr  : (x^2 + y^2)^2 = 4*(x^2 - y^2)
+    color : #7C3AED
+```
+
+- `expr` : f(x, y) (variables `x`, `y`, paramètres), ou une équation `g = h` (alors la courbe g = h, `levels` par défaut [0]).
+- `levels : n` : n niveaux répartis selon les valeurs de f (autant de lignes dans un creux que sur les pentes) ; ou une liste. Défaut : 10.
+- `colormap` : une couleur par niveau, dans l'ordre ; sinon `color`. `resolution` : finesse du calcul (défaut 160 cases en largeur). `xrange`, `yrange` : zone (défaut : celle du repère).
+
+**`region`** — zone remplie, de deux façons :
+
+```
+deffigure aire =
+    type   : region
+    axes   : r
+    upper  : x^2/2                # courbe du haut, en x
+    lower  : 0                    # courbe du bas (défaut 0)
+    xrange : [0, b]               # b animé : l'aire grandit
+    fill   : #2563EB
+
+deffigure admissible =
+    type   : region
+    axes   : r
+    where  : and(x + y >= 1.2, x^2 + y^2 <= 6)
+    fill   : #F59E0B
+    color  : #B45309              # bord tracé seulement si color est donnée
+```
+
+- `where` : une inégalité en x et y, ou plusieurs avec `and(...)` (intersection), `or(...)` (réunion), `not(...)`.
+- `fill` (défaut : bleu translucide) et `opacity` ; avec `upper`/`lower`, une borne de `xrange` peut partir de l'autre (zone vide au début).
+
+**Lignes de niveau d'une surface 3D** — sur une `surface` z = f(x, y) : `levels : 12` (ou une liste), `levels_on : surface | floor | both` (sur la surface, au sol de la scène, ou les deux), `level_color` (sinon la `colormap` de la surface, sinon blanc), `level_stroke` (défaut 2px). Avec une `colormap`, les couleurs de la surface couvrent maintenant la partie visible (zrange) et non toute la fonction.
+
+Le calcul des courbes de niveau, des régions et des surfaces est gardé d'une image à l'autre tant que rien dont il dépend ne change (paramètres, repère, propriétés).
+
+---
+
+### 15.10 Équations différentielles : `trajectory`
+
+```
+deffigure pendule =
+    type     : trajectory
+    axes     : r                         # ou scene : espace
+    ode      : (y, -sin(x) - 0.25*y)     # (x', y') ; (x', y', z') en 3D
+    init     : (2.5, 0)
+    duration : T                         # t va de 0 à duration
+```
+
+- Résolution par Runge–Kutta d'ordre 4, pas `dt` (défaut 0.01). Variables `x`, `y` (et `z`), le temps `t`, les paramètres. Autres noms : `vars : (theta, omega)` (de 1 à 6 variables ; les deux premières sont dessinées).
+- `count : n` : n trajectoires, `init` dépendant de `k` (0 à n - 1) : portrait de phase (`init : (-4 + 8*mod(k, 9)/8, -3 + 6*floor(k/9)/8)`, `count : 81`), nuage de particules (`init : (randn(k), randn(k, 1))`).
+- `duration` animé : les courbes s'allongent. `trail : 1.5` : seulement la dernière 1,5 unité de temps (particules avec traînée). `head : 4px` : un point à la position actuelle.
+- `colormap` : une couleur par trajectoire ; sinon `color`, `stroke`, `tube`, `glow` comme les autres courbes. En 3D, `follow(path=...)` suit la première trajectoire.
+- Les solutions sont gardées d'une image à l'autre : quand `duration` grandit, le calcul n'est refait que lorsqu'elle double. Au plus 6 millions de points (trajectoires × pas).
+
+### 15.11 Graphes et tableaux
+
+**`graph`**
+
+```
+deffigure reseau =
+    type    : graph
+    nodes   : [A, B, C, D]
+    edges   : [A-B, A-C, B->D, C-D]      # A->B : arête orientée
+    weights : [4, 2, 5, 8]               # étiquettes des arêtes (facultatif)
+    layout  : circle                     # circle, grid, tree, force
+    pos     : (50%, 50%)                 # centre
+    size    : 50%                        # étendue
+```
+
+- `layout : tree` : racine en haut (`root : A`, défaut : le premier nœud), chaque parent au milieu de ses enfants. `force` : disposition par ressorts (toujours la même). `positions : [(0, 1), (1, 2), ...]` : positions données (ramenées dans `size`).
+- Apparence : `radius` (nœuds, défaut 3,5 %), `fill` (nœuds, défaut blanc), `color` (traits), `stroke`, `label_color`, `labels : false` ou une liste d'étiquettes.
+
+**`array`** — tableau de valeurs, matrice :
+
+```
+deffigure m =
+    type     : array
+    values   : [[1, 2, 3], [4, 5, $\frac{1}{2}$]]
+    pos      : (50%, 50%)
+    cell     : 8%                        # taille d'une case
+    brackets : true                      # crochets de matrice (défaut false)
+    grid     : false                     # traits entre les cases (défaut true)
+```
+
+`color` : texte ; `fill` : fond des cases (transparent par défaut) ; `grid_color`, `font`. Les valeurs acceptent `$...$` et `#{...}`.
+
+**Surligner un morceau :** l'animation `color(to=..., part=...)` vise un nœud (`part=B`), une arête (`part="A-C"`, dans un sens ou l'autre si elle n'est pas orientée), une case (`part="(2,3)"`, ligne puis colonne à partir de 1), une ligne ou une colonne (`part="row 2"`, `part="col 3"`). Pour une case, c'est le fond qui se colore. Enchaîner ces animations déroule un algorithme pas à pas (parcours, plus court chemin, pivot de Gauss).
+
+### 15.12 Une couleur par pixel : `pixels`
+
+Dans un repère 2D, une couleur pour chaque pixel du cadre, donnée d'une des trois façons :
+
+```
+deffigure chaleur =
+    type     : pixels
+    axes     : r
+    expr     : sin(x*y) + cos(x)         # valeur → couleur
+    colormap : coolwarm                  # défaut viridis ; crange : [min, max]
+
+deffigure domaine =
+    type   : pixels
+    axes   : r
+    domain : (z^2 - 1)/(z^2 + 2i)         # coloration de domaine
+
+deffigure mandelbrot =
+    type       : pixels
+    axes       : r
+    escape     : z^2 + c                  # fractale : z ← f(z), c = le point du pixel
+    iterations : 200                      # défaut 100
+```
+
+- `domain` : teinte = argument de f(z) (rouge pour un réel positif), clarté selon |f(z)| (zéros noirs, pôles blancs) ; `bands : false` enlève les bandes aux puissances de 2 du module.
+- `escape` : z part de `z0` (défaut 0 ; `z0 : c` et une constante dans la formule pour un ensemble de Julia : `escape : z^2 + (-0.8 + 0.156i)`, `z0 : c`), couleur selon le nombre d'itérations avant |z| > `bailout` (défaut 2), lissée ; `inside` : couleur des points qui ne s'échappent pas (défaut noir) ; `colormap` (défaut magma).
+- Avec la caméra 2D du repère (`center`, `zoom`), on zoome dans une fractale : penser à augmenter `iterations` avec le zoom (`iterations : 100 + 80*k`).
+- `resolution` : calculs par pixel (défaut 1 ; 0.5 = quatre fois moins de calculs). Le calcul est réparti sur les cœurs et gardé d'une image à l'autre tant que la figure et son repère ne changent pas. La figure couvre le cadre du repère : la définir avant les courbes à poser dessus, ou lui donner `layer : -1`.
+
+---
+
+### 15.13 Vérifier un fichier sans le jouer : `--check`
+
+```
+didact cours.dct --check
+didact cours.dct --check --format json
+```
+
+- **Erreurs** : celles qui empêchent de jouer le fichier (lecture, validation), et les figures qui ne peuvent pas être dessinées.
+- **Avertissements**, trouvés en calculant la géométrie à chaque bloc, à chaque fin d'animation et toutes les 0,25 s :
+  - une figure qui sort du cadre (à partir de 2 px sur une image de 1080 px de haut) ;
+  - deux textes (`text`, `equation`, `latex`, `table`) qui se chevauchent alors qu'ils sont tous les deux pleinement affichés (un fondu enchaîné au même endroit n'est pas signalé).
+- Si c'est voulu (une figure qui entre par le bord, deux étiquettes superposées exprès) : `allow : outside`, `allow : overlap` ou `allow : [outside, overlap]` sur la figure.
+- `--format json` : une liste d'objets `{"severity": "error" | "warning", "code": "parse" | "validation" | "render" | "outside" | "overlap", "line", "time", "figure", "other", "message"}` (`null` quand l'information n'existe pas ; `other` : l'autre texte d'un chevauchement).
+- Code de retour : 0 aucun problème, 2 seulement des avertissements, 1 au moins une erreur.
 
 ---
 

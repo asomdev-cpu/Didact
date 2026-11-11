@@ -352,6 +352,14 @@ impl Timeline {
         last_block.max(last_anim)
     }
 
+    /// Fins de toutes les animations, triées, sans doublons
+    pub fn anim_ends(&self) -> Vec<f64> {
+        let mut v: Vec<f64> = self.anims.values().flatten().map(|a| a.end()).collect();
+        v.sort_by(f64::total_cmp);
+        v.dedup();
+        v
+    }
+
     /// Timestamps de tous les blocs, triés
     pub fn times(&self) -> &[f64] {
         &self.times

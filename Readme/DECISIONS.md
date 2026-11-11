@@ -119,6 +119,42 @@ Améliorations techniques, sans impact sur le langage, à faire quand le besoin 
 
 **Quand :** avant de mettre Didact en ligne.
 
+#### Vérifier le cadre et les chevauchements avant le rendu ✅ (`--check`)
+
+**Constat :** le validateur ne regarde que la structure (noms, références, timestamps, `destroy`…). Une figure qui sort du cadre ou en recouvre une autre n'est visible qu'en regardant l'animation. Pour qu'une IA (ou un humain) puisse se corriger sans rendre d'image, il faut le détecter avant.
+
+**Pistes :**
+1. **Boîtes englobantes** : à partir de la géométrie déjà calculée par le renderer (positions, références dynamiques comme `center()`), calculer la boîte de chaque figure visible, sans dessiner de pixels.
+2. **Échantillonner le temps** : au minimum à chaque bloc de la timeline et en fin de chaque animation ; des pas plus fins pendant les `move`/`follow`.
+3. **Avertissement, pas erreur** : sortir du cadre ou se chevaucher peut être voulu (une figure qui entre par le bord, une étiquette sur une courbe). Comment l'auteur signale qu'un chevauchement est voulu reste à décider.
+
+**Quand :** avant de faire générer des fichiers par une IA.
+
+**Fait (`didact fichier.dct --check`, `src/check.rs`) :**
+- Boîtes calculées par le renderer lui-même (une variante qui ne dessine rien et note la boîte de chaque figure), à chaque bloc, à chaque fin d'animation et toutes les 0,25 s. Les figures `pixels` ne calculent pas leurs couleurs pendant la vérification.
+- **Hors du cadre :** toute figure, au-delà de 2 px (sur une image de 1080 px de haut). Signalé une fois par figure : premier instant, côtés, plus grand débordement.
+- **Chevauchements :** seulement entre textes (`text`, `equation`, `latex`, `raw.latex`, `table`), quand plus de 10 % de la plus petite boîte est recouverte. Les autres chevauchements (étiquette sur une courbe, texte sur une figure) sont trop souvent voulus. Un texte qui apparaît ou disparaît (opacité < 95 %) est ignoré : un fondu enchaîné au même endroit est voulu.
+- **Le signaler comme voulu (provisoire, à valider) :** propriété `allow : outside`, `allow : overlap` ou `allow : [outside, overlap]` sur la figure.
+- Une figure qui ne peut pas être dessinée (propriété manquante découverte au rendu) est aussi signalée, comme erreur.
+
+#### Sortie des erreurs exploitable par machine ✅ (`--check --format json`)
+
+**Constat :** les erreurs du validateur sont du texte (`ligne N (t=…) : message`). Lisible pour un humain, mais un outil ou une IA doit les reparser.
+
+**Pistes :**
+1. **Option de sortie structurée** (par exemple `--check --format json`) : valider sans ouvrir de fenêtre, et écrire une liste d'objets avec au moins la gravité (erreur / avertissement), la ligne, le timestamp s'il y en a un, la figure concernée et le message.
+2. **Code de retour** distinct selon qu'il y a des erreurs, seulement des avertissements, ou rien.
+
+**Quand :** en même temps que la vérification du cadre, puisque les deux servent la boucle de correction par IA.
+
+**Fait :** `--check --format json` écrit une liste d'objets `{severity, code, line, time, figure, other, message}` ; `severity` vaut `error` ou `warning`, `code` vaut `parse`, `validation`, `render`, `outside` ou `overlap` ; `other` est l'autre figure d'un chevauchement. Code de retour : 0 rien, 2 seulement des avertissements, 1 au moins une erreur. Sans `--format json`, la même liste en texte.
+
+#### Ne calculer que les figures utiles ✅
+
+**Constat :** toutes les figures étaient calculées à chaque image, même invisibles (pas encore apparues ou déjà parties), au cas où une autre y ferait référence.
+
+**Fait :** à chaque image, on part des figures affichées et on ajoute de proche en proche celles dont elles dépendent : tout nom de figure qui apparaît comme mot dans leurs propriétés ou leurs animations en cours (repère, scène, `center(...)`, cible d'un `transform` ou d'un `follow`, surface d'un `iterate`), les membres d'un groupe, et tout groupe dont une figure est utile (il la déplace). La règle est prudente : elle peut garder une figure inutile, jamais en oublier une. Vérifié : toutes les démos, toutes les 0,5 s, images identiques au pixel près avec et sans ce tri (`DIDACT_ALL_FIGURES=1` le désactive). Export de `demo_flots_hasard_graphes` : 64 s → 39 s.
+
 ---
 
 ## 4. Décisions de design
@@ -153,6 +189,15 @@ Cette section liste les choix importants qui ont été tranchés. Chaque décisi
 - Le binaire casse la lisibilité IA et humaine, qui est la valeur centrale
 - Git diff utilisable uniquement en texte
 - À reconsidérer seulement si une vraie contrainte apparaît
+
+### Didact doit rester git-friendly
+
+**Décision :** un fichier `.dct` doit se versionner et se fusionner facilement avec git. C'est un critère à vérifier pour toute nouvelle syntaxe ou commande qui réécrit un fichier.
+
+**Raisonnement :**
+- Le texte brut ne suffit pas : il faut aussi qu'une modification locale produise un diff local (quelques lignes), lisible dans une revue
+- Deux personnes (ou une personne et une IA) qui modifient des parties différentes du fichier ne doivent pas entrer en conflit
+- Favorise la correction ciblée plutôt que la régénération complète d'un fichier
 
 ### Compilateur = renderer (un seul programme)
 
@@ -506,6 +551,68 @@ Cette section liste les choix importants qui ont été tranchés. Chaque décisi
 
 **Raisonnement :** une trajectoire en tube compte des milliers de morceaux ; un flou par morceau coûtait 1,1 s par image, une seule passe 0,2 s.
 
+### Expressions : une seule grammaire, enrichie
+
+**Décision :** une seule grammaire de formules sert partout (`expr`, coordonnées, propriétés, `#{...}`, `map`). Elle gagne `sum`/`prod` à variable liée, les fonctions à plusieurs arguments, les comparaisons et `if(c, a, b)`, et un mode complexe (`z`, `i`) pour `cmap`.
+
+**Raisonnement :** apprendre une syntaxe une fois ; tout ce qui s'écrit dans un `plot` s'écrit ailleurs. `if(...)` plutôt qu'une notation par cas : lisible, imbricable, sans nouveau symbole. Une borne de somme non entière ajoute le terme suivant en fraction : animer `n` fait apparaître les termes en douceur au lieu de sauts.
+
+### Paramètres dans toutes les propriétés, nombres dynamiques `#{...}`
+
+**Décision :** un nombre peut être remplacé par un calcul de paramètres suivi de son unité (`(k + 1)px`, `(2k)%`). Dans le texte, `#{expr}` / `#{expr:d}` insère la valeur.
+
+**Raisonnement :** pas de liste de propriétés « animables » à retenir : tout nombre l'est. Le calcul est reconnu seulement s'il utilise un paramètre déjà défini (pas de confusion avec `ease-in-out` ou une couleur). `#{` ne se confond ni avec un commentaire (`# `) ni avec une couleur (`#FF0000`). Les décimales sont fixées par l'auteur (`:0`) pour éviter un texte qui tremble.
+
+### Transformations : propriétés de la figure, avancement par `amount`
+
+**Décision :** `matrix`, `map`, `cmap` et `amount` sont des propriétés de la figure, appliquées dans les coordonnées de son repère ; nouveau type `grid` pour le quadrillage à déformer.
+
+**Raisonnement :** une seule idée (déformer le plan) couvre algèbre linéaire, changements de variables et applications conformes, en 2D comme en 3D. L'animation passe par un paramètre (`amount : t`) : pas de nouvelle animation, on combine ce qui existe. Interpolation linéaire entre le point et son image (comme 3Blue1Brown) : simple et prévisible.
+
+Une figure placée dans un repère est coupée à son cadre (voir « Caméra 2D »).
+
+### Caméra 2D : le repère est la caméra
+
+**Décision :** pas d'objet caméra en 2D. Le repère reçoit `center : (x, y)` et `zoom`, en plus de xrange/yrange, et tout cela accepte des paramètres. Les figures qui ont `axes : repere` sont coupées à son cadre.
+
+**Raisonnement :** en 2D, « où regarde-t-on » est exactement la fenêtre du repère ; plusieurs repères côte à côte peuvent zoomer indépendamment. Un zoom s'anime avec un paramètre (`zoom : 10^k`, `k` linéaire → zoom régulier), sans nouvelle animation. Le reste suit seul : graduations, `step : auto`, courbes affinées là où il faut.
+
+### Régions et courbes de niveau : une grille fine, pas de calcul symbolique
+
+**Décision :** `contour` (f(x, y) = c, ou une équation `g = h`) et `region` (`upper`/`lower`, ou `where : inégalités`) sont calculés sur une grille (marching squares). `where` combine les contraintes par `and`/`or`/`not`. Les niveaux automatiques suivent la répartition des valeurs.
+
+**Raisonnement :** marche pour n'importe quelle formule, sans résoudre d'équation ; une région est remplie d'un seul tenant (pas de joints visibles). Des niveaux également espacés en valeur tombent presque tous sur les pentes raides d'une fonction de coût : par quantiles, on voit le creux.
+
+### Cache entre images pour les calculs lourds
+
+**Décision :** les courbes de niveau, régions et maillages de surface sont gardés d'une image à l'autre ; la clé contient tout ce dont ils dépendent.
+
+**Raisonnement :** toutes les figures sont calculées à chaque image (les références en ont besoin), même immobiles ou pas encore apparues. Le résultat est identique avec ou sans cache.
+
+### Équations différentielles : un seul type, `trajectory`
+
+**Décision :** une trajectoire (RK4) couvre la courbe solution, le portrait de phase (`count` + `init` en k), le nuage de particules (`trail`, `head`) et l'attracteur 3D. Pas de type séparé pour les lignes de courant ni pour les particules.
+
+**Raisonnement :** ce sont la même chose vue autrement : des solutions d'une même équation à partir de points de départ différents, montrées en entier ou seulement leur fin. Une seule syntaxe à apprendre, et `duration` animé suffit pour tout faire avancer.
+
+### Hasard reproductible : `rand(k)`, pas de générateur caché
+
+**Décision :** `rand(k)` et `randn(k)` sont des fonctions déterministes de k (et d'une graine facultative). Un tirage est désigné par son numéro.
+
+**Raisonnement :** une animation doit être identique à chaque rendu, en avant comme en arrière dans le temps. Désigner les tirages par un numéro permet de les réutiliser exactement (le même point dans le nuage et dans l'estimation de π) et de les sommer avec `sum` (théorème central limite).
+
+### Graphes et tableaux : des morceaux nommés, surlignés par `color(part=...)`
+
+**Décision :** pas de figures séparées pour chaque nœud ou case : un `graph` ou un `array` nomme ses morceaux (`B`, `"A-C"`, `"(2,3)"`, `"row 2"`), et l'animation existante `color(part=...)` les colore.
+
+**Raisonnement :** un algorithme se déroule en surlignant pas à pas : c'est exactement ce que `part` faisait déjà pour les équations. Rien de nouveau à apprendre dans la timeline.
+
+### `pixels` : une image calculée, posée sur le cadre du repère
+
+**Décision :** un type `pixels` avec trois modes (`expr`, `domain`, `escape`), calculé à la résolution de l'écran, réparti sur les cœurs, gardé en cache. Une forme peut désormais porter une image.
+
+**Raisonnement :** coloration de domaine, fractales et cartes de chaleur ne se dessinent pas avec des traits. Calculer à la taille de l'écran (et non sur une grille fixe) garde des détails nets à tout zoom, avec la caméra 2D.
+
 ### Licence MIT
 
 **Décision :** Le projet est sous licence MIT.
@@ -623,6 +730,15 @@ Idées qui ont été discutées et rejetées explicitement.
 ## Changelog des versions du langage
 
 ### v0.2 (en cours)
+- `--check` (figures hors du cadre, textes qui se chevauchent, figures non dessinables ; `allow : outside | overlap`) et `--format json`, codes de retour 0 / 2 / 1 (`src/check.rs`) ; seules les figures affichées et leurs dépendances sont calculées à chaque image
+- `trajectory` : équations différentielles (RK4), portraits de phase, particules avec traînée, attracteurs 3D (`src/renderer/ode.rs`) ; `rand`, `randn`, `fact`, `binom`, `gamma`, `erf` ; `scatter` et `histogram` tirés par formule (`count`, `range`, `density`, `where`) ; formules compilées, sommes comprises
+- `graph` (dispositions cercle, grille, arbre, forces) et `array` (matrices), morceaux surlignés par `color(part=...)` (`src/renderer/discrete.rs`)
+- `pixels` : cartes de chaleur, coloration de domaine, fractales par temps de fuite ; une forme peut porter une image (`src/renderer/pixels.rs`) ; `demo_flots_hasard_graphes.dct`
+- Caméra 2D : `center` et `zoom` sur un repère (paramètres acceptés), découpe des figures au cadre du repère (`clip : false`), graduations précises à tout zoom, `step : auto` pour `grid`, `plot` affiné là où la courbe varie vite (`src/renderer/clip.rs`)
+- Types `contour` (courbes de niveau, courbes implicites) et `region` (entre deux courbes, ou par inégalités) ; lignes de niveau des surfaces 3D (`levels`, `levels_on`) ; couleurs de surface limitées à zrange ; cache des calculs lourds entre images (`src/renderer/contour.rs`, `src/renderer/memo.rs`) ; `demo_niveaux.dct`
+- Expressions : `sum`/`prod`, `min max atan2 mod hypot clamp round sign`, comparaisons, `if(c, a, b)`, `and or not`, nombres complexes (`z`, `i`, `re im arg conj`)
+- Paramètres dans toutes les propriétés numériques (`radius : (2k)%`, `stroke : (k+1)px`, tuples, listes de points) ; nombres dynamiques `#{expr}` / `#{expr:d}` dans le texte (`src/renderer/params.rs`)
+- Transformations `matrix` / `map` / `cmap` + `amount` sur les figures 2D (dans un repère) et 3D ; type `grid` (`src/renderer/warp.rs`) ; `demo_transformations.dct`
 - 3D : `scene3d` (caméra animable, perspective/ortho, lumière, repère), `surface` (explicite ou paramétrée, palettes, grille, découpe), `curve3d`, solides (`cube`, `box`, `sphere`, `cylinder`, `cone`, `plane`, `polyhedron`), `arrow` et `field` en 2D et 3D, `iterate` (récurrence générale + 6 optimiseurs), animations `rotate3d` et `fill`, `transform` entre surfaces, halo `glow`, caméra à la souris dans la fenêtre ; démos `demo_3d_*.dct` et `demo_champs_2d.dct`
 - `didact shift` : décaler les blocs à partir d'un instant (`src/shift.rs`)
 - `defmodel` / `defrepeat` (`@nom`, `@(calcul)`) ; points de `polygon` dans un repère ; `demo_modeles.dct`

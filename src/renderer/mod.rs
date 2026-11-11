@@ -17,14 +17,22 @@
 //!
 //! Changer de bibliothèque de dessin = écrire un autre backend, sans toucher au reste.
 
+pub mod clip;
+pub mod contour;
+pub mod discrete;
 pub mod expr;
 pub mod geometry;
+pub mod memo;
 pub mod morph;
+pub mod ode;
+pub mod params;
+pub mod pixels;
 pub mod reveal;
 pub mod skia;
 pub mod text;
 pub mod three;
 pub mod typeset;
+pub mod warp;
 
 pub use geometry::{Rgba, Scene, Shape};
 
@@ -44,6 +52,8 @@ pub trait RenderBackend {
     /// Ajoute le halo lumineux (de ce rayon, en pixels) de ces formes, déjà dessinées nettes.
     /// Par défaut : pas de halo.
     fn draw_glow(&mut self, _shapes: &[Shape], _radius: f32) {}
+    /// Les formes qui suivent appartiennent à cette figure (ou scène 3D). Par défaut : ignoré.
+    fn begin_figure(&mut self, _name: &str) {}
 }
 
 /// Dessine des formes nettes, dans l'ordre ; garde de côté celles qui ont un halo
@@ -78,9 +88,14 @@ pub fn render_frame(frame: &Frame, scene: &Scene, backend: &mut dyn RenderBacken
     let mut objs: HashMap<String, three::Obj> = HashMap::new();
     let mut problems = Vec::new();
     let visible: HashMap<&str, bool> = frame.states.iter().map(|s| (s.fig.name.as_str(), s.visible)).collect();
+    let needed = needed_figures(frame);
 
-    // 1. Calcul, dans l'ordre de définition (un groupe est défini après ses figures)
+    // 1. Calcul, dans l'ordre de définition (un groupe est défini après ses figures).
+    //    Seulement les figures affichées et celles dont elles dépendent.
     for st in &frame.states {
+        if !needed.contains(st.fig.name.as_str()) {
+            continue;
+        }
         let name = st.fig.name.clone();
         let result = if st.fig.ftype == "group" {
             build_group(st, frame.t, scene, &mut refs, &mut shapes_by_name, &visible, &mut objs)
@@ -190,6 +205,7 @@ pub fn render_frame(frame: &Frame, scene: &Scene, backend: &mut dyn RenderBacken
         match objs.get(&fig.name).map(|o| o.scene.clone()) {
             Some(sc) => {
                 if !seen_scenes.contains(&sc) {
+                    backend.begin_figure(&sc);
                     seen_scenes.push(sc);
                     if let Some(shapes) = next3d.next() {
                         draw_shapes(backend, shapes, &mut glowing);
@@ -198,6 +214,7 @@ pub fn render_frame(frame: &Frame, scene: &Scene, backend: &mut dyn RenderBacken
             }
             None => {
                 if let Some(shapes) = shapes_by_name.get(&fig.name) {
+                    backend.begin_figure(&fig.name);
                     draw_shapes(backend, shapes, &mut glowing);
                 }
             }
@@ -215,7 +232,7 @@ fn build_scene3d(
     refs: &mut Refs,
     objs: &mut HashMap<String, three::Obj>,
 ) -> Result<(), String> {
-    let fig = with_animated_colors(st, t)?;
+    let fig = prepared(st, t, &refs.params)?;
     let fig = fig.as_ref().unwrap_or(st.fig);
     let (space, mut axes) = three::build_space(fig, scene, refs)?;
     let fx = three::effect(st, t, axes.center(), three::span_of(&space), refs)?;
@@ -237,11 +254,16 @@ fn build_object3d(
     refs: &mut Refs,
     objs: &mut HashMap<String, three::Obj>,
 ) -> Result<(), String> {
-    let fig = with_animated_colors(st, t)?;
+    let fig = prepared(st, t, &refs.params)?;
     let fig = fig.as_ref().unwrap_or(st.fig);
     let scene_name = three::scene_of(fig, refs).ok_or("objet 3D sans scène : ajouter `scene : nom_de_la_scene`")?;
     let space = refs.spaces.get(&scene_name).cloned().ok_or_else(|| format!("la scène '{}' n'a pas pu être calculée", scene_name))?;
     let (mut obj, surface) = three::build_object(fig, &space, &scene_name, scene, refs)?;
+    // Transformation de l'espace (matrix / map), dans les coordonnées de la scène
+    if let Some(w) = warp::of(fig, &refs.params, 3)? {
+        w.items(&mut obj.items);
+        obj.path = obj.path.iter().map(|p| w.apply(*p)).collect();
+    }
     let c0 = obj.center();
     let fx = three::effect(st, t, c0, three::span_of(&space), refs)?;
     fx.apply(&mut obj.items);
@@ -438,12 +460,22 @@ fn reveal_line(scene: &Scene) -> f32 {
 /// Calcule les formes animées d'une figure et sa géométrie
 fn build_figure(st: &FigureState, t: f64, scene: &Scene, refs: &Refs) -> Result<(Vec<Shape>, Geom), String> {
     // ── Couleur animée : on remplace `color` avant de construire les formes ──
-    let fig_with_color = with_animated_colors(st, t)?;
+    let fig_with_color = prepared(st, t, &refs.params)?;
     let fig: &ResolvedFigure = fig_with_color.as_ref().unwrap_or(st.fig);
 
     // ── Formes de base ──
     let mut shapes = geometry::figure_shapes(fig, scene, refs)?;
-    color_parts(st, t, &mut shapes)?;
+    // Transformation du plan (matrix / map / cmap), dans les coordonnées de son repère
+    if let Some(w) = warp::of(fig, &refs.params, 2)? {
+        let name = fig.properties.get("axes").map(fmt_value).ok_or("une transformation (matrix, map, cmap) se fait dans un repère : ajouter `axes : nom_du_repere`")?;
+        let m = geometry::resolve_geom(&name, refs)?.axes.ok_or_else(|| format!("'{}' n'est pas un repère axes", name))?;
+        w.shapes(&mut shapes, &m);
+    }
+    // Une figure placée dans un repère est découpée à son cadre (sauf `clip : false`)
+    if let Some(r) = axes_clip_rect(fig, refs)? {
+        clip::clip_shapes(&mut shapes, r);
+    }
+    color_parts(st, t, &mut shapes, fig, scene, refs)?;
     let base_center = bbox_center(&shapes);
 
     // ── Animations ──
@@ -489,6 +521,29 @@ fn build_figure(st: &FigureState, t: f64, scene: &Scene, refs: &Refs) -> Result<
         shapes.iter_mut().for_each(|s| s.glow = g);
     }
     Ok((shapes, geom))
+}
+
+/// Cadre de découpe d'une figure placée dans un repère : la zone xrange × yrange,
+/// élargie de la moitié du trait (un trait posé sur le bord reste entier)
+fn axes_clip_rect(fig: &ResolvedFigure, refs: &Refs) -> Result<Option<clip::Rect>, String> {
+    if matches!(fig.ftype.as_str(), "axes" | "scene3d" | "group") {
+        return Ok(None);
+    }
+    match fig.properties.get("clip").map(fmt_value).as_deref() {
+        None | Some("true") => {}
+        Some("false") => return Ok(None),
+        Some(other) => return Err(format!("clip '{}' invalide (true / false)", other)),
+    }
+    let Some(name) = fig.properties.get("axes").map(fmt_value) else { return Ok(None) };
+    let Some(m) = refs.get(&name).and_then(|g| g.axes) else { return Ok(None) };
+    let (x0, y0) = m.to_px(m.xrange.0, m.yrange.1);
+    let (x1, y1) = m.to_px(m.xrange.1, m.yrange.0);
+    let margin = 1.0 + match fig.properties.get("stroke") {
+        Some(PropValue::Single(s)) => s.trim_end_matches("px").parse::<f32>().unwrap_or(2.0),
+        Some(PropValue::Number(n)) => *n as f32,
+        _ => 2.0,
+    } * 0.75;
+    Ok(Some((x0.min(x1) - margin, y0.min(y1) - margin, x0.max(x1) + margin, y0.max(y1) + margin)))
 }
 
 /// Groupe : ses figures sont déjà calculées (elles sont définies avant lui).
@@ -615,6 +670,14 @@ fn build_group(
     Ok(())
 }
 
+/// La figure telle qu'elle se dessine à l'instant t : couleurs animées, expressions de paramètres
+/// calculées (`radius : 2*k`) et `#{...}` remplacés dans le texte ; None si rien ne change
+pub(crate) fn prepared(st: &FigureState, t: f64, params: &HashMap<String, f64>) -> Result<Option<ResolvedFigure>, String> {
+    let colored = with_animated_colors(st, t)?;
+    let base = colored.as_ref().unwrap_or(st.fig);
+    Ok(params::bind(base, params)?.or(colored))
+}
+
 /// La figure avec `color` et `fill` remplacés par leurs valeurs animées (color(...), fill(...)) ;
 /// None si aucune animation de couleur
 pub(crate) fn with_animated_colors(st: &FigureState, t: f64) -> Result<Option<ResolvedFigure>, String> {
@@ -666,13 +729,31 @@ fn animated_color(st: &FigureState, t: f64, key: &str) -> Result<Option<String>,
 }
 
 /// color(to=..., part="...") : recolore les morceaux d'un texte ou d'une équation
-fn color_parts(st: &FigureState, t: f64, shapes: &mut [Shape]) -> Result<(), String> {
+fn color_parts(st: &FigureState, t: f64, shapes: &mut [Shape], fig: &ResolvedFigure, scene: &Scene, refs: &Refs) -> Result<(), String> {
     for a in &st.anims {
         let AnimKind::Color { to, part: Some(part) } = &a.kind else { continue };
         let target = geometry::parse_color(to)?.ok_or_else(|| format!("color : couleur '{}' invalide pour part", to))?;
+        let e = a.progress(t) as f32;
+        // Graphe, tableau : le morceau est un nœud, une arête, une case, une ligne, une colonne
+        if matches!(fig.ftype.as_str(), "graph" | "array") {
+            if a.progress(t) <= 0.0 && t < a.start {
+                continue;
+            }
+            let built = discrete::build(fig, scene, refs)?;
+            let ids = discrete::part_indices(&built, part).ok_or_else(|| format!("part « {} » introuvable", part))?;
+            let n = shapes.len();
+            for i in ids.into_iter().filter(|i| *i < n) {
+                if let Some(c) = &mut shapes[i].fill {
+                    *c = mix_color(*c, target, e);
+                }
+                if let Some((c, _)) = &mut shapes[i].stroke {
+                    *c = mix_color(*c, target, e);
+                }
+            }
+            continue;
+        }
         let content = typeset::part_content(&st.fig.ftype, part);
         let needle = typeset::shapes(&content, 0.0, 0.0, 40.0, typeset::Align::Center, Rgba::BLACK)?;
-        let e = a.progress(t) as f32;
         let mix = |c: Rgba| Rgba {
             r: c.r + (target.r - c.r) * e,
             g: c.g + (target.g - c.g) * e,
@@ -689,6 +770,68 @@ fn color_parts(st: &FigureState, t: f64, shapes: &mut [Shape]) -> Result<(), Str
         }
     }
     Ok(())
+}
+
+fn mix_color(c: Rgba, target: Rgba, e: f32) -> Rgba {
+    Rgba { r: c.r + (target.r - c.r) * e, g: c.g + (target.g - c.g) * e, b: c.b + (target.b - c.b) * e, a: c.a + (target.a - c.a) * e }
+}
+
+/// Figures à calculer à cet instant : celles qu'on dessine, plus toutes celles dont elles
+/// dépendent, de proche en proche (repère, scène, `center(fig)`, cible d'un `transform` ou
+/// d'un `follow`, membres d'un groupe, surface d'un `iterate`...). Une dépendance est un nom
+/// de figure qui apparaît comme mot dans les propriétés ou les animations en cours : la règle
+/// est prudente (elle peut garder une figure inutile, jamais en oublier une).
+pub fn needed_figures<'a>(frame: &'a Frame) -> std::collections::HashSet<&'a str> {
+    use std::collections::HashSet;
+    // Contrôle : DIDACT_ALL_FIGURES calcule tout, comme avant (pour comparer les rendus)
+    if std::env::var_os("DIDACT_ALL_FIGURES").is_some() {
+        return frame.states.iter().map(|s| s.fig.name.as_str()).collect();
+    }
+    let names: HashSet<&str> = frame.states.iter().map(|s| s.fig.name.as_str()).collect();
+    let by_name: HashMap<&str, &FigureState> = frame.states.iter().map(|s| (s.fig.name.as_str(), s)).collect();
+    let mut needed: HashSet<&str> = HashSet::new();
+    let mut todo: Vec<&str> = frame.states.iter().filter(|s| s.visible).map(|s| s.fig.name.as_str()).collect();
+    loop {
+        if todo.is_empty() {
+            // Un groupe (même non affiché) déplace et anime ses figures : il est nécessaire
+            // dès qu'une de ses figures l'est
+            todo = frame
+                .states
+                .iter()
+                .filter(|s| !s.members.is_empty() && !needed.contains(s.fig.name.as_str()))
+                .filter(|s| s.members.iter().any(|m| needed.contains(m.as_str())))
+                .map(|s| s.fig.name.as_str())
+                .collect();
+            if todo.is_empty() {
+                break;
+            }
+        }
+        let n = todo.pop().unwrap();
+        if !needed.insert(n) {
+            continue;
+        }
+        let Some(st) = by_name.get(n) else { continue };
+        let mut text = String::new();
+        for v in st.fig.properties.values() {
+            text.push_str(&format!("{:?} ", v));
+        }
+        for a in &st.anims {
+            text.push_str(&format!("{:?} ", a.kind));
+        }
+        for w in text.split(|c: char| !(c.is_alphanumeric() || c == '_')) {
+            if let Some(dep) = names.get(w) {
+                if !needed.contains(dep) {
+                    todo.push(dep);
+                }
+            }
+        }
+        for m in st.members {
+            if let Some(dep) = names.get(m.as_str()) {
+                todo.push(dep);
+            }
+        }
+    }
+    needed
 }
 
 /// Géométrie publiée pour les références : centre, angle, boîte, point d'étiquette

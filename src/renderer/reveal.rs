@@ -49,16 +49,16 @@ pub fn reveal(shapes: Vec<Shape>, mode: Mode, e: f32, first: usize, total: usize
 
         // Remplissage en fondu
         if let (Some(c), true) = (shape.fill, fill_part > 0.0) {
-            out.push(Shape { glow: 0.0, path: shape.path.clone(), fill: Some(Rgba { a: c.a * fill_part, ..c }), stroke: None });
+            out.push(Shape { glow: 0.0, path: shape.path.clone(), fill: Some(Rgba { a: c.a * fill_part, ..c }), stroke: None, image: None });
         }
         // Contour tracé
         let path = trim(&shape.path, trace);
         match (shape.stroke, shape.fill) {
-            (Some(stroke), _) => out.push(Shape { glow: 0.0, path, fill: None, stroke: Some(stroke) }),
+            (Some(stroke), _) => out.push(Shape { glow: 0.0, path, fill: None, stroke: Some(stroke), image: None }),
             (None, Some(c)) => {
                 // trait temporaire, qui s'efface quand le remplissage arrive
                 let c = Rgba { a: c.a * (1.0 - fill_part), ..c };
-                out.push(Shape { glow: 0.0, path, fill: None, stroke: Some((c, line_w)) });
+                out.push(Shape { glow: 0.0, path, fill: None, stroke: Some((c, line_w)), image: None });
             }
             (None, None) => {}
         }
@@ -221,6 +221,7 @@ mod tests {
             path: vec![PathCmd::MoveTo(x, 0.0), PathCmd::LineTo(x + 1.0, 0.0), PathCmd::LineTo(x, 1.0), PathCmd::Close],
             fill: Some(Rgba::BLACK),
             stroke: None,
+            image: None,
         };
         let shapes: Vec<Shape> = (0..5).map(|i| glyph(i as f32 * 2.0)).collect();
         // au début de l'écriture, seules les premières lettres ont commencé

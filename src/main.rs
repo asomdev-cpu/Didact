@@ -1,4 +1,4 @@
-use didact::{lexer, output, parser, renderer, resolver, runtime, validator};
+use didact::{check, lexer, output, parser, renderer, resolver, runtime, validator};
 
 use std::env;
 use std::fs;
@@ -15,6 +15,11 @@ shift : décale tous les blocs qui commencent à <à partir de> ou après, et r�
 Options :
   --png <t> <image.png>   enregistre l'image à l'instant t (en secondes), sans fenêtre
   --summary               affiche les figures et la timeline dans la console, sans fenêtre
+  --check                 vérifie tout sans fenêtre : erreurs, figures hors du cadre, textes qui se
+                          chevauchent (à chaque bloc, fin d'animation et toutes les 0,25 s)
+      --format json         sortie lisible par un programme : une liste d'objets
+                            {severity, code, line, time, figure, other, message}
+                          code de retour : 0 rien, 2 seulement des avertissements, 1 des erreurs
   --export mp4            exporte la vidéo (nécessite ffmpeg)
       -o <fichier>          fichier de sortie (défaut : <nom>.mp4, ou <nom>_<LANG>.mp4 avec --lang)
       --fps <n>             images par seconde (défaut : 30)
@@ -52,12 +57,23 @@ fn main() {
     let mut engine: Option<String> = None;
     let mut voice = false;
     let mut voice_config: Option<String> = None;
+    let mut check_mode = false;
+    let mut json = false;
 
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--debug" => debug = true,
             "--summary" => summary = true,
+            "--check" => check_mode = true,
+            "--format" => {
+                i += 1;
+                json = match args.get(i).map(|s| s.as_str()) {
+                    Some("json") => true,
+                    Some("text") => false,
+                    _ => fail("--format attend json ou text"),
+                };
+            }
             "--lang" => {
                 i += 1;
                 lang = Some(args.get(i).cloned().unwrap_or_else(|| fail("--lang attend une langue")));
@@ -124,6 +140,24 @@ fn main() {
     let content = fs::read_to_string(&filename).unwrap_or_else(|e| {
         fail(&format!("Erreur lors de la lecture du fichier '{}': {}", filename, e))
     });
+
+    // ── Vérification seule (--check) ──
+    if check_mode {
+        let diags = check::check(&content, lang.as_deref());
+        if json {
+            println!("{}", check::to_json(&diags));
+        } else if diags.is_empty() {
+            println!("✓ {} : aucun problème", filename);
+        } else {
+            let errors = diags.iter().filter(|d| d.severity == check::Severity::Error).count();
+            println!("{} : {} erreur(s), {} avertissement(s)", filename, errors, diags.len() - errors);
+            for d in &diags {
+                let mark = if d.severity == check::Severity::Error { "✗" } else { "⚠" };
+                println!("  {} {}", mark, d.to_text());
+            }
+        }
+        std::process::exit(check::exit_code(&diags));
+    }
 
     // ── Étape 1 : Lexer ──
     let tokens = lexer::tokenize(&content);

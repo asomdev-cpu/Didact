@@ -16,15 +16,17 @@ pub struct Parser {
     source_lines: Vec<String>,
     /// Modèles déjà définis (`defmodel`)
     models: HashMap<String, Model>,
+    /// Paramètres déjà définis (`defparam`) : pour lire `radius : 2*k`
+    param_names: Vec<String>,
 }
 
 /// Propriétés dont la valeur est le reste de la ligne, tel quel
 /// (expressions et LaTeX : espaces, ^, \, ... conservés sans guillemets)
-const RAW_LINE_PROPS: &[&str] = &["expr"];
+const RAW_LINE_PROPS: &[&str] = &["expr", "cmap", "upper", "lower", "where", "domain", "escape", "z0", "edges", "values", "weights", "sample", "x", "y"];
 
 impl Parser {
     pub fn new(tokens: Vec<Spanned>) -> Self {
-        Parser { tokens, pos: 0, last_line: 1, source_lines: Vec::new(), models: HashMap::new() }
+        Parser { tokens, pos: 0, last_line: 1, source_lines: Vec::new(), models: HashMap::new(), param_names: Vec::new() }
     }
 
     /// Bloc multilignes `key : |` : les lignes suivantes plus indentées que `key`,
@@ -70,9 +72,9 @@ impl Parser {
         }
         let text = self.source_lines.get(line.checked_sub(1)?)?;
         let after = text.split_once(':')?.1;
-        // Commentaire en fin de ligne : " # ..."
-        let after = match after.find(" #") {
-            Some(i) => &after[..i],
+        // Commentaire en fin de ligne : " # ..." (mais pas un nombre dynamique " #{n}")
+        let after = match after.match_indices(" #").find(|(i, _)| !after[i + 2..].starts_with('{')) {
+            Some((i, _)) => &after[..i],
             None => after,
         };
         let mut value = after.trim().to_string();
@@ -120,6 +122,81 @@ impl Parser {
             self.advance();
         }
         Some(PropValue::Single(value))
+    }
+
+    /// Expression de paramètres qui occupe toute la fin de la ligne, avec son unité éventuelle :
+    /// `2*k`, `(k + 1)px`, `k/4`, `(2k)%`. Gardée telle quelle (sans espaces), calculée à chaque image.
+    fn raw_expr_value(&mut self, line: usize) -> Option<PropValue> {
+        if self.param_names.is_empty() || matches!(self.peek(), Token::StringLit(_) | Token::LBracket | Token::Pipe) {
+            return None;
+        }
+        let text = self.source_lines.get(line.checked_sub(1)?)?;
+        let after = text.split_once(':')?.1;
+        let after = match after.find(" # ") {
+            Some(i) => &after[..i],
+            None => after,
+        };
+        let value: String = after.chars().filter(|c| !c.is_whitespace()).collect();
+        crate::renderer::params::param_expr(&value, &self.param_names)?;
+        while self.line() == line && *self.peek() != Token::EOF {
+            self.advance();
+        }
+        Some(PropValue::Single(value))
+    }
+
+    /// Liste `[ ... ]` sur une ligne dont un élément contient une expression de paramètres :
+    /// `[(10%, 10%), (k*15%, 30%)]`. Chaque élément est gardé tel quel (sans espaces).
+    fn raw_list_value(&mut self, line: usize) -> Option<PropValue> {
+        if self.param_names.is_empty() || *self.peek() != Token::LBracket {
+            return None;
+        }
+        let text = self.source_lines.get(line.checked_sub(1)?)?;
+        let after = text.split_once(':')?.1;
+        let after = match after.find(" # ") {
+            Some(i) => &after[..i],
+            None => after,
+        };
+        let value: String = after.chars().filter(|c| !c.is_whitespace()).collect();
+        let inside = value.strip_prefix('[')?.strip_suffix(']')?;
+        let call = format!("l({})", inside);
+        let (_, items) = crate::renderer::geometry::split_call(&call);
+        let items: Vec<String> = items.iter().map(|s| s.to_string()).collect();
+        let is_expr = |s: &str| crate::renderer::params::param_expr(s, &self.param_names).is_some();
+        let dynamic = items.iter().any(|item| {
+            if let Some(point) = item.strip_prefix('(').and_then(|p| p.strip_suffix(')')) {
+                let call = format!("p({})", point);
+                let (_, coords) = crate::renderer::geometry::split_call(&call);
+                coords.iter().any(|c| is_expr(c))
+            } else {
+                is_expr(item)
+            }
+        });
+        if !dynamic {
+            return None;
+        }
+        while self.line() == line && *self.peek() != Token::EOF {
+            self.advance();
+        }
+        Some(PropValue::List(items))
+    }
+
+    /// Après une valeur : il ne doit rien rester sur la ligne (sinon la valeur a été mal comprise,
+    /// typiquement un calcul avec un paramètre non défini : `radius : 2*q`)
+    fn check_line_consumed(&self, key: &str, line: usize) -> Result<(), String> {
+        if self.line() != line || matches!(self.peek(), Token::EOF) {
+            return Ok(());
+        }
+        // Une autre propriété sur la même ligne : permis
+        if matches!(self.peek(), Token::Ident(_)) && self.tokens.get(self.pos + 1).map(|t| &t.token) == Some(&Token::Colon) {
+            return Ok(());
+        }
+        let text = self.source_lines.get(line - 1).and_then(|l| l.split_once(':')).map(|(_, v)| v.trim().to_string()).unwrap_or_default();
+        let hint = if self.param_names.is_empty() {
+            "un calcul n'est permis qu'avec des paramètres (defparam) définis plus haut".to_string()
+        } else {
+            format!("calcul illisible ou nom inconnu (paramètres définis plus haut : {})", self.param_names.join(", "))
+        };
+        Err(format!("ligne {} : `{}` : valeur '{}' non comprise : {}", line, key, text, hint))
     }
 
     /// Valeur `( ... )` qui occupe toute la fin de la ligne et contient des calculs
@@ -543,7 +620,10 @@ impl Parser {
         let name = self.expect_ident()?;
         self.expect(&Token::Equals)?;
         match self.advance() {
-            Token::Number(value) => Ok(ParamDef { name, index, line, value }),
+            Token::Number(value) => {
+                self.param_names.push(name.clone());
+                Ok(ParamDef { name, index, line, value })
+            }
             tok => Err(format!("ligne {} : defparam {} : valeur de départ numérique attendue, trouvé {:?}", line, name, tok)),
         }
     }
@@ -575,6 +655,8 @@ impl Parser {
                 } else if let Some(v) = self.raw_line_value(&key, line) {
                     properties.insert(key, v);
                 } else if let Some(v) = self.raw_call_value(line) {
+                    properties.insert(key, v);
+                } else if let Some(v) = self.raw_expr_value(line).or_else(|| self.raw_list_value(line)) {
                     properties.insert(key, v);
                 } else if let Some(v) = self.raw_tuple_value(line) {
                     properties.insert(key, v);
@@ -620,13 +702,17 @@ impl Parser {
                         Some(v) => v,
                         None => match self.raw_call_value(line) {
                             Some(v) => v,
-                            None => match self.raw_tuple_value(line) {
+                            None => match self.raw_expr_value(line).or_else(|| self.raw_list_value(line)) {
                                 Some(v) => v,
-                                None => self.parse_prop_value()?,
+                                None => match self.raw_tuple_value(line) {
+                                    Some(v) => v,
+                                    None => self.parse_prop_value()?,
+                                },
                             },
                         },
                     },
                 };
+                self.check_line_consumed(&key, line)?;
                 properties.insert(key, value);
             } else {
                 self.advance();

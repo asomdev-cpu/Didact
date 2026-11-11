@@ -1,0 +1,149 @@
+# ─────────────────────────────────────────────
+#  Expressions riches, paramètres partout, transformations du plan et de l'espace
+#  didact demo_transformations.dct
+# ─────────────────────────────────────────────
+
+[config]
+window       : [16:9]
+languages    : [FR, EN]
+default_lang : FR
+
+[figures]
+
+defparam n = 1          # nombre de termes de la série
+defparam t = 0          # avancement des transformations
+
+# --- Partie 1 : série de Fourier d'un créneau ---
+
+deffigure r1 =
+    type   : axes
+    from   : (6%, 12%)
+    to     : (94%, 80%)
+    xrange : [-6.5, 6.5]
+    yrange : [-1.6, 1.6]
+    equal  : false
+
+deffigure creneau =
+    type   : plot
+    expr   : if(mod(x, 2pi) < pi, 1, -1)
+    axes   : r1
+    color  : #9CA3AF
+    stroke : 2px
+
+deffigure serie =
+    type   : plot
+    expr   : 4/pi * sum(k, 1, n, sin((2k - 1)x) / (2k - 1))
+    axes   : r1
+    color  : #2563EB
+    stroke : 4px
+
+deffigure formule =
+    type : equation
+    expr : f_{#{round(n):0}}(x) = \frac{4}{\pi}\sum_{k=1}^{#{round(n):0}} \frac{\sin((2k-1)x)}{2k-1}
+    pos  : (50%, 90%)
+    size : 40px
+
+# --- Partie 2 : une application linéaire déforme le plan ---
+
+deffigure r2 =
+    type   : axes
+    from   : (3%, 8%)
+    to     : (49%, 84%)
+    xrange : [-4, 4]
+    yrange : [-3, 3]
+
+defstyle deforme =
+    axes   : r2
+    matrix : (1, 1, 0, 1)
+    amount : t
+
+deffigure quadrillage =
+    type   : grid
+    style  : deforme
+    xrange : [-2, 2]
+    yrange : [-2, 2]
+    step   : 0.5
+    color  : #93C5FD
+    stroke : 2px
+
+deffigure i =
+    type   : arrow
+    style  : deforme
+    from   : r2(0, 0)
+    to     : r2(1, 0)
+    color  : #16A34A
+    stroke : 5px
+
+deffigure j =
+    type   : arrow
+    style  : deforme
+    from   : r2(0, 0)
+    to     : r2(0, 1)
+    color  : #DC2626
+    stroke : 5px
+
+deffigure disque =
+    type   : circle
+    style  : deforme
+    center : r2(-1, 1)
+    radius : 5%
+    color  : #7C3AED
+    stroke : 3px
+
+deffigure matrice =
+    type : equation
+    expr : \begin{pmatrix} 1 & #{t:2} \\ 0 & 1 \end{pmatrix}
+    pos  : (26%, 92%)
+    size : 40px
+
+# --- Partie 3 : une application conforme, z → z² ---
+
+deffigure r3 =
+    type   : axes
+    from   : (52%, 8%)
+    to     : (96%, 84%)
+    xrange : [-3, 3]
+    yrange : [-3, 3]
+
+deffigure conforme =
+    type   : grid
+    axes   : r3
+    xrange : [0.25, 1.25]
+    yrange : [-1, 1]
+    step   : 0.25
+    color  : #F59E0B
+    stroke : 2px
+    cmap   : z^2
+    amount : t
+
+deffigure titre3 =
+    type : equation
+    expr : z \mapsto z^2
+    pos  : (74%, 92%)
+    size : 40px
+
+[timeline]
+
+0.000 => {
+    start   : [r1 fadein(0.5s), creneau draw(1s), serie draw(1s), formule fadein(0.5s)]
+    comment : ["Un créneau, approché par une somme de sinus.", "A square wave, approximated by a sum of sines."]
+}
+
+1.500 => {
+    anim    : [n to(12, 5s)]
+    comment : ["Chaque terme ajouté affine l'approximation.", "Each added term sharpens the approximation."]
+}
+
+7.500 => {
+    end     : [r1 fadeout(0.5s), creneau fadeout(0.5s), serie fadeout(0.5s), formule fadeout(0.5s)]
+    start   : [r2 fadein(0.5s), quadrillage draw(1s), i grow(0.5s), j grow(0.5s), disque grow(0.5s), matrice fadein(0.5s), r3 fadein(0.5s), conforme draw(1s), titre3 fadein(0.5s)]
+}
+
+9.000 => {
+    anim    : [t to(1, 3s)]
+    comment : ["Les droites restent droites… sauf avec z².", "Lines stay straight… except under z²."]
+}
+
+13.000 => {
+    end     : [r2, quadrillage, i, j, disque, matrice, r3, conforme, titre3]
+}

@@ -438,7 +438,7 @@ pub fn palette_names() -> Vec<&'static str> {
 }
 
 /// Palette : un nom (viridis, ...) ou une liste de couleurs [#000, #FFF]
-fn palette(v: &PropValue) -> Result<Vec<Rgba>, String> {
+pub(crate) fn palette(v: &PropValue) -> Result<Vec<Rgba>, String> {
     let colors: Vec<String> = match v {
         PropValue::List(items) => items.clone(),
         other => {
@@ -465,7 +465,7 @@ fn palette(v: &PropValue) -> Result<Vec<Rgba>, String> {
     Ok(stops)
 }
 
-fn sample(stops: &[Rgba], v: f64) -> Rgba {
+pub(crate) fn sample(stops: &[Rgba], v: f64) -> Rgba {
     let v = if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 };
     let x = v * (stops.len() - 1) as f64;
     let i = (x.floor() as usize).min(stops.len() - 2);
@@ -604,7 +604,7 @@ pub fn scene_of(f: &ResolvedFigure, refs: &Refs) -> Option<String> {
 /// La figure se dessine-t-elle dans une scène 3D ?
 pub fn is_3d(f: &ResolvedFigure, refs: &Refs) -> bool {
     TYPES_3D.contains(&f.ftype.as_str())
-        || (matches!(f.ftype.as_str(), "arrow" | "field" | "iterate") && scene_of(f, refs).is_some())
+        || (matches!(f.ftype.as_str(), "arrow" | "field" | "iterate" | "trajectory") && scene_of(f, refs).is_some())
 }
 
 // ─────────────────────────────────────────────
@@ -824,7 +824,11 @@ pub fn build_object(f: &ResolvedFigure, sp: &Space, scene_name: &str, scene: &Sc
     let mut path = Vec::new();
     let items = match f.ftype.as_str() {
         "surface" => {
-            let (items, s) = surface(f, sp, scene, refs)?;
+            // Le maillage (en coordonnées de la scène) ne dépend pas de la caméra : gardé d'une
+            // image à l'autre tant que la surface, les paramètres et les bornes ne changent pas
+            let extra = format!("{:?} {} {} {}", sp.ranges, scene.width, scene.height, scene.px_scale);
+            let key = super::memo::key(&f.properties, &refs.params, &extra);
+            let (items, s) = super::memo::get_or(&format!("3d:{}", f.name), key, || surface(f, sp, scene, refs))?;
             surf = Some(s);
             items
         }
@@ -844,6 +848,26 @@ pub fn build_object(f: &ResolvedFigure, sp: &Space, scene_name: &str, scene: &Sc
             arrow3(a, b, head, lk.line.unwrap_or(Rgba::BLACK), lk.width, lk.tube, lk.shade, (0.0, 1.0), lk.glow)
         }
         "field" => field3(f, sp, scene, refs)?,
+        "trajectory" => {
+            let (cs, _) = super::ode::curves(f, &refs.params, 3)?;
+            let lk = look(f, scene, refs, None, Some(Rgba::BLACK), 2.0)?;
+            let line = lk.line.unwrap_or(Rgba::BLACK);
+            let colors = trajectory_colors(f, cs.len(), line)?;
+            let r = px(f, "head", 0.0, scene)?;
+            let mut items = Vec::new();
+            for (c, col) in cs.iter().zip(&colors) {
+                let pts = super::ode::thin(c, 3000);
+                if pts.len() >= 2 && lk.line.is_some() {
+                    items.extend(polyline(&pts, *col, lk.tube.unwrap_or(lk.width), lk.tube.is_some(), lk.glow));
+                }
+                if let (true, Some(p)) = (r > 0.0, pts.last()) {
+                    items.push(item(Prim::Dot { p: *p, color: lk.fill.unwrap_or(*col), radius: r }, (1.0, 1.0), lk.glow));
+                }
+            }
+            // Chemin pour follow : la première trajectoire
+            path = cs.first().cloned().unwrap_or_default();
+            items
+        }
         "cube" | "box" | "sphere" | "cylinder" | "cone" | "plane" | "polyhedron" => solid(f, scene, refs)?,
         other => return Err(format!("type '{}' : pas un objet 3D", other)),
     };
@@ -984,8 +1008,68 @@ fn surface(f: &ResolvedFigure, sp: &Space, scene: &Scene, refs: &Refs) -> Result
     let (sref, ur, vr, parametric) = surface_def(f, sp, refs)?;
     let params = refs.params.clone();
     let mut pos = |a: f64, b: f64| sref.at(a, b, &params);
-    let items = surface_mesh(f, sp, scene, refs, &mut pos, ur, vr, parametric)?;
+    let mut items = surface_mesh(f, sp, scene, refs, &mut pos, ur, vr, parametric)?;
+    if f.properties.contains_key("levels") {
+        if parametric {
+            return Err("levels : seulement pour une surface z = f(x, y)".to_string());
+        }
+        items.extend(surface_levels(f, sp, scene, refs, &sref, ur, vr)?);
+    }
     Ok((items, sref))
+}
+
+/// Lignes de niveau d'une surface z = f(x, y) : `levels : 10` ou `[0.5, 1, 2]`,
+/// tracées sur la surface, au sol (`levels_on : floor`) ou les deux (`both`)
+fn surface_levels(f: &ResolvedFigure, sp: &Space, scene: &Scene, refs: &Refs, sref: &SurfaceRef, ur: (f64, f64), vr: (f64, f64)) -> Result<Vec<Item>, String> {
+    use super::contour::{levels, Field};
+    let params = refs.params.clone();
+    let res = counts(f, "resolution", (48, 48), refs)?;
+    let (nx, ny) = ((res.0 * 3).clamp(30, 240), (res.1 * 3).clamp(30, 240));
+    let field = Field::sample(&mut |x, y| sref.at(x, y, &params)[2], ur, vr, nx, ny);
+    let zr = range(f, "zrange", refs)?.unwrap_or(sp.ranges[2]);
+    // Niveaux dans zrange seulement (au-delà, la surface est découpée)
+    let lv: Vec<f64> = levels(f.properties.get("levels"), false, Some(&field))?
+        .into_iter()
+        .filter(|c| *c >= zr.0 && *c <= zr.1)
+        .collect();
+    let (on_surface, on_floor) = match text(f, "levels_on").as_deref() {
+        None | Some("surface") => (true, false),
+        Some("floor") => (false, true),
+        Some("both") => (true, true),
+        Some(o) => return Err(format!("levels_on '{}' invalide (surface / floor / both)", o)),
+    };
+    let pal = match f.properties.get("colormap") {
+        Some(v) => Some(palette(v)?),
+        None => None,
+    };
+    let fixed = color(f, "level_color")?.flatten();
+    let width = px(f, "level_stroke", 2.0, scene)?;
+    let glow = match f.properties.get("glow") {
+        Some(_) => px(f, "glow", 0.0, scene)?,
+        None => 0.0,
+    };
+    let mut items = Vec::new();
+    for (k, c) in lv.iter().enumerate() {
+        let col = match (fixed, &pal) {
+            (Some(c), _) => c,
+            (None, Some(stops)) => mix(sample(stops, if lv.len() > 1 { k as f64 / (lv.len() - 1) as f64 } else { 0.5 }), Rgba::WHITE, 0.25),
+            (None, None) => Rgba::WHITE,
+        };
+        for line in field.isolines(*c) {
+            if on_surface {
+                // Légèrement au-dessus : entre deux sommets du maillage, une face plane peut passer
+                // un peu au-dessus de la vraie surface et cacher la ligne
+                let lift = 0.008 * (zr.1 - zr.0);
+                let pts: Vec<V3> = line.iter().map(|&(x, y)| [x, y, *c + lift]).collect();
+                items.extend(polyline(&pts, col, width, false, glow));
+            }
+            if on_floor {
+                let pts: Vec<V3> = line.iter().map(|&(x, y)| [x, y, sp.ranges[2].0]).collect();
+                items.extend(polyline(&pts, col, width, false, glow));
+            }
+        }
+    }
+    Ok(items)
 }
 
 /// transform(to=b) entre deux surfaces : chaque point glisse de a vers b (domaines mis en
@@ -1065,6 +1149,13 @@ fn surface_mesh(
     let crange = match range(f, "crange", refs)? {
         Some(r) => r,
         None => {
+            // Couleur selon z : bornée à la partie visible (zrange), sinon une surface qui
+            // monte très haut hors du cadre aurait presque une seule couleur
+            let visible_z = if color_by.is_none() && !matches!(text(f, "clip").as_deref(), Some("false")) {
+                Some(range(f, "zrange", refs)?.unwrap_or(sp.ranges[2]))
+            } else {
+                None
+            };
             let (mut lo, mut hi) = (f64::MAX, f64::MIN);
             for row in mesh_points(&mut m) {
                 for p in row.into_iter().filter(|p| finite(*p)) {
@@ -1074,6 +1165,10 @@ fn surface_mesh(
                         hi = hi.max(v);
                     }
                 }
+            }
+            if let Some(z) = visible_z {
+                lo = lo.max(z.0);
+                hi = hi.min(z.1);
             }
             if lo < hi { (lo, hi) } else { (lo, lo + 1.0) }
         }
@@ -1658,6 +1753,17 @@ fn trail(f: &ResolvedFigure, scene: &Scene, refs: &Refs, pts: &[V3], dots: bool)
 // ─────────────────────────────────────────────
 
 /// arrow, field et iterate quand ils ne sont pas dans une scène 3D
+/// Couleur de chaque trajectoire : `colormap` (selon k), sinon `color`
+fn trajectory_colors(f: &ResolvedFigure, n: usize, line: Rgba) -> Result<Vec<Rgba>, String> {
+    Ok(match f.properties.get("colormap") {
+        Some(v) => {
+            let stops = palette(v)?;
+            (0..n).map(|k| Rgba { a: line.a, ..sample(&stops, if n > 1 { k as f64 / (n - 1) as f64 } else { 0.5 }) }).collect()
+        }
+        None => vec![line; n],
+    })
+}
+
 pub fn shapes_2d(f: &ResolvedFigure, scene: &Scene, refs: &Refs) -> Result<Vec<Shape>, String> {
     let lk = look(f, scene, refs, None, Some(Rgba::BLACK), 2.0)?;
     let line = lk.line.unwrap_or(Rgba::BLACK);
@@ -1672,7 +1778,7 @@ pub fn shapes_2d(f: &ResolvedFigure, scene: &Scene, refs: &Refs) -> Result<Vec<S
         let head = geometry::arrow_length(w, scene).min(len * 0.45);
         let end = (b.0 - ux * head * 0.8, b.1 - uy * head * 0.8);
         vec![
-            Shape { glow: 0.0, path: vec![PathCmd::MoveTo(a.0, a.1), PathCmd::LineTo(end.0, end.1)], fill: None, stroke: Some((c, w)) },
+            Shape { glow: 0.0, path: vec![PathCmd::MoveTo(a.0, a.1), PathCmd::LineTo(end.0, end.1)], fill: None, stroke: Some((c, w)), image: None },
             geometry::arrow_head(b.0, b.1, ux, uy, head, c),
         ]
     };
@@ -1751,12 +1857,32 @@ pub fn shapes_2d(f: &ResolvedFigure, scene: &Scene, refs: &Refs) -> Result<Vec<S
             if let (Some(c), true) = (lk.line, pts.len() >= 2) {
                 let mut path = vec![PathCmd::MoveTo(pts[0].0, pts[0].1)];
                 path.extend(pts[1..].iter().map(|p| PathCmd::LineTo(p.0, p.1)));
-                out.push(Shape { glow: 0.0, path, fill: None, stroke: Some((c, lk.tube.unwrap_or(width))) });
+                out.push(Shape { glow: 0.0, path, fill: None, stroke: Some((c, lk.tube.unwrap_or(width))), image: None });
             }
             let r = px(f, "markers", 4.0, scene)?;
             if r > 0.0 {
                 let c = lk.fill.or(lk.line).unwrap_or(Rgba::BLACK);
-                out.extend(pts.iter().map(|p| Shape { glow: 0.0, path: geometry::circle_path(p.0, p.1, r), fill: Some(c), stroke: None }));
+                out.extend(pts.iter().map(|p| Shape { glow: 0.0, path: geometry::circle_path(p.0, p.1, r), fill: Some(c), stroke: None, image: None }));
+            }
+            out
+        }
+        "trajectory" => {
+            let m = axes_of(&text(f, "axes").ok_or("trajectory : `axes : repere` ou `scene : espace` manquant")?)?;
+            let (cs, _) = super::ode::curves(f, &refs.params, 2)?;
+            let colors = trajectory_colors(f, cs.len(), line)?;
+            let r = px(f, "head", 0.0, scene)?;
+            let mut out = Vec::new();
+            for (c, col) in cs.iter().zip(&colors) {
+                let pts: Vec<(f32, f32)> = super::ode::thin(c, 4000).iter().map(|p| m.to_px(p[0], p[1])).collect();
+                if pts.len() >= 2 && lk.line.is_some() {
+                    let mut path = vec![PathCmd::MoveTo(pts[0].0, pts[0].1)];
+                    path.extend(pts[1..].iter().map(|p| PathCmd::LineTo(p.0, p.1)));
+                    out.push(Shape { glow: 0.0, path, fill: None, stroke: Some((*col, width)), image: None });
+                }
+                if let (true, Some(p)) = (r > 0.0, pts.last()) {
+                    let fc = lk.fill.unwrap_or(*col);
+                    out.push(Shape { glow: 0.0, path: geometry::circle_path(p.0, p.1, r), fill: Some(fc), stroke: None, image: None });
+                }
             }
             out
         }
@@ -2014,7 +2140,7 @@ pub fn compose(sp: &Space, items: &[&Item]) -> Vec<Shape> {
                 path.push(PathCmd::Close);
                 // Faces opaques : un fin trait de la même couleur cache les jointures
                 let seam = if c.a >= 0.99 { Some((c, 0.8)) } else { None };
-                shapes.push(Shape { glow: it.glow, path, fill: Some(c), stroke: seam });
+                shapes.push(Shape { glow: it.glow, path, fill: Some(c), stroke: seam, image: None });
                 depth
             }
             Prim::Seg { color, width, tube, .. } | Prim::Line { color, width, tube, .. } => {
@@ -2023,17 +2149,17 @@ pub fn compose(sp: &Space, items: &[&Item]) -> Vec<Shape> {
                 if *tube {
                     // Tube : bord sombre, corps, reflet ; seul le corps porte le halo
                     let dark = Rgba { r: color.r * 0.55, g: color.g * 0.55, b: color.b * 0.55, a: color.a };
-                    shapes.push(Shape { glow: 0.0, path: path.clone(), fill: None, stroke: Some((dark, *width)) });
-                    shapes.push(Shape { glow: it.glow, path: path.clone(), fill: None, stroke: Some((*color, *width * 0.7)) });
-                    shapes.push(Shape { glow: 0.0, path, fill: None, stroke: Some((mix(*color, Rgba::WHITE, 0.45), *width * 0.25)) });
+                    shapes.push(Shape { glow: 0.0, path: path.clone(), fill: None, stroke: Some((dark, *width)), image: None });
+                    shapes.push(Shape { glow: it.glow, path: path.clone(), fill: None, stroke: Some((*color, *width * 0.7)), image: None });
+                    shapes.push(Shape { glow: 0.0, path, fill: None, stroke: Some((mix(*color, Rgba::WHITE, 0.45), *width * 0.25)), image: None });
                 } else {
-                    shapes.push(Shape { glow: it.glow, path, fill: None, stroke: Some((*color, *width)) });
+                    shapes.push(Shape { glow: it.glow, path, fill: None, stroke: Some((*color, *width)), image: None });
                 }
                 depth - bias
             }
             Prim::Dot { color, radius, .. } => {
                 if *radius > 0.0 {
-                    shapes.push(Shape { glow: it.glow, path: geometry::circle_path(proj[0].0, proj[0].1, *radius), fill: Some(*color), stroke: None });
+                    shapes.push(Shape { glow: it.glow, path: geometry::circle_path(proj[0].0, proj[0].1, *radius), fill: Some(*color), stroke: None, image: None });
                 }
                 depth - bias * 1.5
             }

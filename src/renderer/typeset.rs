@@ -358,6 +358,7 @@ pub fn place(ts: &Typeset, x: f32, y: f32, size: f32, align: Align, color: Rgba)
                 .collect(),
             fill: if p.fill { Some(color) } else { None },
             stroke: p.stroke.map(|w| (color, w * k)),
+            image: None,
         })
         .collect()
 }

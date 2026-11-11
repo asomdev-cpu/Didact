@@ -204,7 +204,8 @@ L'export n'est pas le mode normal d'utilisation. C'est une fonctionnalité opt-i
 - `typeset.rs` : moteur de composition — LaTeX → Typst (`mitex`) → Typst compose → SVG (`typst-svg`) → contours (`usvg`), avec cache
 - `text.rs` : point d'entrée simple vers `typeset` pour le type `text`
 - `expr.rs` : évaluateur des expressions de `plot` (lu une fois, évalué pour chaque x)
-- `mod.rs` : trait `RenderBackend` + `render_frame` (dessine une frame, liste les figures non dessinables)
+- `mod.rs` : trait `RenderBackend` + `render_frame` (dessine une frame, liste les figures non dessinables). Seules les figures affichées et celles dont elles dépendent sont calculées (`needed_figures`)
+- `src/check.rs` : `--check` — un backend qui ne dessine rien et note la boîte de chaque figure (`begin_figure`), échantillonnage du temps, avertissements hors cadre et chevauchements, sortie texte ou JSON
 - Délègue à LaTeX/Matplotlib pour les contenus complexes (à faire)
 
 **Rechargement (`src/output/reload.rs`) — ✅ implémenté**
@@ -257,6 +258,15 @@ didact/
     ├── renderer/
     │   ├── mod.rs           # Orchestration du rendu
     │   ├── geometry.rs      # Dessin des figures géométriques
+    │   ├── expr.rs          # Formules : lecture, évaluation (réelle et complexe)
+    │   ├── params.rs        # Paramètres dans les propriétés, #{...} dans le texte
+    │   ├── warp.rs          # Transformations du plan et de l'espace (matrix, map, cmap)
+    │   ├── clip.rs          # Découpe des figures au cadre d'un repère
+    │   ├── contour.rs       # Courbes de niveau et régions (marching squares)
+    │   ├── memo.rs          # Cache des calculs lourds d'une image à l'autre
+    │   ├── ode.rs           # Équations différentielles (RK4) : type trajectory
+    │   ├── discrete.rs      # Graphes, arbres, tableaux ; morceaux nommés pour part=
+    │   ├── pixels.rs        # Une couleur par pixel (chaleur, domaine, fractales)
     │   ├── text.rs          # Rendu texte simple
     │   ├── latex.rs         # Intégration LaTeX
     │   ├── math_plot.rs     # Rendu des graphes

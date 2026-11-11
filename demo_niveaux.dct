@@ -1,0 +1,172 @@
+# ─────────────────────────────────────────────
+#  Caméra 2D (zoom), régions, courbes de niveau
+#  didact demo_niveaux.dct
+# ─────────────────────────────────────────────
+
+[config]
+window       : [16:9]
+languages    : [FR, EN]
+default_lang : FR
+
+[figures]
+
+defparam z = 0          # zoom : 10^z
+defparam b = 0          # borne de l'intégrale
+
+# --- Partie 1 : zoomer sur une limite ---
+
+deffigure r1 =
+    type   : axes
+    from   : (5%, 10%)
+    to     : (95%, 84%)
+    xrange : [-1.5, 1.5]
+    yrange : [-1, 1]
+    equal  : false
+    center : (0, 0)
+    zoom   : 10^z
+
+deffigure quadrillage1 =
+    type   : grid
+    axes   : r1
+    step   : auto
+    color  : #E5E7EB
+    stroke : 1px
+    layer  : -1
+
+deffigure encadrement =
+    type   : region
+    axes   : r1
+    upper  : abs(x)
+    lower  : -abs(x)
+    fill   : #FDE68A
+    layer  : -1
+
+deffigure oscille =
+    type   : plot
+    expr   : x*sin(1/x)
+    axes   : r1
+    color  : #2563EB
+    stroke : 3px
+
+deffigure titre1 =
+    type : equation
+    expr : \lim_{x \to 0} x \sin\frac{1}{x} = 0 \qquad \text{zoom} \times #{10^z:0}
+    pos  : (50%, 92%)
+    size : 40px
+
+# --- Partie 2 : une aire qui grandit ---
+
+deffigure r2 =
+    type   : axes
+    from   : (5%, 10%)
+    to     : (95%, 84%)
+    xrange : [-0.5, 3]
+    yrange : [-0.5, 4.5]
+    equal  : false
+
+deffigure aire =
+    type   : region
+    axes   : r2
+    upper  : x^2/2
+    xrange : [0, b]
+    fill   : #2563EB
+    opacity : 0.35
+
+deffigure parabole =
+    type   : plot
+    expr   : x^2/2
+    axes   : r2
+    color  : #1D4ED8
+    stroke : 3px
+
+deffigure integrale =
+    type : equation
+    expr : \int_0^{#{b:2}} \frac{x^2}{2}\,dx = #{b^3/6:3}
+    pos  : (50%, 92%)
+    size : 40px
+
+# --- Partie 3 : optimisation sous contraintes, vue de dessus ---
+
+deffigure r3 =
+    type   : axes
+    from   : (5%, 8%)
+    to     : (50%, 86%)
+    xrange : [-2.5, 2.5]
+    yrange : [-1.5, 3.5]
+
+deffigure niveaux =
+    type     : contour
+    axes     : r3
+    expr     : 0.3*x^2 + (y - 0.6*x^2)^2
+    levels   : 14
+    colormap : viridis
+    stroke   : 2px
+
+deffigure admissible =
+    type   : region
+    axes   : r3
+    where  : and(x + y >= 1.2, x^2 + y^2 <= 6)
+    fill   : #F59E0B
+    opacity : 0.3
+    color  : #B45309
+    stroke : 2px
+
+deffigure titre3 =
+    type : equation
+    expr : \min_{x + y \ge 1.2,\; x^2 + y^2 \le 6} f(x, y)
+    pos  : (27.5%, 93%)
+    size : 34px
+
+# --- et la même fonction en 3D, avec ses lignes de niveau ---
+
+deffigure espace =
+    type   : scene3d
+    from   : (52%, 6%)
+    to     : (98%, 94%)
+    xrange : [-2.5, 2.5]
+    yrange : [-1.5, 3.5]
+    zrange : [0, 5]
+    camera : (30, -60)
+    axes   : lines
+    color  : #9CA3AF
+
+deffigure f =
+    type      : surface
+    scene     : espace
+    expr      : 0.3*x^2 + (y - 0.6*x^2)^2
+    colormap  : viridis
+    opacity   : 0.8
+    levels    : 14
+    levels_on : both
+
+[timeline]
+
+0.000 => {
+    start   : [r1 fadein(0.5s), quadrillage1 fadein(0.5s), encadrement fadein(0.5s), oscille draw(1.5s), titre1 fadein(0.5s)]
+    comment : ["x sin(1/x) oscille de plus en plus vite près de 0…", "x sin(1/x) oscillates faster and faster near 0…"]
+}
+
+2.000 => {
+    anim    : [z to(1.5, 5s)]
+    comment : ["… mais reste coincée entre -|x| et |x| : la limite vaut 0.", "… yet stays squeezed between -|x| and |x|: the limit is 0."]
+}
+
+8.000 => {
+    end     : [r1 fadeout(0.5s), quadrillage1 fadeout(0.5s), encadrement fadeout(0.5s), oscille fadeout(0.5s), titre1 fadeout(0.5s)]
+    start   : [r2 fadein(0.5s), parabole draw(1s), aire, integrale fadein(0.5s)]
+}
+
+9.000 => {
+    anim    : [b to(2.6, 4s)]
+    comment : ["L'aire sous la courbe grandit avec la borne.", "The area under the curve grows with the bound."]
+}
+
+14.000 => {
+    end     : [r2 fadeout(0.5s), parabole fadeout(0.5s), aire fadeout(0.5s), integrale fadeout(0.5s)]
+    start   : [r3 fadein(0.5s), niveaux draw(2s), admissible fadein(1s), titre3 fadein(0.5s), espace fadein(0.5s), f fadein(1s)]
+    comment : ["Les niveaux de la fonction de coût, et la zone admissible.", "The cost function's level curves, and the feasible set."]
+}
+
+20.000 => {
+    end     : [r3, niveaux, admissible, titre3, espace, f]
+}

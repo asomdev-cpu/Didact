@@ -155,6 +155,34 @@ impl SkiaBackend {
         }
         let Some(path) = pb.finish() else { return }; // chemin vide ou dégénéré
 
+        // Image : posée sur la boîte du chemin, avec l'opacité de `fill`
+        if let Some(img) = &shape.image {
+            let b = path.bounds();
+            let opacity = shape.fill.map(|c| c.a).unwrap_or(1.0).clamp(0.0, 1.0);
+            let Some(src) = tiny_skia::PixmapRef::from_bytes(&img.data, img.width, img.height) else { return };
+            // Même taille que le cadre, sans rotation ni échelle : copie directe (bien plus rapide)
+            let plain = transform.sx == 1.0 && transform.sy == 1.0 && transform.kx == 0.0 && transform.ky == 0.0;
+            if plain && (b.width() - img.width as f32).abs() < 0.5 && (b.height() - img.height as f32).abs() < 0.5 {
+                let (x, y) = ((b.left() + transform.tx).round() as i32, (b.top() + transform.ty).round() as i32);
+                let paint = PixmapPaint { opacity, blend_mode: BlendMode::SourceOver, quality: tiny_skia::FilterQuality::Nearest };
+                self.pixmap.draw_pixmap(x, y, src, &paint, Transform::identity(), mask);
+                return;
+            }
+            let to_box = Transform::from_row(
+                b.width() / img.width as f32,
+                0.0,
+                0.0,
+                b.height() / img.height as f32,
+                b.left(),
+                b.top(),
+            );
+            let mut p = tiny_skia::Paint::default();
+            p.anti_alias = true;
+            p.shader = tiny_skia::Pattern::new(src, tiny_skia::SpreadMode::Pad, tiny_skia::FilterQuality::Bilinear, opacity, to_box);
+            self.pixmap.fill_path(&path, &p, FillRule::Winding, transform, mask);
+            return;
+        }
+
         if let Some(fill) = shape.fill {
             self.pixmap
                 .fill_path(&path, &paint(fill), FillRule::Winding, transform, mask);
@@ -321,6 +349,7 @@ mod tests {
                     path: vec![PathCmd::MoveTo(x, y), PathCmd::LineTo(x + 80.0, y + 30.0), PathCmd::LineTo(x + 10.0, y + 70.0), PathCmd::Close],
                     fill: Some(Rgba { r: (i % 7) as f32 / 7.0, g: 0.5, b: 0.3, a: 0.7 }),
                     stroke: Some((Rgba::BLACK, 2.5)),
+                    image: None,
                 }
             })
             .collect();
