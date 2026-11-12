@@ -13,7 +13,8 @@ shift : décale tous les blocs qui commencent à <à partir de> ou après, et r�
   didact shift cours.dct 16 -1.5    retire 1,5 s à partir de 16 s
 
 Options :
-  --png <t> <image.png>   enregistre l'image à l'instant t (en secondes), sans fenêtre
+  --png <t> <image.png>   enregistre l'image à l'instant t (en secondes), sans fenêtre,
+                          avec le sous-titre de cet instant (sauf --no-subtitles)
   --summary               affiche les figures et la timeline dans la console, sans fenêtre
   --check                 vérifie tout sans fenêtre : erreurs, figures hors du cadre, textes qui se
                           chevauchent (à chaque bloc, fin d'animation et toutes les 0,25 s)
@@ -63,6 +64,10 @@ fn main() {
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
+            "--help" | "-h" => {
+                println!("{}", USAGE);
+                return;
+            }
             "--debug" => debug = true,
             "--summary" => summary = true,
             "--check" => check_mode = true,
@@ -267,7 +272,7 @@ fn main() {
             other => fail(&format!("format d'export inconnu '{}' (mp4, html, audio)", other)),
         }
     } else if let Some((t, path)) = png {
-        export_png(&resolved, &timeline, t, &path, lang.as_deref());
+        export_png(&resolved, &timeline, t, &path, lang.as_deref(), subtitles);
     } else {
         let title = std::path::Path::new(&filename)
             .file_name()
@@ -283,13 +288,19 @@ fn main() {
 }
 
 /// Enregistre l'image de l'instant t en PNG
-fn export_png(resolved: &resolver::ResolvedDocument, timeline: &runtime::Timeline, t: f64, path: &str, lang: Option<&str>) {
+fn export_png(resolved: &resolver::ResolvedDocument, timeline: &runtime::Timeline, t: f64, path: &str, lang: Option<&str>, subtitles: bool) {
     let (w, h) = renderer::Scene::default_size(&resolved.config);
     let mut backend = renderer::skia::SkiaBackend::new(w, h).unwrap_or_else(|| fail("taille d'image invalide"));
     let scene = renderer::Scene::new(&resolved.config, w, h);
     let frame = timeline.frame_at(t, lang);
     for (name, reason) in renderer::render_frame_parallel(&frame, &scene, &mut backend) {
         eprintln!("Attention : '{}' non dessinée : {}", name, reason);
+    }
+    // Le sous-titre de cet instant, comme dans la vidéo (sauf --no-subtitles)
+    if let (true, Some(c)) = (subtitles, frame.comment) {
+        if let Err(e) = didact::output::video::draw_subtitle(&mut backend, c) {
+            eprintln!("Attention : sous-titre non dessiné : {}", e);
+        }
     }
     backend.save_png(path).unwrap_or_else(|e| fail(&format!("✗ Écriture de '{}' impossible : {}", path, e)));
     println!("✓ Image t={:.3}s enregistrée dans {} ({}×{})", t, path, w, h);

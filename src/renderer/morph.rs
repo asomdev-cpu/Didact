@@ -240,6 +240,124 @@ pub fn morph(a: &[Shape], b: &[Shape], e: f32) -> Vec<Shape> {
     out
 }
 
+/// Les sommets d'un contour (extrémités des segments, sans les points de contrôle)
+fn vertices(path: &[PathCmd]) -> Vec<Pt> {
+    let mut v: Vec<Pt> = Vec::new();
+    for c in path {
+        match *c {
+            PathCmd::MoveTo(x, y) | PathCmd::LineTo(x, y) | PathCmd::CubicTo(_, _, _, _, x, y) => v.push((x, y)),
+            PathCmd::Close => {}
+        }
+    }
+    // Un contour fermé qui revient à son départ : le dernier point est le premier
+    if v.len() > 2 && (v[0].0 - v[v.len() - 1].0).abs() < 0.01 && (v[0].1 - v[v.len() - 1].1).abs() < 0.01 {
+        v.pop();
+    }
+    v
+}
+
+/// Déplacement rigide (rotation + translation, et un retournement si `b` est le reflet de `a`)
+/// qui amène au mieux `a` sur `b` : (angle, centre de a, centre de b, retournement). Les sommets
+/// sont mis en correspondance en essayant tous les décalages circulaires, dans les deux sens ;
+/// sans correspondance possible (nombres de sommets différents), seulement une translation.
+pub fn rigid_fit(a: &[Shape], b: &[Shape]) -> (f32, Pt, Pt, bool) {
+    let va: Vec<Pt> = a.first().map(|s| vertices(&s.path)).unwrap_or_default();
+    let vb: Vec<Pt> = b.first().map(|s| vertices(&s.path)).unwrap_or_default();
+    let mean = |v: &[Pt]| {
+        let n = v.len().max(1) as f32;
+        (v.iter().map(|p| p.0).sum::<f32>() / n, v.iter().map(|p| p.1).sum::<f32>() / n)
+    };
+    if va.is_empty() || va.len() != vb.len() {
+        return (0.0, center(a), center(b), false);
+    }
+    let (ca, cb) = (mean(&va), mean(&vb));
+    let n = va.len();
+    // (erreur, angle, retournement) ; un retournement doit être nettement meilleur
+    let mut best = (f32::INFINITY, 0.0f32, false);
+    for mirror in [false, true] {
+    // a retourné (y → -y autour de son centre), si demandé
+    let va: Vec<Pt> = va.iter().map(|p| if mirror { (p.0, 2.0 * ca.1 - p.1) } else { *p }).collect();
+    for reverse in [false, true] {
+        for shift in 0..n {
+            let q = |i: usize| {
+                let j = if reverse { (shift + n - i) % n } else { (shift + i) % n };
+                (vb[j].0 - cb.0, vb[j].1 - cb.1)
+            };
+            // Rotation optimale (Kabsch en 2D)
+            let (mut sxx, mut sxy) = (0.0f32, 0.0f32);
+            for (i, p) in va.iter().enumerate() {
+                let (px, py) = (p.0 - ca.0, p.1 - ca.1);
+                let (qx, qy) = q(i);
+                sxx += px * qx + py * qy;
+                sxy += px * qy - py * qx;
+            }
+            let th = sxy.atan2(sxx);
+            let (c, s) = (th.cos(), th.sin());
+            let err: f32 = va
+                .iter()
+                .enumerate()
+                .map(|(i, p)| {
+                    let (px, py) = (p.0 - ca.0, p.1 - ca.1);
+                    let (qx, qy) = q(i);
+                    (c * px - s * py - qx).powi(2) + (s * px + c * py - qy).powi(2)
+                })
+                .sum();
+            // à erreur égale (figure symétrique), sans retournement puis la plus petite rotation
+            let scale = 1e-3 * (1.0 + best.0.min(1e6));
+            if err < best.0 - scale || ((err - best.0).abs() <= scale && !mirror && (th.abs() < best.1.abs() || best.2)) {
+                best = (err, th, mirror);
+            }
+        }
+    }
+    }
+    (best.1, ca, cb, best.2)
+}
+
+/// transform(..., rigid=true) : `a` glisse et tourne en bloc vers la place de `b`, sans se
+/// déformer ; les couleurs passent de l'une à l'autre
+pub fn rigid(a: &[Shape], b: &[Shape], e: f32) -> Vec<Shape> {
+    let (th, ca, cb, mirror) = rigid_fit(a, b);
+    let (c, s) = ((th * e).cos(), (th * e).sin());
+    let center = (ca.0 + (cb.0 - ca.0) * e, ca.1 + (cb.1 - ca.1) * e);
+    // Retournement : la figure s'aplatit puis se déplie de l'autre côté (y → -y en fin)
+    let flip = if mirror { 1.0 - 2.0 * e } else { 1.0 };
+    let map = |x: f32, y: f32| {
+        let (dx, dy) = (x - ca.0, (y - ca.1) * flip);
+        (center.0 + c * dx - s * dy, center.1 + s * dx + c * dy)
+    };
+    a.iter()
+        .enumerate()
+        .map(|(i, sa)| {
+            let path = sa
+                .path
+                .iter()
+                .map(|cmd| match *cmd {
+                    PathCmd::MoveTo(x, y) => {
+                        let (x, y) = map(x, y);
+                        PathCmd::MoveTo(x, y)
+                    }
+                    PathCmd::LineTo(x, y) => {
+                        let (x, y) = map(x, y);
+                        PathCmd::LineTo(x, y)
+                    }
+                    PathCmd::CubicTo(x1, y1, x2, y2, x, y) => {
+                        let ((x1, y1), (x2, y2), (x, y)) = (map(x1, y1), map(x2, y2), map(x, y));
+                        PathCmd::CubicTo(x1, y1, x2, y2, x, y)
+                    }
+                    PathCmd::Close => PathCmd::Close,
+                })
+                .collect();
+            let sb = b.get(i);
+            let fill = mix_opt(sa.fill, sb.and_then(|s| s.fill).or(sa.fill), e);
+            let stroke = match (sa.stroke, sb.and_then(|s| s.stroke)) {
+                (Some((ca, wa)), Some((cb, wb))) => mix_opt(Some(ca), Some(cb), e).map(|c| (c, wa + (wb - wa) * e)),
+                (x, _) => x,
+            };
+            Shape { glow: sa.glow, path, fill, stroke, image: None }
+        })
+        .collect()
+}
+
 /// Couleur intermédiaire ; une couleur absente = la même, transparente
 fn mix_opt(a: Option<Rgba>, b: Option<Rgba>, e: f32) -> Option<Rgba> {
     let (a, b) = match (a, b) {
@@ -376,6 +494,46 @@ mod tests {
             stroke: None,
             image: None,
         }
+    }
+
+    #[test]
+    fn deplacement_rigide() {
+        let tri = |pts: &[(f32, f32)]| Shape {
+            glow: 0.0,
+            path: pts.iter().enumerate().map(|(i, &(x, y))| if i == 0 { PathCmd::MoveTo(x, y) } else { PathCmd::LineTo(x, y) }).chain([PathCmd::Close]).collect(),
+            fill: Some(Rgba::BLACK),
+            stroke: None,
+            image: None,
+        };
+        // Triangle rectangle (0,0) (4,0) (0,3), tourné de 90° et déplacé, sommets dans un autre ordre
+        let a = vec![tri(&[(0.0, 0.0), (4.0, 0.0), (0.0, 3.0)])];
+        let b = vec![tri(&[(7.0, 10.0), (10.0, 10.0), (10.0, 14.0)])];
+        let (th, _, _, mirror) = rigid_fit(&a, &b);
+        assert!((th.abs() - std::f32::consts::FRAC_PI_2).abs() < 1e-3 && !mirror, "{}", th);
+        // Reflet : retournement, et les sommets tombent juste à la fin
+        let m = vec![tri(&[(7.0, 14.0), (10.0, 10.0), (10.0, 14.0)])];
+        assert!(rigid_fit(&a, &m).3);
+        let mut got = vertices(&rigid(&a, &m, 1.0)[0].path);
+        let mut want = vertices(&m[0].path);
+        let k = |p: &(f32, f32)| ((p.0 * 100.0).round() as i64, (p.1 * 100.0).round() as i64);
+        got.sort_by_key(k);
+        want.sort_by_key(k);
+        for (g, w) in got.iter().zip(&want) {
+            assert!((g.0 - w.0).abs() < 1e-3 && (g.1 - w.1).abs() < 1e-3, "{:?} {:?}", got, want);
+        }
+        // À la fin, les sommets tombent sur ceux de b ; à mi-chemin, les longueurs sont gardées
+        let end = rigid(&a, &b, 1.0);
+        let mut got = vertices(&end[0].path);
+        let mut want = vertices(&b[0].path);
+        let key = |p: &(f32, f32)| ((p.0 * 100.0).round() as i64, (p.1 * 100.0).round() as i64);
+        got.sort_by_key(key);
+        want.sort_by_key(key);
+        for (g, w) in got.iter().zip(&want) {
+            assert!((g.0 - w.0).abs() < 1e-3 && (g.1 - w.1).abs() < 1e-3, "{:?} {:?}", got, want);
+        }
+        let mid = vertices(&rigid(&a, &b, 0.5)[0].path);
+        let d = |p: (f32, f32), q: (f32, f32)| ((p.0 - q.0).powi(2) + (p.1 - q.1).powi(2)).sqrt();
+        assert!((d(mid[0], mid[1]) - 4.0).abs() < 1e-3 && (d(mid[0], mid[2]) - 3.0).abs() < 1e-3);
     }
 
     #[test]

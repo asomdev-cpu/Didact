@@ -51,7 +51,7 @@ deffigure espace =
     yrange : [-30, 30]
     zrange : [0, 50]
     camera : (20, -50)
-    axes   : lines
+    frame   : lines
     color  : #6B7280
 
 deffigure lorenz =

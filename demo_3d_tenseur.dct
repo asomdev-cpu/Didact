@@ -15,7 +15,7 @@ deffigure espace =
     yrange : [-2, 2]
     zrange : [-2, 2]
     camera : (25, -55)
-    axes   : lines
+    frame   : lines
     color  : #9CA3AF
 
 deffigure cube =
@@ -56,7 +56,7 @@ deffigure titre =
     content : "Tenseur des contraintes"
     pos   : (50%, 92%)
     color : white
-    font  : 44px
+    size  : 44px
 
 [timeline]
 0.000 => { start : [espace fadein(0.5s), titre fadein(0.5s), cube draw(1.5s)] }

@@ -13,7 +13,7 @@ deffigure titre =
     type    : text
     content : "Fonctions et approximation"
     pos     : (50%, 93%)
-    font    : 48px
+    size    : 48px
 
 # --- Repère avec graduations et grille ---
 

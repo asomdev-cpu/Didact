@@ -61,7 +61,7 @@ pub fn find_config(explicit: Option<&Path>, dct: &Path) -> Result<PathBuf, Strin
     Err(format!(
         "{} introuvable. Créez-le à côté du .dct, une ligne par langue, par exemple :\n\
          FR : piper --model fr_FR-siwis-medium.onnx --output_file {{out}}\n\
-         (voir Readme/SPEC.md §13.4)",
+         (voir Readme/SPEC.md §11)",
         CONFIG_NAME
     ))
 }

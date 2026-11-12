@@ -247,7 +247,7 @@ pub fn export_audio(
 // ─────────────────────────────────────────────
 
 /// Dessine le commentaire en bas de l'image, sur un fond sombre (même aspect que la fenêtre)
-fn draw_subtitle(backend: &mut SkiaBackend, comment: &str) -> Result<(), String> {
+pub fn draw_subtitle(backend: &mut SkiaBackend, comment: &str) -> Result<(), String> {
     let (w, h) = (backend.width() as f32, backend.height() as f32);
     let size = (h * 0.04).clamp(12.0, 64.0);
     let text = wrap(comment, size, w * 0.9)?;

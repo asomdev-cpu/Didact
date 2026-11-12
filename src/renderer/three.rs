@@ -422,7 +422,7 @@ fn mix(a: Rgba, b: Rgba, e: f32) -> Rgba {
 //  PALETTES
 // ─────────────────────────────────────────────
 
-const PALETTES: &[(&str, &[&str])] = &[
+pub(crate) const PALETTES: &[(&str, &[&str])] = &[
     ("viridis", &["#440154", "#482878", "#3E4A89", "#31688E", "#26828E", "#1F9E89", "#35B779", "#6DCD59", "#B4DE2C", "#FDE725"]),
     ("plasma", &["#0D0887", "#5B02A3", "#9A179B", "#CB4678", "#EB7852", "#FBB32F", "#F0F921"]),
     ("inferno", &["#000004", "#320A5E", "#781C6D", "#BB3754", "#ED6925", "#FBB61A", "#FCFFA4"]),
@@ -700,7 +700,7 @@ fn scene_axes(f: &ResolvedFigure, sp: &Space, scene: &Scene, refs: &Refs) -> Res
     };
     let label_size = px(f, "font", 32.0, scene)?;
     let seg = |a: V3, b: V3, w: f32, c: Rgba, o: (f32, f32)| item(Prim::Seg { a, b, color: c, width: w, tube: false }, o, 0.0);
-    let mode = text(f, "axes").unwrap_or_else(|| "none".into());
+    let mode = text(f, "frame").unwrap_or_else(|| "none".into());
     match mode.as_str() {
         "none" | "false" => {}
         "lines" | "true" => {
@@ -1936,6 +1936,7 @@ pub fn effect(st: &FigureState, t: f64, c0: V3, span: f64, refs: &Refs) -> Resul
             AnimKind::Scale(f) => size += (f - size) * e,
             AnimKind::Rotate(deg) => fx.rot = mat_mul(&rotation([0.0, 0.0, 1.0], deg * e), &fx.rot),
             AnimKind::Rotate3d { axis, angle } => fx.rot = mat_mul(&rotation(*axis, angle * e), &fx.rot),
+            AnimKind::RotateAround { .. } => return Err("rotate(around=...) n'existe qu'en 2D ; en 3D : rotate3d(angle, axis=..., durée)".to_string()),
             AnimKind::Follow { path, .. } => {
                 let pts = refs.paths3.get(path).ok_or_else(|| format!("follow : '{}' n'est pas un chemin 3D (curve3d, iterate, arrow)", path))?;
                 if let Some(p) = along(pts, e) {
@@ -1955,7 +1956,7 @@ pub fn effect(st: &FigureState, t: f64, c0: V3, span: f64, refs: &Refs) -> Resul
                 fx.opacity = 1.0 - e as f32;
             }
             AnimKind::Draw | AnimKind::Write => fx.reveal = Some(e as f32),
-            AnimKind::Color { .. } | AnimKind::Fill { .. } | AnimKind::Transform { .. } | AnimKind::To(_) => {}
+            AnimKind::Color { .. } | AnimKind::Fill { .. } | AnimKind::Transform { .. } | AnimKind::To(_) | AnimKind::Swap { .. } => {}
         }
     }
     fx.scale = size * appear;
@@ -2191,7 +2192,7 @@ pub fn screen_geom(sp: &Space, obj: &Obj, center: V3) -> geometry::Geom {
     }
     let bbox = if x0 > x1 { (c.0, c.1, c.0, c.1) } else { (x0, y0, x1, y1) };
     let outline = obj.path.iter().filter_map(|p| sp.project(*p)).map(|p| (p.0, p.1)).collect();
-    geometry::Geom { center: c, angle: 0.0, bbox, label: None, axes: None, outline }
+    geometry::Geom { center: c, angle: 0.0, bbox, label: None, axes: None, outline, glyphs: None, named: Vec::new() }
 }
 
 /// Plus grande étendue des axes d'une scène (pour move(up, 20%, ...))
@@ -2308,8 +2309,8 @@ pub fn check(ftype: &str, props: &HashMap<String, PropValue>, params: &[String])
             if let Some(p) = get("projection").filter(|p| p != "perspective" && p != "ortho") {
                 errors.push(("projection".into(), format!("projection '{}' invalide (perspective ou ortho)", p)));
             }
-            if let Some(a) = get("axes").filter(|a| !["lines", "true", "box", "none", "false"].contains(&a.as_str())) {
-                errors.push(("axes".into(), format!("axes '{}' invalide (lines, box ou none)", a)));
+            if let Some(a) = get("frame").filter(|a| !["lines", "true", "box", "none", "false"].contains(&a.as_str())) {
+                errors.push(("frame".into(), format!("frame '{}' invalide (lines, box ou none)", a)));
             }
         }
         _ => {}

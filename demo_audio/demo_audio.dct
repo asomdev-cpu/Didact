@@ -10,7 +10,7 @@ deffigure titre =
     type    : text
     content : "Le son suit la lecture : pause, saut, retour en arrière"
     pos     : (50%, 85%)
-    font    : 40px
+    size    : 40px
 
 deffigure a =
     type   : circle

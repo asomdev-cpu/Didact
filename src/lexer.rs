@@ -21,6 +21,9 @@ pub enum Token {
     Pipe,       // |    (bloc multilignes)
     Op(char),   // + - * / ^  seuls (dans les paramètres d'animation : a - 1)
 
+    /// Chaîne "... jamais refermée (fin du fichier atteinte)
+    Unterminated,
+
     // --- Fin ---
     EOF,
 }
@@ -106,9 +109,17 @@ pub fn tokenize(input: &str) -> Vec<Spanned> {
             '"' => {
                 chars.next(); // consomme le "
                 let mut s = String::new();
+                let mut closed = false;
                 while let Some(&c) = chars.peek() {
                     chars.next();
+                    // \" : un guillemet dans la chaîne
+                    if c == '\\' && chars.peek() == Some(&'"') {
+                        chars.next();
+                        s.push('"');
+                        continue;
+                    }
                     if c == '"' {
+                        closed = true;
                         break;
                     }
                     if c == '\n' {
@@ -116,7 +127,7 @@ pub fn tokenize(input: &str) -> Vec<Spanned> {
                     }
                     s.push(c);
                 }
-                push(&mut tokens, start, Token::StringLit(s));
+                push(&mut tokens, start, if closed { Token::StringLit(s) } else { Token::Unterminated });
             }
 
             // --- Nombres (et pourcentages) ---

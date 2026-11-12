@@ -49,7 +49,7 @@ defmodel legende(texte) =
     type    : text
     content : "@texte"
     pos     : (28%, 80%)
-    font    : 40px
+    size    : 40px
 
 deffigure l8  = legende("8 rectangles")
 deffigure l16 = legende("16 rectangles")

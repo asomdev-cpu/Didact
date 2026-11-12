@@ -18,6 +18,10 @@ pub mod validator;
 pub mod voice;
 pub mod web;
 
+/// La documentation (SPEC, REFERENCE) décrit tout ce que le code accepte
+#[cfg(test)]
+mod doc_check;
+
 /// Fenêtre desktop (natif seulement)
 #[cfg(not(target_arch = "wasm32"))]
 pub mod output;

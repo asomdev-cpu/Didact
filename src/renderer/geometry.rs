@@ -1,11 +1,11 @@
 //! Conversion d'une figure Didact en formes à dessiner, en pixels.
 //!
-//! Conventions (SPEC §7) :
+//! Conventions (SPEC §4) :
 //! - positions en % de la scène, origine en bas à gauche, y vers le haut ;
 //! - en pixels, l'origine est en haut à gauche et y descend : on convertit ici.
 //! - angles en degrés, positif = sens trigonométrique.
 //!
-//! Unités (SPEC §7.5) :
+//! Unités (SPEC §4.2) :
 //! - positions : x en % de la largeur, y en % de la hauteur (placement) ;
 //! - tailles (`radius`, `size`, `width`/`height` d'un rect) : en % du plus petit côté
 //!   de la scène, pour que les formes ne se déforment jamais ;
@@ -90,6 +90,20 @@ pub struct Geom {
     pub axes: Option<AxesMap>,
     /// Contour de la figure en points (pixels), pour follow et auto_tangent
     pub outline: Vec<(f32, f32)>,
+    /// Texte ou formule : (type, morceaux dessinés), pour viser un morceau (`part=...`)
+    pub glyphs: Option<Glyphs>,
+    /// Morceaux nommés d'un graphe ou d'un tableau (nœud `B`, case `(1,2)`) et leur boîte
+    pub named: Vec<(String, (f32, f32, f32, f32))>,
+}
+
+/// Morceaux dessinés d'un texte ou d'une formule, avec son type
+#[derive(Debug, Clone)]
+pub struct Glyphs(pub String, pub Vec<Shape>);
+
+impl PartialEq for Glyphs {
+    fn eq(&self, o: &Self) -> bool {
+        self.0 == o.0 && self.1.len() == o.1.len() && self.1.iter().zip(&o.1).all(|(a, b)| a.path.len() == b.path.len())
+    }
 }
 
 /// Conversion entre les coordonnées d'un repère `axes` et les pixels
@@ -207,7 +221,7 @@ impl Scene {
 //  CONVERSION FIGURE → FORMES
 // ─────────────────────────────────────────────
 
-/// Valeurs par défaut quand une propriété n'est pas écrite (à valider, cf. SPEC §15)
+/// Valeurs par défaut quand une propriété n'est pas écrite (SPEC §5)
 const DEFAULT_STROKE_PX: f32 = 2.0;
 
 /// Style commun à toutes les figures
@@ -241,13 +255,80 @@ pub fn figure_shapes(f: &ResolvedFigure, scene: &Scene, refs: &Refs) -> Result<V
     let shapes = figure_shapes_inner(f, scene, refs, &look, opacity)?;
     // `anchor` : quel point de la figure se pose sur `pos` (textes, tableaux, graphes)
     if ANCHORED.contains(&f.ftype.as_str()) {
-        if let Some(a) = f.properties.get("anchor") {
-            let (fx, fy) = anchor_frac(&fmt_value(a))?;
+        if let Some((fx, fy)) = anchor_of(f)? {
             let (x, y) = point(require(f, "pos")?, scene, refs)?;
             return Ok(anchor_shapes(shapes, x, y, fx, fy));
         }
     }
     Ok(shapes)
+}
+
+/// Ancre d'une figure : `anchor` s'il est donné, sinon celle qu'implique un placement
+/// relatif (`below(...)` → le haut de la figure, `right_of(...)` → sa gauche, ...)
+pub(crate) fn anchor_of(f: &ResolvedFigure) -> Result<Option<(f32, f32)>, String> {
+    if let Some(a) = f.properties.get("anchor") {
+        return anchor_frac(&fmt_value(a)).map(Some);
+    }
+    let Some(PropValue::Single(pos)) = f.properties.get("pos") else { return Ok(None) };
+    let (name, args) = split_call(pos);
+    let side = |i: usize, default: &str| args.get(i).map(|s| s.trim()).filter(|s| !s.starts_with("part=")).unwrap_or(default).to_string();
+    let frac = |s: &str| match s {
+        "left" | "top" => Ok(0.0),
+        "center" => Ok(0.5),
+        "right" | "bottom" => Ok(1.0),
+        other => Err(format!("{} : alignement '{}' invalide (left, center, right ou top, center, bottom)", name, other)),
+    };
+    Ok(match name {
+        "below" => Some((frac(&side(2, "center"))?, 0.0)),
+        "above" => Some((frac(&side(2, "center"))?, 1.0)),
+        "left_of" => Some((1.0, frac(&side(2, "center"))?)),
+        "right_of" => Some((0.0, frac(&side(2, "center"))?)),
+        _ => None,
+    })
+}
+
+/// Boîte d'un morceau (`part`) d'un texte ou d'une formule, sinon de la figure entière
+fn part_box(g: &Geom, name: &str, part: Option<&str>) -> Result<(f32, f32, f32, f32), String> {
+    let Some(part) = part else { return Ok(g.bbox) };
+    // Nœud d'un graphe, case d'un tableau
+    if !g.named.is_empty() {
+        let p = super::discrete::normalize_part(part);
+        return g.named.iter().find(|(k, _)| *k == p).map(|(_, b)| *b).ok_or_else(|| {
+            let names: Vec<&str> = g.named.iter().map(|(k, _)| k.as_str()).filter(|k| !k.starts_with("text ")).take(12).collect();
+            format!("part « {} » introuvable dans '{}' (morceaux : {})", part, name, names.join(", "))
+        });
+    }
+    let Glyphs(ftype, glyphs) = g.glyphs.as_ref().ok_or_else(|| format!("part=... : '{}' n'est pas un texte, une formule, un graph ou un array", name))?;
+    let content = super::typeset::part_content(ftype, part);
+    let needle = super::typeset::shapes(&content, 0.0, 0.0, 40.0, super::typeset::Align::Center, Rgba::BLACK)?;
+    let found = super::morph::find_part(glyphs, &needle);
+    // Première occurrence
+    let first: Vec<&Shape> = found.iter().take(needle.len()).map(|&i| &glyphs[i]).collect();
+    if first.is_empty() {
+        return Err(format!("part « {} » introuvable dans '{}'", part, name));
+    }
+    let mut b = (f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
+    for s in first {
+        for c in &s.path {
+            if let PathCmd::MoveTo(x, y) | PathCmd::LineTo(x, y) | PathCmd::CubicTo(_, _, _, _, x, y) = *c {
+                b = (b.0.min(x), b.1.min(y), b.2.max(x), b.3.max(y));
+            }
+        }
+    }
+    Ok(b)
+}
+
+/// Sépare les arguments d'une référence : (positionnels, part=...)
+fn ref_args<'a>(args: &[&'a str]) -> (Vec<&'a str>, Option<String>) {
+    let mut pos = Vec::new();
+    let mut part = None;
+    for a in args {
+        match a.trim().strip_prefix("part=") {
+            Some(p) => part = Some(p.trim().trim_matches('"').to_string()),
+            None => pos.push(a.trim()),
+        }
+    }
+    (pos, part)
 }
 
 /// Types placés par `pos` dont `anchor` déplace toute la figure (le rect le gère lui-même)
@@ -327,6 +408,11 @@ fn figure_shapes_inner(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Lo
         "table" => table(f, scene, refs, &look),
         "axes" => axes(f, scene, refs, &look),
         "plot" => plot(f, scene, refs, &look),
+        "curve" => curve(f, scene, refs, &look),
+        "frame" => frame(f, scene, refs, &look),
+        "brace" => brace(f, scene, refs, &look),
+        "tangent" => tangent(f, refs, &look),
+        "riemann" => riemann(f, refs, &look),
         "grid" => grid(f, scene, refs, &look),
         "image" => super::image::shapes(f, scene, refs, opacity),
         "graph" | "array" => Ok(super::discrete::build(f, scene, refs)?.0),
@@ -361,10 +447,37 @@ fn figure_shapes_inner(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Lo
 }
 
 fn line(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<Vec<Shape>, String> {
-    let (x1, y1) = point(require(f, "from")?, scene, refs)?;
-    let (x2, y2) = point(require(f, "to")?, scene, refs)?;
+    let (mut x1, mut y1) = point(require(f, "from")?, scene, refs)?;
+    let (mut x2, mut y2) = point(require(f, "to")?, scene, refs)?;
     let (start_arrow, end_arrow) = arrows(f)?;
     let color = look.color.unwrap_or(Rgba::BLACK);
+
+    // `extend` : la droite passe par from et to et continue jusqu'au bord de l'écran
+    // (ou du repère, par la découpe de `axes`) : true / both, start (avant from), end (après to)
+    let (ext_start, ext_end) = match f.properties.get("extend").map(fmt_value).as_deref() {
+        None | Some("false") | Some("none") => (false, false),
+        Some("true") | Some("both") => (true, true),
+        Some("start") => (true, false),
+        Some("end") => (false, true),
+        Some(other) => return Err(format!("extend '{}' invalide (true / false / start / end)", other)),
+    };
+    if (ext_start || ext_end) && (x2 - x1).hypot(y2 - y1) > 1e-3 {
+        // Paramètre le long de from + s·(to - from) où la droite sort de l'écran
+        let (dx, dy) = (x2 - x1, y2 - y1);
+        let (mut lo, mut hi) = (f32::NEG_INFINITY, f32::INFINITY);
+        for (p0, d, max) in [(x1, dx, scene.width), (y1, dy, scene.height)] {
+            if d.abs() > 1e-6 {
+                let (a, b) = ((0.0 - p0) / d, (max - p0) / d);
+                lo = lo.max(a.min(b));
+                hi = hi.min(a.max(b));
+            }
+        }
+        if lo.is_finite() && hi.is_finite() && lo < hi {
+            let (s0, s1) = (if ext_start { lo.min(0.0) } else { 0.0 }, if ext_end { hi.max(1.0) } else { 1.0 });
+            (x2, y2) = (x1 + dx * s1, y1 + dy * s1);
+            (x1, y1) = (x1 + dx * s0, y1 + dy * s0);
+        }
+    }
 
     let mut shapes = Vec::new();
     let (mut ax, mut ay, mut bx, mut by) = (x1, y1, x2, y2);
@@ -398,13 +511,33 @@ fn line(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<V
 
 fn circle(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<Vec<Shape>, String> {
     let (cx, cy) = point(require(f, "center")?, scene, refs)?;
+    // Dans un repère (`axes`), un rayon sans unité est en unités du repère : `radius : 1` est le
+    // cercle unité (une ellipse si les échelles en x et y diffèrent)
+    let unit = match f.properties.get("axes") {
+        Some(_) => {
+            let m = axes_of(f, refs)?;
+            Some((m.ux, m.uy))
+        }
+        None => None,
+    };
+    // Sans repère, un rayon sans unité serait en pixels : presque toujours un oubli
+    const NO_UNIT: &str = "sans unité : écrire `%` ou `px`, ou ajouter `axes : nom_du_repère` pour un rayon en unités du repère";
+    let len = |s: &str, along_y: bool| -> Result<f32, String> {
+        match (unit, const_num(s)) {
+            (Some((ux, uy)), Some(v)) => Ok(v as f32 * if along_y { uy } else { ux }),
+            (None, Some(_)) => Err(format!("radius : {} {}", s, NO_UNIT)),
+            _ => length_str(s, scene),
+        }
+    };
     // radius : r (cercle) ou (rx, ry) (ellipse)
     let path = match require(f, "radius")? {
-        PropValue::Tuple(v) if v.len() == 2 => {
-            let (rx, ry) = (length_str(&v[0], scene)?, length_str(&v[1], scene)?);
-            ellipse_path(cx, cy, rx, ry)
-        }
+        PropValue::Tuple(v) if v.len() == 2 => ellipse_path(cx, cy, len(&v[0], false)?, len(&v[1], true)?),
         PropValue::Tuple(_) => return Err("radius : un nombre, ou (rx, ry) pour une ellipse".to_string()),
+        PropValue::Number(n) if unit.is_some() => {
+            let (ux, uy) = unit.unwrap();
+            ellipse_path(cx, cy, *n as f32 * ux, *n as f32 * uy)
+        }
+        PropValue::Number(n) => return Err(format!("radius : {} {}", n, NO_UNIT)),
         v => circle_path(cx, cy, length(v, scene, scene.min_side())?),
     };
     Ok(vec![Shape { glow: 0.0,
@@ -422,10 +555,7 @@ fn rect(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<V
     let h = length(require(f, "height")?, scene, scene.min_side())?;
 
     // pos est le centre, sauf `anchor` (bottomleft : pos est le coin bas-gauche, ...)
-    let (fx, fy) = match f.properties.get("anchor") {
-        Some(a) => anchor_frac(&fmt_value(a))?,
-        None => (0.5, 0.5),
-    };
+    let (fx, fy) = anchor_of(f)?.unwrap_or((0.5, 0.5));
     let (left, top) = (x - fx * w, y - fy * h);
     // Coins arrondis : corner_radius en % du plus petit côté de l'écran, ou en px
     let r = match f.properties.get("corner_radius") {
@@ -442,6 +572,23 @@ fn rect(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<V
 }
 
 fn polygon(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<Vec<Shape>, String> {
+    // Polygone régulier : `sides : 6`, `center`, `radius` (premier sommet en haut)
+    if let Some(v) = f.properties.get("sides") {
+        let n = match v {
+            PropValue::Number(n) if *n >= 3.0 && *n <= 360.0 => n.round() as usize,
+            v => return Err(format!("sides doit être un entier entre 3 et 360, trouvé '{}'", fmt_value(v))),
+        };
+        let (cx, cy) = point(require(f, "center")?, scene, refs)?;
+        let r = length(require(f, "radius")?, scene, scene.min_side())?;
+        let mut path = Vec::with_capacity(n + 1);
+        for i in 0..n {
+            let a = std::f32::consts::FRAC_PI_2 + std::f32::consts::TAU * i as f32 / n as f32;
+            let (x, y) = (cx + r * a.cos(), cy - r * a.sin());
+            path.push(if i == 0 { PathCmd::MoveTo(x, y) } else { PathCmd::LineTo(x, y) });
+        }
+        path.push(PathCmd::Close);
+        return Ok(vec![Shape { glow: 0.0, path, fill: look.fill, stroke: look.color.map(|c| (c, look.stroke)), image: None }]);
+    }
     let items = match require(f, "points")? {
         PropValue::List(items) => items,
         v => return Err(format!("points doit être une liste de points, trouvé '{}'", fmt_value(v))),
@@ -466,7 +613,14 @@ fn polygon(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Resul
 
 fn arc(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<Vec<Shape>, String> {
     let (cx, cy) = point(require(f, "center")?, scene, refs)?;
-    let r = length(require(f, "radius")?, scene, scene.min_side())?;
+    // Comme pour un cercle : dans un repère, un rayon sans unité est en unités du repère
+    let r = match (require(f, "radius")?, f.properties.contains_key("axes")) {
+        (PropValue::Number(n), true) => *n as f32 * axes_of(f, refs)?.ux,
+        (PropValue::Number(n), false) => {
+            return Err(format!("radius : {} sans unité : écrire `%` ou `px`, ou ajouter `axes : nom_du_repère` pour un rayon en unités du repère", n))
+        }
+        (v, _) => length(v, scene, scene.min_side())?,
+    };
     let a0 = angle(require(f, "from_angle")?, refs)?;
     let a1 = angle(require(f, "to_angle")?, refs)?;
     let (start_arrow, end_arrow) = arrows(f)?;
@@ -537,7 +691,7 @@ fn star(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<V
 }
 
 /// Formes des points d'un scatter
-const MARKERS: &[&str] = &["circle", "square", "diamond", "triangle", "cross", "plus"];
+pub(crate) const MARKERS: &[&str] = &["circle", "square", "diamond", "triangle", "cross", "plus"];
 
 /// Un marqueur de « rayon » r centré en (x, y) ; même surface apparente à peu près pour tous
 fn marker_shape(marker: &str, x: f32, y: f32, r: f32, color: Option<Rgba>) -> Shape {
@@ -597,10 +751,7 @@ fn text(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<V
         v => fmt_value(v),
     };
     let (x, y) = point(require(f, "pos")?, scene, refs)?;
-    let size = match f.properties.get("font") {
-        Some(v) => length(v, scene, scene.min_side())?,
-        None => DEFAULT_FONT_PX * scene.px_scale,
-    };
+    let size = font_size(f, scene, 1.0)?;
     let align = match f.properties.get("align").map(fmt_value).as_deref() {
         None | Some("center") => super::text::Align::Center,
         Some("left") => super::text::Align::Left,
@@ -621,7 +772,7 @@ fn raw_text(v: &PropValue) -> String {
 
 /// Taille de composition : `size`, sinon `font`, sinon la valeur par défaut × `factor`
 fn font_size(f: &ResolvedFigure, scene: &Scene, factor: f32) -> Result<f32, String> {
-    match f.properties.get("size").or(f.properties.get("font")) {
+    match f.properties.get("size") {
         Some(v) => length(v, scene, scene.min_side()),
         None => Ok(DEFAULT_FONT_PX * factor * scene.px_scale),
     }
@@ -634,13 +785,18 @@ fn equation(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Resu
     let size = font_size(f, scene, 1.25)?;
     let color = look.color.unwrap_or(Rgba::BLACK);
     let content = super::typeset::Content::Math(tex);
-    let align = match f.properties.get("align").map(fmt_value).as_deref() {
+    let align = typeset_align(f)?;
+    super::typeset::shapes(&content, x, y, size, align, color)
+}
+
+/// `align` d'une figure composée par Typst : position du bloc par rapport à `pos`
+fn typeset_align(f: &ResolvedFigure) -> Result<super::typeset::Align, String> {
+    Ok(match f.properties.get("align").map(fmt_value).as_deref() {
         None | Some("center") => super::typeset::Align::Center,
         Some("left") => super::typeset::Align::Left,
         Some("right") => super::typeset::Align::Right,
         Some(other) => return Err(format!("align '{}' invalide (left / center / right)", other)),
-    };
-    super::typeset::shapes(&content, x, y, size, align, color)
+    })
 }
 
 /// latex / raw.latex : du LaTeX en mode texte (`\begin{align}`, paragraphes, ...)
@@ -650,7 +806,7 @@ fn latex(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<
     let (x, y) = point(require(f, "pos")?, scene, refs)?;
     let size = font_size(f, scene, 1.0)?;
     let color = look.color.unwrap_or(Rgba::BLACK);
-    super::typeset::shapes(&super::typeset::Content::Latex(tex), x, y, size, super::typeset::Align::Center, color)
+    super::typeset::shapes(&super::typeset::Content::Latex(tex), x, y, size, typeset_align(f)?, color)
 }
 
 /// table : en-tête (liste) + lignes (bloc, cases séparées par |)
@@ -669,7 +825,7 @@ fn table(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<
     let size = font_size(f, scene, 1.0)?;
     let color = look.color.unwrap_or(Rgba::BLACK);
     let content = super::typeset::Content::Table { header, rows };
-    super::typeset::shapes(&content, x, y, size, super::typeset::Align::Center, color)
+    super::typeset::shapes(&content, x, y, size, typeset_align(f)?, color)
 }
 
 // ─────────────────────────────────────────────
@@ -677,11 +833,37 @@ fn table(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<
 // ─────────────────────────────────────────────
 
 /// Intervalle [a, b] écrit comme une liste
+/// Un nombre, ou un calcul de constantes (`2*pi`, `sqrt(2)`)
+pub(crate) fn const_num(s: &str) -> Option<f64> {
+    let s = s.trim();
+    s.parse::<f64>().ok().filter(|v| v.is_finite()).or_else(|| {
+        let e = super::expr::parse_with(s, &[]).ok()?;
+        if e.uses_x() {
+            return None;
+        }
+        let v = e.eval(0.0, &HashMap::new());
+        v.is_finite().then_some(v)
+    })
+}
+
+/// [a, b] : deux nombres ou calculs de constantes (les paramètres sont déjà remplacés) ;
+/// a > b est permis (intervalle vide : une courbe qui n'a pas encore commencé)
+pub(crate) fn span(f: &ResolvedFigure, key: &str) -> Result<(f64, f64), String> {
+    match require(f, key)? {
+        PropValue::List(items) if items.len() == 2 => {
+            let a = const_num(&items[0]).ok_or_else(|| format!("{} : nombre invalide '{}'", key, items[0]))?;
+            let b = const_num(&items[1]).ok_or_else(|| format!("{} : nombre invalide '{}'", key, items[1]))?;
+            Ok((a, b))
+        }
+        v => Err(format!("{} doit être [début, fin], trouvé '{}'", key, fmt_value(v))),
+    }
+}
+
 pub(crate) fn range(f: &ResolvedFigure, key: &str) -> Result<(f64, f64), String> {
     match require(f, key)? {
         PropValue::List(items) if items.len() == 2 => {
-            let a: f64 = items[0].parse().map_err(|_| format!("{} : nombre invalide '{}'", key, items[0]))?;
-            let b: f64 = items[1].parse().map_err(|_| format!("{} : nombre invalide '{}'", key, items[1]))?;
+            let a = const_num(&items[0]).ok_or_else(|| format!("{} : nombre invalide '{}'", key, items[0]))?;
+            let b = const_num(&items[1]).ok_or_else(|| format!("{} : nombre invalide '{}'", key, items[1]))?;
             if b <= a {
                 return Err(format!("{} : [{}, {}] doit aller du plus petit au plus grand", key, a, b));
             }
@@ -712,10 +894,36 @@ pub fn axes_map(f: &ResolvedFigure, scene: &Scene, refs: &Refs) -> Result<AxesMa
     let (span_x, span_y) = ((xrange.1 - xrange.0) as f32, (yrange.1 - yrange.0) as f32);
 
     let (mut ux, mut uy) = (box_w / span_x, box_h / span_y);
-    if flag(f, "equal", true)? {
+    let equal = flag(f, "equal", true)?;
+    if equal {
         let u = ux.min(uy);
         ux = u;
         uy = u;
+    }
+    // Repère d'un autre : `same_scale` (mêmes unités), `align_x` (mêmes abscisses à l'écran :
+    // un repère sous l'autre), `align_y` (mêmes ordonnées : côte à côte)
+    let other = |key: &str| -> Result<Option<AxesMap>, String> {
+        let Some(v) = f.properties.get(key) else { return Ok(None) };
+        let name = fmt_value(v);
+        let g = refs.get(&name).ok_or_else(|| format!("{} : '{}' n'est pas un repère visible avant celui-ci", key, name))?;
+        g.axes.map(Some).ok_or_else(|| format!("{} : '{}' n'est pas un repère (axes)", key, name))
+    };
+    let (same, ax, ay) = (other("same_scale")?, other("align_x")?, other("align_y")?);
+    if let Some(o) = same {
+        ux = o.ux;
+        uy = o.uy;
+    }
+    if let Some(o) = ax {
+        ux = o.ux;
+        if equal {
+            uy = o.ux;
+        }
+    }
+    if let Some(o) = ay {
+        uy = o.uy;
+        if equal {
+            ux = o.uy;
+        }
     }
     // Zone réellement utilisée, centrée dans la boîte
     let (w, h) = (span_x * ux, span_y * uy);
@@ -723,8 +931,8 @@ pub fn axes_map(f: &ResolvedFigure, scene: &Scene, refs: &Refs) -> Result<AxesMa
     let area_bottom = bottom - (box_h - h) / 2.0;
     let step = tick_steps(f, xrange, yrange)?;
     Ok(AxesMap {
-        ox: area_left - xrange.0 as f32 * ux,
-        oy: area_bottom + yrange.0 as f32 * uy,
+        ox: ax.map_or(area_left - xrange.0 as f32 * ux, |o| o.ox),
+        oy: ay.map_or(area_bottom + yrange.0 as f32 * uy, |o| o.oy),
         ux,
         uy,
         xrange,
@@ -780,7 +988,7 @@ fn fmt_tick(v: f64, step: f64) -> String {
         };
         return if q == 1 { format!("{}{}", sign, num) } else { format!("{}{}/{}", sign, num, q) };
     }
-    fmt_number(v, decimals_for(step).max(4))
+    super::params::localize(&fmt_number(v, decimals_for(step).max(4)), false)
 }
 
 fn gcd(a: u64, b: u64) -> u64 {
@@ -932,7 +1140,16 @@ fn plot(f: &ResolvedFigure, _scene: &Scene, refs: &Refs, look: &Look) -> Result<
     let m = axes_of(f, refs)?;
     let src = fmt_value(require(f, "expr")?);
     let e = super::expr::parse_with(&src, &refs.param_names())?;
-    let (xa, xb) = m.xrange;
+    let (mut xa, mut xb) = m.xrange;
+    // `xrange : [0, t]` : tracée seulement sur cet intervalle (t animé : la courbe se dessine)
+    if f.properties.contains_key("xrange") {
+        let (a, b) = span(f, "xrange")?;
+        xa = xa.max(a);
+        xb = xb.min(b);
+        if xb <= xa {
+            return Ok(vec![Shape { glow: 0.0, path: Vec::new(), fill: None, stroke: look.color.map(|c| (c, look.stroke)), image: None }]);
+        }
+    }
     let (ya, yb) = m.yrange;
     let f_has_samples = f.properties.contains_key("samples");
     let samples = match f.properties.get("samples") {
@@ -977,6 +1194,208 @@ fn plot(f: &ResolvedFigure, _scene: &Scene, refs: &Refs, look: &Look) -> Result<
         prev = cur;
     }
     Ok(vec![Shape { glow: 0.0, path, fill: None, stroke: look.color.map(|c| (c, look.stroke)), image: None }])
+}
+
+/// Nombre d'une propriété (les paramètres sont déjà remplacés), ou la valeur par défaut
+fn num_or(f: &ResolvedFigure, key: &str, default: Option<f64>) -> Result<f64, String> {
+    match f.properties.get(key) {
+        Some(PropValue::Number(n)) => Ok(*n),
+        Some(v) => const_num(&fmt_value(v)).ok_or_else(|| format!("{} : nombre invalide '{}'", key, fmt_value(v))),
+        None => default.ok_or_else(|| format!("propriété '{}' manquante", key)),
+    }
+}
+
+/// Cadre autour d'une figure ou d'un morceau de formule (`around : eq`, `part : "..."`),
+/// qui la suit quand elle bouge
+fn frame(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<Vec<Shape>, String> {
+    let name = fmt_value(require(f, "around")?);
+    let g = refs.get(&name).ok_or_else(|| format!("around : '{}' n'est pas une figure visible avant ce cadre", name))?;
+    let part = f.properties.get("part").map(|v| fmt_value(v).trim().trim_matches('"').to_string());
+    let b = part_box(g, &name, part.as_deref())?;
+    let pad = match f.properties.get("padding") {
+        Some(v) => length(v, scene, scene.min_side())?,
+        None => 0.01 * scene.min_side(),
+    };
+    let r = match f.properties.get("corner_radius") {
+        Some(v) => length(v, scene, scene.min_side())?,
+        None => 0.0,
+    };
+    let (x, y, w, h) = (b.0 - pad, b.1 - pad, b.2 - b.0 + 2.0 * pad, b.3 - b.1 + 2.0 * pad);
+    Ok(vec![Shape { glow: 0.0, path: rounded_rect_path(x, y, w, h, r), fill: look.fill, stroke: look.color.map(|c| (c, look.stroke)), image: None }])
+}
+
+/// Accolade entre `from` et `to`, bombée à droite du sens from → to (sous un segment écrit de
+/// gauche à droite) ; `size` : sa profondeur. `offset(accolade, d)` donne la place de son étiquette.
+fn brace(f: &ResolvedFigure, scene: &Scene, refs: &Refs, look: &Look) -> Result<Vec<Shape>, String> {
+    let (x1, y1) = point(require(f, "from")?, scene, refs)?;
+    let (x2, y2) = point(require(f, "to")?, scene, refs)?;
+    let d = match f.properties.get("size") {
+        Some(v) => length(v, scene, scene.min_side())?,
+        None => 0.02 * scene.min_side(),
+    };
+    let len = (x2 - x1).hypot(y2 - y1);
+    let mut path = Vec::new();
+    if len > 1e-3 {
+        let (ux, uy) = ((x2 - x1) / len, (y2 - y1) / len);
+        // Normale à droite du sens from → to (y écran vers le bas)
+        let (nx, ny) = (-uy, ux);
+        let (h, q) = (d / 2.0, (d / 2.0).min(len / 4.0));
+        let at = |s: f32, t: f32| (x1 + ux * s + nx * t, y1 + uy * s + ny * t);
+        let cubic = |a: (f32, f32), b: (f32, f32), c: (f32, f32)| PathCmd::CubicTo(a.0, a.1, b.0, b.1, c.0, c.1);
+        let m = len / 2.0;
+        path.push(PathCmd::MoveTo(x1, y1));
+        path.push(cubic(at(0.0, 0.55 * h), at(0.45 * q, h), at(q, h)));
+        let p = at(m - q, h);
+        path.push(PathCmd::LineTo(p.0, p.1));
+        path.push(cubic(at(m - 0.45 * q, h), at(m, 1.45 * h), at(m, 2.0 * h)));
+        path.push(cubic(at(m, 1.45 * h), at(m + 0.45 * q, h), at(m + q, h)));
+        let p = at(len - q, h);
+        path.push(PathCmd::LineTo(p.0, p.1));
+        path.push(cubic(at(len - 0.45 * q, h), at(len, 0.55 * h), at(len, 0.0)));
+    }
+    Ok(vec![Shape { glow: 0.0, path, fill: None, stroke: look.color.map(|c| (c, look.stroke)), image: None }])
+}
+
+/// Dérivée numérique (différence centrée)
+fn slope(e: &super::expr::Expr, x: f64, params: &HashMap<String, f64>) -> f64 {
+    let h = 1e-5 * (1.0 + x.abs());
+    (e.eval(x + h, params) - e.eval(x - h, params)) / (2.0 * h)
+}
+
+/// Tangente à la courbe y = expr au point d'abscisse `at`, de longueur `length` (unités du repère)
+fn tangent(f: &ResolvedFigure, refs: &Refs, look: &Look) -> Result<Vec<Shape>, String> {
+    let m = axes_of(f, refs)?;
+    let e = super::expr::parse_with(&fmt_value(require(f, "expr")?), &refs.param_names())?;
+    let x0 = num_or(f, "at", None)?;
+    let len = num_or(f, "length", Some(3.0))?;
+    let (y0, d) = (e.eval(x0, &refs.params), slope(&e, x0, &refs.params));
+    let mut path = Vec::new();
+    if y0.is_finite() && d.is_finite() {
+        let n = (1.0 + d * d).sqrt();
+        let (dx, dy) = (len / 2.0 / n, len / 2.0 * d / n);
+        let (p, q) = (m.to_px(x0 - dx, y0 - dy), m.to_px(x0 + dx, y0 + dy));
+        path = vec![PathCmd::MoveTo(p.0, p.1), PathCmd::LineTo(q.0, q.1)];
+    }
+    Ok(vec![Shape { glow: 0.0, path, fill: None, stroke: look.color.map(|c| (c, look.stroke)), image: None }])
+}
+
+/// Rectangles de Riemann de y = expr sur `xrange`, `n` rectangles, `method` left | right | mid
+fn riemann(f: &ResolvedFigure, refs: &Refs, look: &Look) -> Result<Vec<Shape>, String> {
+    let m = axes_of(f, refs)?;
+    let e = super::expr::parse_with(&fmt_value(require(f, "expr")?), &refs.param_names())?;
+    let (a, b) = span(f, "xrange")?;
+    let n = num_or(f, "n", Some(10.0))?;
+    if !(1.0..=10000.0).contains(&n) {
+        return Err(format!("n doit être entre 1 et 10000, trouvé {}", n));
+    }
+    let method = f.properties.get("method").map(fmt_value).unwrap_or_else(|| "left".into());
+    let at: f64 = match method.as_str() {
+        "left" => 0.0,
+        "mid" => 0.5,
+        "right" => 1.0,
+        other => return Err(format!("method : '{}' invalide (left, mid ou right)", other)),
+    };
+    // Remplissage par défaut : la couleur du trait, transparente
+    let fill = look.fill.or(look.color.map(|c| Rgba { a: c.a * 0.3, ..c }));
+    let (ya, yb) = m.yrange;
+    // n animé non entier (3,4) : fondu enchaîné entre 3 et 4 rectangles
+    let frac = (n - n.floor()) as f32;
+    let sets: Vec<(usize, f32)> = if frac < 1e-4 || frac > 1.0 - 1e-4 {
+        vec![(n.round() as usize, 1.0)]
+    } else {
+        vec![(n.floor() as usize, 1.0 - frac), (n.ceil() as usize, frac)]
+    };
+    let mut shapes = Vec::new();
+    for (n, alpha) in sets {
+        let fade = |c: Rgba| Rgba { a: c.a * alpha, ..c };
+        let w = (b - a) / n as f64;
+        for i in 0..n {
+            let x = a + w * i as f64;
+            let y = e.eval(x + w * at, &refs.params);
+            let (p, q) = if y.is_finite() { (m.to_px(x, 0f64.clamp(ya, yb)), m.to_px(x + w, y.clamp(ya, yb))) } else { continue };
+            let (l, t, r, btm) = (p.0.min(q.0), p.1.min(q.1), p.0.max(q.0), p.1.max(q.1));
+            shapes.push(Shape {
+                glow: 0.0,
+                path: rounded_rect_path(l, t, r - l, btm - t, 0.0),
+                fill: fill.map(fade),
+                stroke: look.color.map(|c| (fade(c), look.stroke)),
+                image: None,
+            });
+        }
+    }
+    Ok(shapes)
+}
+
+/// Les éléments d'un couple écrit `(a, b)` (lu comme couple ou comme texte brut)
+pub(crate) fn tuple_items(v: &PropValue) -> Option<Vec<String>> {
+    match v {
+        PropValue::Tuple(items) => Some(items.clone()),
+        PropValue::Single(s) => {
+            let inner = s.trim().strip_prefix('(')?.strip_suffix(')')?;
+            let call = format!("p({})", inner);
+            let (_, args) = split_call(&call);
+            Some(args.iter().map(|a| a.trim().to_string()).collect())
+        }
+        _ => None,
+    }
+}
+
+/// curve : courbe paramétrée `expr : (x(t), y(t))` ou polaire `polar : r(t)` (t = θ), pour
+/// t dans `t : [a, b]` (défaut [0, 2π] en polaire) ; les bornes peuvent suivre un paramètre
+fn curve(f: &ResolvedFigure, _scene: &Scene, refs: &Refs, look: &Look) -> Result<Vec<Shape>, String> {
+    let m = axes_of(f, refs)?;
+    let mut names = refs.param_names();
+    names.push("t".to_string());
+    let parse = |s: &str| super::expr::parse_with(s, &names).map_err(|e| format!("'{}' : {}", s, e));
+    enum Form {
+        Xy(super::expr::Expr, super::expr::Expr),
+        Polar(super::expr::Expr),
+    }
+    let pair = f.properties.get("expr").and_then(tuple_items).filter(|v| v.len() == 2);
+    let form = match (f.properties.get("expr"), f.properties.get("polar")) {
+        (Some(_), None) if pair.is_some() => {
+            let v = pair.unwrap();
+            Form::Xy(parse(&v[0])?, parse(&v[1])?)
+        }
+        (None, Some(r)) => Form::Polar(parse(&fmt_value(r))?),
+        (Some(v), None) => return Err(format!("expr : attendu (x(t), y(t)), trouvé '{}'", fmt_value(v))),
+        (Some(_), Some(_)) => return Err("curve : expr (paramétrée) ou polar, pas les deux".to_string()),
+        (None, None) => return Err("curve : expr : (x(t), y(t)) ou polar : r(t) manquant".to_string()),
+    };
+    let (ta, tb) = match (f.properties.contains_key("t"), &form) {
+        (true, _) => span(f, "t")?,
+        (false, Form::Polar(_)) => (0.0, std::f64::consts::TAU),
+        (false, Form::Xy(..)) => return Err("curve : intervalle `t : [début, fin]` manquant".to_string()),
+    };
+    let samples = match f.properties.get("samples") {
+        Some(PropValue::Number(n)) if *n >= 2.0 => *n as usize,
+        Some(v) => return Err(format!("samples doit être un entier ≥ 2, trouvé '{}'", fmt_value(v))),
+        None => 1000,
+    };
+    let mut vars = refs.params.clone();
+    let mut path = Vec::new();
+    if tb > ta {
+        let mut pen = false;
+        for i in 0..=samples {
+            let t = ta + (tb - ta) * i as f64 / samples as f64;
+            vars.insert("t".to_string(), t);
+            let (x, y) = match &form {
+                Form::Xy(ex, ey) => (ex.eval(0.0, &vars), ey.eval(0.0, &vars)),
+                Form::Polar(er) => {
+                    let r = er.eval(0.0, &vars);
+                    (r * t.cos(), r * t.sin())
+                }
+            };
+            if !(x.is_finite() && y.is_finite()) || x.abs() > 1e7 || y.abs() > 1e7 {
+                pen = false;
+                continue;
+            }
+            let (px, py) = m.to_px(x, y);
+            path.push(if pen { PathCmd::LineTo(px, py) } else { PathCmd::MoveTo(px, py) });
+            pen = true;
+        }
+    }
+    Ok(vec![Shape { glow: 0.0, path, fill: look.fill, stroke: look.color.map(|c| (c, look.stroke)), image: None }])
 }
 
 /// grid : quadrillage d'un repère (droites x = k·pas et y = k·pas), à déformer avec matrix / map / cmap.
@@ -1227,6 +1646,84 @@ fn arrows(f: &ResolvedFigure) -> Result<(bool, bool), String> {
     }
 }
 
+/// Pointes d'une figure : (au début, à la fin) ; une `arrow` 2D en a une à la fin
+pub(crate) fn arrow_ends(f: &ResolvedFigure) -> Result<(bool, bool), String> {
+    match f.ftype.as_str() {
+        "line" | "arc" => arrows(f),
+        "arrow" if f.properties.get("scene").is_none() => Ok((false, true)),
+        _ => Ok((false, false)),
+    }
+}
+
+/// La même figure sans pointes (une `arrow` devient une simple ligne)
+pub(crate) fn without_arrows(f: &ResolvedFigure) -> ResolvedFigure {
+    let mut g = f.clone();
+    g.properties.remove("arrow");
+    if g.ftype == "arrow" {
+        g.ftype = "line".to_string();
+    }
+    g
+}
+
+/// Pose des pointes rigides aux bouts du premier trait (déjà transformé) : orientées selon la
+/// direction d'arrivée du trait, qui est raccourci sous la pointe
+pub(crate) fn rigid_arrow_heads(shapes: &mut Vec<Shape>, start: bool, end: bool, scene: &Scene) {
+    let Some(first) = shapes.first() else { return };
+    let Some((color, width)) = first.stroke else { return };
+    let mut pts: Vec<(f32, f32)> = super::warp::flatten(&first.path, 4.0).into_iter().flat_map(|(p, _)| p).collect();
+    pts.dedup_by(|a, b| (a.0 - b.0).abs() < 1e-3 && (a.1 - b.1).abs() < 1e-3);
+    if pts.len() < 2 {
+        return;
+    }
+    let head = arrow_length(width, scene);
+    // Direction d'arrivée au bout `pts.last()` : depuis le point à une longueur de pointe en arrière
+    let tip_dir = |pts: &[(f32, f32)]| {
+        let tip = *pts.last().unwrap();
+        let mut back = pts[0];
+        for p in pts.iter().rev().skip(1) {
+            back = *p;
+            if ((tip.0 - p.0).powi(2) + (tip.1 - p.1).powi(2)).sqrt() >= head {
+                break;
+            }
+        }
+        (tip, unit(tip.0 - back.0, tip.1 - back.1))
+    };
+    // Raccourcit le trait de `cut` pixels à la fin
+    let trim = |pts: &mut Vec<(f32, f32)>, cut: f32| {
+        let mut left = cut;
+        while pts.len() >= 2 {
+            let (a, b) = (pts[pts.len() - 2], pts[pts.len() - 1]);
+            let d = ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt();
+            if d > left {
+                let k = (d - left) / d;
+                *pts.last_mut().unwrap() = (a.0 + (b.0 - a.0) * k, a.1 + (b.1 - a.1) * k);
+                break;
+            }
+            left -= d;
+            pts.pop();
+        }
+    };
+    let mut heads = Vec::new();
+    if end {
+        let (tip, (dx, dy)) = tip_dir(&pts);
+        heads.push(arrow_head(tip.0, tip.1, dx, dy, head, color));
+        trim(&mut pts, head * 0.8);
+    }
+    if start {
+        pts.reverse();
+        let (tip, (dx, dy)) = tip_dir(&pts);
+        heads.push(arrow_head(tip.0, tip.1, dx, dy, head, color));
+        trim(&mut pts, head * 0.8);
+        pts.reverse();
+    }
+    shapes[0].path = pts
+        .iter()
+        .enumerate()
+        .map(|(i, &(x, y))| if i == 0 { PathCmd::MoveTo(x, y) } else { PathCmd::LineTo(x, y) })
+        .collect();
+    shapes.extend(heads);
+}
+
 pub(crate) fn arrow_length(stroke: f32, scene: &Scene) -> f32 {
     (stroke * 4.0).max(14.0 * scene.px_scale)
 }
@@ -1344,6 +1841,69 @@ fn geom<'a>(name: &str, refs: &'a Refs) -> Result<&'a Geom, String> {
 /// center(fig) ou offset(fig, d)
 fn ref_point(s: &str, scene: &Scene, refs: &Refs) -> Result<(f32, f32), String> {
     let (fname, args) = split_call(s);
+    // Points d'une figure ou d'un morceau de formule, et placements relatifs
+    const SIDES: &[&str] = &["top", "bottom", "left", "right", "topleft", "topright", "bottomleft", "bottomright"];
+    const NEXT_TO: &[&str] = &["below", "above", "left_of", "right_of"];
+    let (pos_args, part) = ref_args(&args);
+    if (fname == "center" && part.is_some()) || (SIDES.contains(&fname) && !pos_args.is_empty() && refs.get(pos_args[0]).is_some()) {
+        let name = pos_args.first().ok_or_else(|| format!("'{}' : figure manquante", s))?;
+        let g = geom(name, refs)?;
+        let b = part_box(g, name, part.as_deref())?;
+        let (fx, fy) = if fname == "center" { (0.5, 0.5) } else { anchor_frac(fname)? };
+        return Ok((b.0 + (b.2 - b.0) * fx, b.1 + (b.3 - b.1) * fy));
+    }
+    if NEXT_TO.contains(&fname) {
+        const FORM: &str = "below(figure, écart) ; 3e argument facultatif : left, center, right (below/above) ou top, center, bottom (left_of/right_of)";
+        let name = pos_args.first().ok_or_else(|| format!("'{}' : {}", s, FORM))?;
+        let gap = length_str(pos_args.get(1).ok_or_else(|| format!("'{}' : écart manquant : {}", s, FORM))?, scene)?;
+        let g = geom(name, refs)?;
+        let b = part_box(g, name, part.as_deref())?;
+        let side = pos_args.get(2).copied().unwrap_or("center");
+        let along = |lo: f32, hi: f32| -> Result<f32, String> {
+            match side {
+                "left" | "top" => Ok(lo),
+                "center" => Ok((lo + hi) / 2.0),
+                "right" | "bottom" => Ok(hi),
+                other => Err(format!("'{}' : alignement '{}' invalide : {}", s, other, FORM)),
+            }
+        };
+        return Ok(match fname {
+            "below" => (along(b.0, b.2)?, b.3 + gap),
+            "above" => (along(b.0, b.2)?, b.1 - gap),
+            "left_of" => (b.0 - gap, along(b.1, b.3)?),
+            _ => (b.2 + gap, along(b.1, b.3)?),
+        });
+    }
+    // Points du contour : start(f), end(f), vertex(f, i), side(f, i) (milieu du côté i → i+1)
+    if matches!(fname, "start" | "end" | "vertex" | "side") {
+        let name = pos_args.first().ok_or_else(|| format!("'{}' : figure manquante", s))?;
+        let pts = &geom(name, refs)?.outline;
+        if pts.is_empty() {
+            return Err(format!("'{}' : '{}' n'a pas de contour", s, name));
+        }
+        // Polygone fermé : le dernier point répète le premier
+        let closed = pts.len() > 2 && pts[0] == pts[pts.len() - 1];
+        let n = if closed { pts.len() - 1 } else { pts.len() };
+        return match fname {
+            "start" => Ok(pts[0]),
+            "end" => Ok(pts[pts.len() - 1]),
+            _ => {
+                let i = pos_args
+                    .get(1)
+                    .and_then(|a| const_num(a))
+                    .map(|v| v.round())
+                    .filter(|v| *v >= 1.0 && *v <= n as f64)
+                    .ok_or_else(|| format!("'{}' : numéro attendu entre 1 et {} : {}({}, 2)", s, n, fname, name))? as usize;
+                let a = pts[i - 1];
+                if fname == "vertex" {
+                    Ok(a)
+                } else {
+                    let b = pts[if closed { i % n } else { i.min(n - 1) }];
+                    Ok(((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0))
+                }
+            }
+        };
+    }
     match (fname, args.as_slice()) {
         ("center", [name]) if !refs.centers3.contains_key(*name) => Ok(geom(name, refs)?.center),
         ("offset", [name, d]) => {
@@ -1561,6 +2121,29 @@ mod tests {
 
     fn scene() -> Scene {
         Scene { width: 1000.0, height: 500.0, px_scale: 1.0, background: Rgba::WHITE, orbit: (0.0, 0.0, 1.0) }
+    }
+
+    #[test]
+    fn pointes_rigides() {
+        // Trait déjà « déformé » (une courbe en L) : la pointe suit la dernière direction
+        let scene = Scene { width: 1000.0, height: 1000.0, px_scale: 1.0, background: Rgba::BLACK, orbit: (0.0, 0.0, 1.0) };
+        let mut shapes = vec![Shape {
+            glow: 0.0,
+            path: vec![PathCmd::MoveTo(0.0, 0.0), PathCmd::LineTo(100.0, 0.0), PathCmd::LineTo(100.0, 100.0)],
+            fill: None,
+            stroke: Some((Rgba::BLACK, 2.0)),
+            image: None,
+        }];
+        rigid_arrow_heads(&mut shapes, false, true, &scene);
+        assert_eq!(shapes.len(), 2);
+        // pointe en (100, 100), vers le bas : base de la flèche au-dessus
+        assert_eq!(shapes[1].path[0], PathCmd::MoveTo(100.0, 100.0));
+        let head = arrow_length(2.0, &scene);
+        if let PathCmd::LineTo(x, y) = shapes[1].path[1] {
+            assert!((y - (100.0 - head)).abs() < 0.01 && (x - 100.0).abs() <= head * 0.46, "{} {}", x, y);
+        }
+        // le trait s'arrête sous la pointe
+        assert_eq!(shapes[0].path.last(), Some(&PathCmd::LineTo(100.0, 100.0 - head * 0.8)));
     }
 
     #[test]

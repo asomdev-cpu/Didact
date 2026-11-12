@@ -18,21 +18,30 @@ pub struct Parser {
     models: HashMap<String, Model>,
     /// Paramètres déjà définis (`defparam`) : pour lire `radius : 2*k`
     param_names: Vec<String>,
+    /// Fonctions définies (deffunction)
+    functions: Vec<String>,
 }
 
 /// Propriétés dont la valeur est le reste de la ligne, tel quel
 /// (expressions et LaTeX : espaces, ^, \, ... conservés sans guillemets)
-const RAW_LINE_PROPS: &[&str] = &["expr", "cmap", "upper", "lower", "where", "domain", "escape", "z0", "edges", "values", "weights", "sample", "x", "y"];
+const RAW_LINE_PROPS: &[&str] = &["expr", "polar", "part", "cmap", "upper", "lower", "where", "domain", "escape", "z0", "edges", "values", "weights", "sample", "x", "y"];
 
 impl Parser {
     pub fn new(tokens: Vec<Spanned>) -> Self {
-        Parser { tokens, pos: 0, last_line: 1, source_lines: Vec::new(), models: HashMap::new(), param_names: Vec::new() }
+        Parser { tokens, pos: 0, last_line: 1, source_lines: Vec::new(), models: HashMap::new(), param_names: Vec::new(), functions: Vec::new() }
     }
 
     /// Bloc multilignes `key : |` : les lignes suivantes plus indentées que `key`,
     /// avec retours à la ligne et `|` conservés, indentation commune retirée.
     fn raw_block_value(&mut self, line: usize) -> Option<PropValue> {
         if *self.peek() != Token::Pipe || self.source_lines.is_empty() {
+            return None;
+        }
+        // Un bloc seulement si `|` est seul après les deux-points : `expr : |x| + 1` est une
+        // formule qui commence par une valeur absolue, pas un bloc
+        let after = self.source_lines.get(line - 1)?.split_once(':')?.1;
+        let after = after.split(" #").next().unwrap_or(after).trim();
+        if after != "|" {
             return None;
         }
         let indent = |l: &str| l.len() - l.trim_start().len();
@@ -255,6 +264,12 @@ impl Parser {
         &self.tokens[self.pos].token
     }
 
+    /// Regarde le token `k` places plus loin (EOF au-delà)
+    fn peek_at(&self, k: usize) -> &Token {
+        let i = (self.pos + k).min(self.tokens.len() - 1);
+        &self.tokens[i].token
+    }
+
     /// Ligne du token courant
     fn line(&self) -> usize {
         self.tokens[self.pos].line
@@ -268,6 +283,11 @@ impl Parser {
             self.pos += 1;
         }
         tok
+    }
+
+    /// Fin du fichier atteinte sans le crochet ou la parenthèse fermante
+    fn unclosed(&self, close: &str) -> String {
+        format!("ligne {} : `{}` manquant : fin du fichier atteinte avant la fermeture", self.last_line, close)
     }
 
     /// Avance en exigeant un identifiant
@@ -294,7 +314,7 @@ impl Parser {
             return true;
         }
         if let Token::Ident(s) = self.peek() {
-            if matches!(s.as_str(), "deffigure" | "defstyle" | "defgroup" | "defparam" | "defmodel" | "defrepeat") {
+            if matches!(s.as_str(), "deffigure" | "defstyle" | "defgroup" | "defparam" | "defmodel" | "defrepeat" | "deffunction") {
                 return true;
             }
         }
@@ -316,11 +336,27 @@ pub fn parse(tokens: Vec<Spanned>) -> Result<Document, String> {
 pub fn parse_with_source(tokens: Vec<Spanned>, source: &str) -> Result<Document, String> {
     let mut p = Parser::new(tokens);
     p.source_lines = source.lines().map(|l| l.to_string()).collect();
-    p.parse_document()
+    // Nouveau document : les fonctions d'un fichier précédent sont oubliées (pas dans les tests,
+    // qui lisent plusieurs documents en parallèle)
+    #[cfg(not(test))]
+    crate::renderer::expr::clear_functions();
+    let doc = p.parse_document()?;
+    #[cfg(not(test))]
+    crate::renderer::params::DECIMAL_COMMA.store(doc.config.decimal_comma, std::sync::atomic::Ordering::Relaxed);
+    Ok(doc)
 }
 
 impl Parser {
     fn parse_document(&mut self) -> Result<Document, String> {
+        if let Some(t) = self.tokens.iter().find(|t| t.token == Token::Unterminated) {
+            // Le guillemet oublié est souvent plus haut : première ligne qui en compte un nombre impair
+            let odd = self.source_lines.iter().position(|l| l.matches('"').count() % 2 == 1).map(|i| i + 1);
+            let hint = match odd {
+                Some(l) if l != t.line => format!(" (premier guillemet sans son double : ligne {})", l),
+                _ => String::new(),
+            };
+            return Err(format!("ligne {} : guillemet `\"` fermant manquant{}", t.line, hint));
+        }
         let mut config = Config::default();
         let mut styles = Vec::new();
         let mut params = Vec::new();
@@ -379,9 +415,20 @@ impl Parser {
                     "background" => config.background = self.parse_ident_or_string()?,
                     "languages" => config.languages = self.parse_string_list()?,
                     "default_lang" => config.default_lang = self.expect_ident()?,
+                    "decimal" => {
+                        config.decimal_comma = match self.expect_ident()?.as_str() {
+                            "comma" => true,
+                            "point" => false,
+                            other => return Err(format!("ligne {} : decimal : '{}' invalide (comma ou point)", self.last_line, other)),
+                        }
+                    }
                     _ => {
-                        eprintln!("Attention (ligne {}) : propriété config inconnue '{}' ignorée", self.last_line, key);
-                        self.skip_value();
+                        const KNOWN: &[&str] = &["window", "background", "languages", "default_lang", "decimal"];
+                        let hint = crate::validator::suggest(&key, KNOWN).map(|k| format!(" ; vouliez-vous dire `{}` ?", k)).unwrap_or_default();
+                        return Err(format!(
+                            "ligne {} : [config] : propriété `{}` inconnue{} (propriétés : {})",
+                            self.last_line, key, hint, KNOWN.join(", ")
+                        ));
                     }
                 }
             } else {
@@ -454,6 +501,17 @@ impl Parser {
                         self.advance();
                         self.parse_model()?;
                     }
+                    "deffunction" => {
+                        self.advance();
+                        let name = self.parse_function()?;
+                        let taken = figures.iter().any(|f: &FigureDef| f.name == name)
+                            || styles.iter().any(|s: &StyleDef| s.name == name)
+                            || params.iter().any(|p: &ParamDef| p.name == name);
+                        if taken {
+                            return Err(format!("ligne {} : deffunction {} : ce nom est déjà pris par un élément défini plus haut", self.last_line, name));
+                        }
+                        self.functions.push(name);
+                    }
                     "defrepeat" => {
                         self.advance();
                         let group = self.parse_repeat(&mut index)?;
@@ -479,7 +537,56 @@ impl Parser {
             }
         }
 
+        // Une fonction et une figure (ou un paramètre) ne peuvent pas porter le même nom :
+        // `r(1, 2)` serait ambigu entre un point du repère r et un appel de fonction
+        for f in &self.functions {
+            if let Some(fig) = figures.iter().find(|g| &g.name == f) {
+                return Err(format!("ligne {} : '{}' est déjà le nom d'une fonction (deffunction) : choisir un autre nom", fig.line, f));
+            }
+            if let Some(p) = params.iter().find(|p| &p.name == f) {
+                return Err(format!("ligne {} : '{}' est déjà le nom d'une fonction (deffunction) : choisir un autre nom", p.line, f));
+            }
+        }
+
         Ok((styles, params, figures))
+    }
+
+    /// deffunction f(x, y) = corps : lue sur la ligne du fichier ; la fonction est utilisable
+    /// dans toutes les formules qui suivent
+    fn parse_function(&mut self) -> Result<String, String> {
+        const FORM: &str = "deffunction f(x) = x^2 - 1  (plusieurs arguments : f(x, y))";
+        let line = self.last_line;
+        let text = self.source_lines.get(line.wrapping_sub(1)).cloned().ok_or_else(|| format!("ligne {} : deffunction : source introuvable", line))?;
+        let after = text.trim_start().strip_prefix("deffunction").unwrap_or("").trim();
+        let after = match after.find(" #") {
+            Some(i) if !after[i..].starts_with(" #{") => &after[..i],
+            _ => after,
+        };
+        let (head, body) = after.split_once('=').ok_or_else(|| format!("ligne {} : attendu {}", line, FORM))?;
+        let head = head.trim();
+        let (name, args) = head
+            .strip_suffix(')')
+            .and_then(|h| h.split_once('('))
+            .ok_or_else(|| format!("ligne {} : attendu {}", line, FORM))?;
+        let name = name.trim().to_string();
+        let ok_name = |n: &str| !n.is_empty() && n.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        if !ok_name(&name) {
+            return Err(format!("ligne {} : nom de fonction invalide '{}' : {}", line, name, FORM));
+        }
+        let args: Vec<String> = args.split(',').map(|a| a.trim().to_string()).collect();
+        if args.iter().any(|a| !ok_name(a)) {
+            return Err(format!("ligne {} : arguments invalides '{}' : {}", line, args.join(", "), FORM));
+        }
+        let body = body.trim();
+        if body.is_empty() {
+            return Err(format!("ligne {} : deffunction {} : corps vide : {}", line, name, FORM));
+        }
+        crate::renderer::expr::define_function(&name, &args, body, &self.param_names)
+            .map_err(|e| format!("ligne {} : deffunction {}", line, e))?;
+        while self.line() == line && *self.peek() != Token::EOF {
+            self.advance();
+        }
+        Ok(name)
     }
 
     /// Texte d'une ligne du fichier, après le premier `=`
@@ -570,6 +677,8 @@ impl Parser {
 
         let mut sub = Parser::new(crate::lexer::tokenize(&text));
         sub.source_lines = text.lines().map(|l| l.to_string()).collect();
+        // Les paramètres définis plus haut sont utilisables dans un modèle
+        sub.param_names = self.param_names.clone();
         sub.advance(); // deffigure
         let mut fig = sub.parse_figure(index).map_err(|e| format!("ligne {} : modèle '{}' : {}", line, model_name, e))?;
         fig.line = line;
@@ -743,61 +852,13 @@ impl Parser {
             // Tuple (x, y) ou (50%, 30%)
             Token::LParen => {
                 self.advance();
-                let mut items = Vec::new();
-                loop {
-                    match self.peek().clone() {
-                        Token::RParen => { self.advance(); break; }
-                        Token::Comma => { self.advance(); }
-                        Token::Number(n) => { items.push(n.to_string()); self.advance(); }
-                        Token::Percentage(s) => { items.push(s); self.advance(); }
-                        Token::Ident(s) => { items.push(s); self.advance(); }
-                        _ => { self.advance(); }
-                    }
-                }
-                Ok(PropValue::Tuple(items))
+                Ok(PropValue::Tuple(self.parse_items(Token::RParen)?))
             }
 
             // Liste [a, b, c] ou liste de points [(20%, 80%), (50%, 20%)]
             Token::LBracket => {
                 self.advance();
-                let mut items = Vec::new();
-                loop {
-                    match self.peek().clone() {
-                        Token::RBracket | Token::EOF => { self.advance(); break; }
-                        Token::Comma => { self.advance(); }
-                        Token::Ident(s) => {
-                            self.advance();
-                            // Un point dans un repère : repere(1, 2)
-                            if *self.peek() == Token::LParen {
-                                items.push(format!("{}{}", s, self.parse_paren_group()));
-                            } else {
-                                items.push(s);
-                            }
-                        }
-                        Token::StringLit(s) => { items.push(s); self.advance(); }
-                        Token::Number(n) => { items.push(n.to_string()); self.advance(); }
-                        Token::Percentage(p) => { items.push(p); self.advance(); }
-                        // Un point (x, y) est gardé en un seul élément "(x,y)"
-                        Token::LParen => {
-                            self.advance();
-                            let mut point = String::from("(");
-                            loop {
-                                match self.peek().clone() {
-                                    Token::RParen | Token::EOF => { self.advance(); break; }
-                                    Token::Comma => { point.push(','); self.advance(); }
-                                    Token::Number(n) => { point.push_str(&n.to_string()); self.advance(); }
-                                    Token::Percentage(p) => { point.push_str(&p); self.advance(); }
-                                    Token::Ident(s) => { point.push_str(&s); self.advance(); }
-                                    _ => { self.advance(); }
-                                }
-                            }
-                            point.push(')');
-                            items.push(point);
-                        }
-                        _ => { self.advance(); }
-                    }
-                }
-                Ok(PropValue::List(items))
+                Ok(PropValue::List(self.parse_items(Token::RBracket)?))
             }
 
             // Pourcentage seul
@@ -843,6 +904,7 @@ impl Parser {
                     loop {
                         match self.peek().clone() {
                             Token::RParen => { self.advance(); break; }
+                            Token::EOF => return Err(self.unclosed(")")),
                             Token::Comma => { call.push(','); self.advance(); }
                             Token::Ident(p) => { call.push_str(&p); self.advance(); }
                             Token::Number(n) => { call.push_str(&n.to_string()); self.advance(); }
@@ -904,12 +966,11 @@ impl Parser {
 
         loop {
             match self.peek().clone() {
-                Token::RBrace | Token::EOF => {
-                    if *self.peek() == Token::RBrace {
-                        self.advance();
-                    }
+                Token::RBrace => {
+                    self.advance();
                     break;
                 }
+                Token::EOF => return Err(format!("ligne {} : accolade `}}` manquante : le bloc ouvert à la ligne {} n'est pas fermé", self.last_line, line)),
                 Token::Ident(key) => {
                     let action_line = self.line();
                     self.advance();
@@ -925,11 +986,16 @@ impl Parser {
                             self.advance();
                             TimelineAction::Comment(Vec::new())
                         }
+                        // Une seule langue : `comment : "Texte"` suffit
+                        "comment" if matches!(self.peek(), Token::StringLit(_)) => {
+                            let Token::StringLit(s) = self.advance() else { unreachable!() };
+                            TimelineAction::Comment(vec![s])
+                        }
                         "comment" => TimelineAction::Comment(self.parse_string_list()?),
                         _ => {
-                            eprintln!("Attention (ligne {}) : action timeline inconnue '{}' ignorée", action_line, key);
-                            self.skip_bracket_content();
-                            continue;
+                            const KNOWN: &[&str] = &["start", "end", "destroy", "anim", "comment"];
+                            let hint = crate::validator::suggest(&key, KNOWN).map(|k| format!(" ; vouliez-vous dire `{}` ?", k)).unwrap_or_default();
+                            return Err(format!("ligne {} : action `{}` inconnue{} (actions : {})", action_line, key, hint, KNOWN.join(", ")));
                         }
                     };
                     actions.push(LocatedAction { line: action_line, action });
@@ -950,7 +1016,8 @@ impl Parser {
 
         loop {
             match self.peek().clone() {
-                Token::RBracket | Token::EOF => { self.advance(); break; }
+                Token::RBracket => { self.advance(); break; }
+                Token::EOF => return Err(self.unclosed("]")),
                 Token::Comma => { self.advance(); }
                 Token::Ident(s) => {
                     self.advance();
@@ -996,7 +1063,8 @@ impl Parser {
 
         loop {
             match self.peek().clone() {
-                Token::RBracket | Token::EOF => { self.advance(); break; }
+                Token::RBracket => { self.advance(); break; }
+                Token::EOF => return Err(self.unclosed("]")),
                 Token::Comma => { self.advance(); }
                 Token::Ident(name) => {
                     self.advance();
@@ -1034,7 +1102,8 @@ impl Parser {
 
         loop {
             match self.peek().clone() {
-                Token::RBracket | Token::EOF => { self.advance(); break; }
+                Token::RBracket => { self.advance(); break; }
+                Token::EOF => return Err(self.unclosed("]")),
                 Token::Comma => { self.advance(); }
                 Token::Ident(figure) => {
                     self.advance();
@@ -1043,7 +1112,8 @@ impl Parser {
                         self.advance();
                         loop {
                             match self.peek().clone() {
-                                Token::RBracket | Token::EOF => { self.advance(); break; }
+                                Token::RBracket => { self.advance(); break; }
+                                Token::EOF => return Err(self.unclosed("]")),
                                 Token::Comma => { self.advance(); }
                                 Token::Ident(_) => calls.push(self.parse_anim_call()?),
                                 _ => { self.advance(); }
@@ -1072,23 +1142,22 @@ impl Parser {
             self.advance();
             loop {
                 match self.peek().clone() {
-                    Token::RParen | Token::EOF => { self.advance(); break; }
+                    Token::RParen => { self.advance(); break; }
+                    Token::EOF => return Err(self.unclosed(")")),
                     Token::Comma => { self.advance(); }
-                    Token::Ident(key) => {
+                    Token::Ident(key) if *self.peek_at(1) == Token::Equals => {
+                        // Paramètre nommé : to=..., path=..., ease=...
                         self.advance();
-                        if *self.peek() == Token::Equals {
-                            // Paramètre nommé : to=..., path=..., ease=...
-                            self.advance();
-                            let val = self.parse_param_value();
-                            params.push(format!("{}={}", key, val));
-                        } else if *self.peek() == Token::LParen {
-                            // Valeur appel sans nom : center(b)
-                            params.push(format!("{}{}", key, self.parse_paren_group()));
-                        } else {
-                            params.push(key);
+                        self.advance();
+                        let val = self.parse_anim_arg();
+                        params.push(format!("{}={}", key, val));
+                    }
+                    _ => {
+                        let val = self.parse_anim_arg();
+                        if !val.is_empty() {
+                            params.push(val);
                         }
                     }
-                    _ => params.push(self.parse_param_value()),
                 }
             }
         }
@@ -1096,65 +1165,80 @@ impl Parser {
         Ok(AnimCall { name, params, line })
     }
 
-    /// Une valeur de paramètre : 2s, 50%, red, #FF0000, (50%, 50%), center(b), -45
-    fn parse_param_value(&mut self) -> String {
-        match self.peek().clone() {
-            Token::LParen => self.parse_paren_group(),
-            Token::Number(n) => {
-                self.advance();
-                let mut val = n.to_string();
-                // unité collée : s, ms, px, deg, ...
-                if let Token::Ident(unit) = self.peek().clone() {
-                    if matches!(unit.as_str(), "s" | "ms" | "px" | "deg" | "rad" | "cm" | "mm" | "pt" | "em" | "cm/s" | "deg/s" | "px/s") {
-                        val.push_str(&unit);
-                        self.advance();
-                    }
-                }
-                val
-            }
-            Token::Ident(s) => {
-                self.advance();
-                if *self.peek() == Token::LParen {
-                    format!("{}{}", s, self.parse_paren_group())
-                } else {
-                    s
-                }
-            }
-            Token::Percentage(p) => { self.advance(); p }
-            Token::StringLit(s) => { self.advance(); s }
-            _ => { self.advance(); String::new() }
-        }
-    }
-
-    /// "(a, b)" → "(a,b)" ; gère les parenthèses imbriquées
-    fn parse_paren_group(&mut self) -> String {
+    /// Un argument d'animation en entier, jusqu'à la virgule ou la parenthèse fermante :
+    /// `2s`, `(50%, 50%)`, `center(b)`, `2*pi`, `-45`. Rien n'est laissé de côté : un calcul
+    /// est gardé tel quel (et calculé ou refusé plus loin), jamais tronqué.
+    fn parse_anim_arg(&mut self) -> String {
         let mut out = String::new();
         let mut depth = 0;
         loop {
             match self.peek().clone() {
-                Token::LParen => { depth += 1; out.push('('); self.advance(); }
-                Token::RParen => {
-                    depth -= 1;
-                    out.push(')');
-                    self.advance();
-                    if depth <= 0 { break; }
-                }
                 Token::EOF => break,
-                Token::Comma => { out.push(','); self.advance(); }
-                Token::Number(n) => { out.push_str(&n.to_string()); self.advance(); }
-                Token::Percentage(p) => { out.push_str(&p); self.advance(); }
-                Token::Ident(s) => { out.push_str(&s); self.advance(); }
-                Token::StringLit(s) => { out.push_str(&s); self.advance(); }
-                Token::Op(c) => { out.push(c); self.advance(); }
-                _ => { self.advance(); }
+                Token::Comma | Token::RParen if depth == 0 => break,
+                Token::LParen => { depth += 1; out.push('('); }
+                Token::RParen => { depth -= 1; out.push(')'); }
+                Token::Comma => out.push(','),
+                Token::Number(n) => out.push_str(&n.to_string()),
+                Token::Percentage(p) => out.push_str(&p),
+                Token::Ident(s) | Token::StringLit(s) => out.push_str(&s),
+                Token::Op(c) => out.push(c),
+                Token::Pipe => out.push('|'),
+                Token::Equals => out.push('='),
+                _ => {}
             }
+            self.advance();
         }
         out
     }
 
-    // ─────────────────────────────────────────────
-    //  UTILITAIRES
-    // ─────────────────────────────────────────────
+    /// Éléments d'une liste ou d'un couple, jusqu'à la fermeture `close` (déjà ouverte).
+    /// Chaque élément est gardé en entier, sans espaces : `2*pi`, `(20%,80%)`, `repere(1,2)`,
+    /// `-x/2`. Rien n'est laissé de côté : un calcul est calculé ou refusé plus loin.
+    fn parse_items(&mut self, close: Token) -> Result<Vec<String>, String> {
+        let mut items = Vec::new();
+        let mut cur = String::new();
+        let mut depth = 0usize;
+        // Deux mots ou deux nombres qui se suivent sans virgule restent séparés (signalés plus loin)
+        let mut last_word = false;
+        loop {
+            let tok = self.peek().clone();
+            if depth == 0 && tok == close {
+                self.advance();
+                break;
+            }
+            let word = matches!(tok, Token::Number(_) | Token::Ident(_) | Token::Percentage(_) | Token::StringLit(_));
+            let glue = last_word && (matches!(tok, Token::Number(_) | Token::Percentage(_)) || (matches!(tok, Token::Ident(_)) && !cur.ends_with(|c: char| c.is_ascii_digit())));
+            if glue {
+                cur.push(' ');
+            }
+            match tok {
+                Token::EOF => return Err(self.unclosed(if close == Token::RParen { ")" } else { "]" })),
+                Token::Comma if depth == 0 => {
+                    if !cur.is_empty() {
+                        items.push(std::mem::take(&mut cur));
+                    }
+                }
+                Token::Comma => cur.push(','),
+                Token::LParen => { depth += 1; cur.push('('); }
+                Token::LBracket => { depth += 1; cur.push('['); }
+                Token::RParen => { depth = depth.saturating_sub(1); cur.push(')'); }
+                Token::RBracket => { depth = depth.saturating_sub(1); cur.push(']'); }
+                Token::Number(n) => cur.push_str(&n.to_string()),
+                Token::Percentage(p) => cur.push_str(&p),
+                Token::Ident(s) | Token::StringLit(s) => cur.push_str(&s),
+                Token::Op(c) => cur.push(c),
+                Token::Pipe => cur.push('|'),
+                Token::Equals => cur.push('='),
+                _ => {}
+            }
+            last_word = word;
+            self.advance();
+        }
+        if !cur.is_empty() {
+            items.push(cur);
+        }
+        Ok(items)
+    }
 
     fn parse_ident_or_string(&mut self) -> Result<String, String> {
         match self.advance() {
@@ -1178,6 +1262,7 @@ impl Parser {
         loop {
             match self.peek().clone() {
                 Token::RBracket => { self.advance(); break; }
+                Token::EOF => return Err(self.unclosed("]")),
                 Token::Comma => { self.advance(); }
                 Token::StringLit(s) => { items.push(s); self.advance(); }
                 Token::Ident(s) => { items.push(s); self.advance(); }
@@ -1193,6 +1278,7 @@ impl Parser {
         loop {
             match self.peek().clone() {
                 Token::RBracket => { self.advance(); break; }
+                Token::EOF => return Err(self.unclosed("]")),
                 Token::Comma => { self.advance(); }
                 Token::Ident(s) => { items.push(s); self.advance(); }
                 _ => { self.advance(); }
@@ -1201,35 +1287,6 @@ impl Parser {
         Ok(items)
     }
 
-    /// Ignore une valeur simple (pour les props inconnues)
-    fn skip_value(&mut self) {
-        match self.peek().clone() {
-            Token::LBracket | Token::LParen => {
-                self.skip_bracket_content();
-            }
-            _ => { self.advance(); }
-        }
-    }
-
-    /// Ignore un contenu entre crochets/parenthèses
-    fn skip_bracket_content(&mut self) {
-        let open = self.advance();
-        let close = match open {
-            Token::LBracket => Token::RBracket,
-            Token::LParen => Token::RParen,
-            Token::LBrace => Token::RBrace,
-            _ => return,
-        };
-        let mut depth = 1;
-        while depth > 0 && *self.peek() != Token::EOF {
-            let tok = self.advance();
-            if std::mem::discriminant(&tok) == std::mem::discriminant(&open) {
-                depth += 1;
-            } else if std::mem::discriminant(&tok) == std::mem::discriminant(&close) {
-                depth -= 1;
-            }
-        }
-    }
 }
 /// Unités refusées, avec ce qu'il faut écrire à la place
 pub fn unsupported_unit(unit: &str) -> Option<String> {
@@ -1242,6 +1299,33 @@ pub fn unsupported_unit(unit: &str) -> Option<String> {
 mod tests {
     use super::*;
     use crate::lexer::tokenize;
+
+    #[test]
+    fn config_inconnue_refusee() {
+        let src = "[config]\nbackgrund : red\n[figures]\n[timeline]\n";
+        let err = parse_with_source(tokenize(src), src).unwrap_err();
+        assert!(err.contains("`backgrund` inconnue ; vouliez-vous dire `background` ?"), "{}", err);
+    }
+
+    #[test]
+    fn parametres_dans_un_modele() {
+        let src = "[figures]\ndefparam n = 3\ndefmodel m(i) =\n    type    : circle\n    center  : (50%, 50%)\n    radius  : (2*n)%\n    opacity : @i < n\ndefrepeat c = m(@i) for i in 0..3\n[timeline]\n";
+        let doc = parse_with_source(crate::lexer::tokenize(src), src).unwrap();
+        let f = doc.figures.iter().find(|f| f.name == "c_2").unwrap();
+        assert_eq!(f.properties.get("opacity"), Some(&PropValue::Single("2<n".into())));
+        assert_eq!(f.properties.get("radius"), Some(&PropValue::Single("(2*n)%".into())));
+    }
+
+    #[test]
+    fn formule_qui_commence_par_une_barre() {
+        let src = "[figures]\ndeffigure e =\n    type : equation\n    expr : |x| + 1\n    pos  : (50%, 50%)\n[timeline]\n";
+        let doc = parse_with_source(crate::lexer::tokenize(src), src).unwrap();
+        assert_eq!(doc.figures[0].properties.get("expr"), Some(&PropValue::Single("|x| + 1".into())));
+        // Un vrai bloc reste un bloc
+        let src = "[figures]\ndeffigure t =\n    type : latex\n    content : |\n        a\n        b\n[timeline]\n";
+        let doc = parse_with_source(crate::lexer::tokenize(src), src).unwrap();
+        assert_eq!(doc.figures[0].properties.get("content"), Some(&PropValue::Block("a\nb".into())));
+    }
 
     #[test]
     fn expr_lue_telle_quelle() {

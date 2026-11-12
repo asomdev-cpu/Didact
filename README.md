@@ -59,13 +59,13 @@ Le compilateur lit ce fichier et ouvre une fenêtre avec l'animation — comme m
 
 ## Documentation
 
-Trois documents complémentaires :
-
 | Document | Pour qui |
 |---|---|
-| [**SPEC.md**](SPEC.md) | Utilisateurs — comment écrire un fichier `.dct` |
-| [**ARCHITECTURE.md**](ARCHITECTURE.md) | Développeurs — comment fonctionne le compilateur |
-| [**DECISIONS.md**](DECISIONS.md) | Tous — journal de design, état d'avancement, roadmap |
+| [**REFERENCE.md**](Readme/REFERENCE.md) | Tous (et les IA) — tout le langage sur une page |
+| [**SPEC.md**](Readme/SPEC.md) | Utilisateurs — la référence complète pour écrire un fichier `.dct` |
+| [**ARCHITECTURE.md**](Readme/ARCHITECTURE.md) | Développeurs — comment fonctionne le compilateur |
+| [**DECISIONS.md**](Readme/DECISIONS.md) | Tous — journal de design, état d'avancement, roadmap |
+| [**WEB.md**](Readme/WEB.md) | Intégrer une animation dans une page web |
 
 ---
 
@@ -96,9 +96,8 @@ Toutes les options : `cargo run -- --help`.
 ```
 didact/
 ├── README.md            ← ce fichier
-├── SPEC.md              ← documentation du langage
-├── ARCHITECTURE.md      ← documentation technique
-├── DECISIONS.md         ← journal de design
+├── Readme/              ← REFERENCE, SPEC, ARCHITECTURE, DECISIONS, WEB
+├── demo_*.dct           ← démos (une par thème)
 ├── exemple.dct          ← exemple complet
 ├── Cargo.toml
 └── src/
@@ -114,7 +113,7 @@ didact/
 
 Le projet est aux tout débuts. Pour contribuer :
 
-1. Lire `SPEC.md` (comprendre le langage)
+1. Lire `Readme/REFERENCE.md` puis `Readme/SPEC.md` (comprendre le langage)
 2. Lire `ARCHITECTURE.md` (comprendre le compilateur)
 3. Lire `DECISIONS.md` (voir ce qui est prioritaire)
 4. Ouvrir une issue ou une PR
@@ -123,4 +122,4 @@ Le projet est aux tout débuts. Pour contribuer :
 
 ## Licence
 
-MIT — voir [LICENSE](LICENSE).
+MIT — voir [LICENSE](LICENSE).

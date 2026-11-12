@@ -13,7 +13,7 @@ deffigure titre =
     type    : text
     content : "L'intégrale de Gauss"
     pos     : (50%, 92%)
-    font    : 56px
+    size    : 56px
 
 # Formule seule : le LaTeX est lu jusqu'à la fin de la ligne
 deffigure gauss =
@@ -27,7 +27,7 @@ deffigure gauss =
 deffigure calcul =
     type    : latex
     pos     : (27%, 38%)
-    font    : 36px
+    size    : 36px
     content : |
         \begin{aligned}
         I^2 &= \int_{\mathbb{R}^2} e^{-(x^2+y^2)} \, dx \, dy \\
@@ -39,7 +39,7 @@ deffigure calcul =
 deffigure valeurs =
     type   : table
     pos    : (75%, 38%)
-    font   : 32px
+    size   : 32px
     header : ["$x$", "$e^{-x^2}$"]
     rows   : |
         $0$ | $1$
@@ -52,7 +52,7 @@ deffigure note =
     type    : text
     content : "Variance : $\sigma^2 = \frac{1}{n}\sum_{i=1}^{n}(x_i-\mu)^2$, rotation : $\begin{pmatrix} \cos\theta & -\sin\theta \\ \sin\theta & \cos\theta \end{pmatrix}$"
     pos     : (50%, 17%)
-    font    : 28px
+    size    : 28px
     color   : #374151
 
 [timeline]

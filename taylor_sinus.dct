@@ -27,13 +27,13 @@ deffigure titre =
     type    : text
     content : "Approcher $\sin(x)$ par des polynômes"
     pos     : (50%, 55%)
-    font    : 72px
+    size    : 72px
 
 deffigure sous_titre =
     type    : text
     content : "Les séries de Taylor"
     pos     : (50%, 42%)
-    font    : 44px
+    size    : 44px
     color   : #6B7280
 
 # --- Repère ---
@@ -63,7 +63,7 @@ deffigure nom_sinus =
     type    : text
     content : "$\sin(x)$"
     pos     : repere(4.4, 1.4)
-    font    : 36px
+    size    : 36px
     color   : #2563EB
 
 # --- Les polynômes de Taylor (en 0) ---
@@ -108,7 +108,7 @@ deffigure idee =
 un polynôme qui lui ressemble
 autour de $x = 0$"
     pos     : (83.5%, 74%)
-    font    : 34px
+    size    : 34px
 
 deffigure eq_t1 =
     type  : equation
@@ -144,7 +144,7 @@ deffigure remarque =
 étend la zone où l'approximation
 est bonne"
     pos     : (83.5%, 28%)
-    font    : 30px
+    size    : 30px
     color   : #4B5563
 
 # --- Conclusion ---

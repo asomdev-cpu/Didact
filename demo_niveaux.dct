@@ -127,7 +127,7 @@ deffigure espace =
     yrange : [-1.5, 3.5]
     zrange : [0, 5]
     camera : (30, -60)
-    axes   : lines
+    frame   : lines
     color  : #9CA3AF
 
 deffigure f =

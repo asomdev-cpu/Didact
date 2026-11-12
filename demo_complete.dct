@@ -37,7 +37,7 @@ defstyle contour_epais =
     stroke  : 6px
 
 defstyle titre_chapitre =
-    font  : 44px
+    size  : 44px
     color : #111827
 
 # ═════════════════════════════════════════════════════════════
@@ -162,7 +162,7 @@ deffigure a_texte =
     type    : text
     content : "Bonjour !"
     pos     : (80%, 58%)
-    font    : 64px
+    size    : 64px
 
 deffigure a_piste =
     type   : line
@@ -213,13 +213,13 @@ deffigure s_nom =
     type    : text
     content : "Soleil"
     pos     : (45%, 38%)
-    font    : 36px
+    size    : 36px
     color   : #B45309
 
 # … et décalées toutes ensemble par le groupe : pos = décalage (ici 20 % vers la gauche)
 defgroup soleil =
     items : [s_halo, s_coeur, s_nom]
-    pos   : (-20%, 0%)
+    offset   : (-20%, 0%)
 
 # transform : le carré se déforme en cercle, qui le remplace
 deffigure tr_carre =
@@ -315,7 +315,7 @@ deffigure r_label =
     type    : text
     content : "$\theta$"
     pos     : offset(r_arc, 4%)
-    font    : 44px
+    size    : 44px
     color   : purple
 
 # Tout le chapitre, pour le faire disparaître d'un coup
@@ -363,14 +363,14 @@ deffigure g_nom_sin =
     type    : text
     content : "$\sin(x)$"
     pos     : g_repere(2.4, 1.2)
-    font    : 32px
+    size    : 32px
     color   : #2563EB
 
 deffigure g_nom_parab =
     type    : text
     content : "$\frac{x^2}{4} - 1$"
     pos     : g_repere(-3.1, 1.8)
-    font    : 32px
+    size    : 32px
     color   : #16A34A
 
 # Placé avec les coordonnées du repère : (1, f(1)) sur la parabole
@@ -438,7 +438,7 @@ deffigure l_texte =
     content : "Du texte sur plusieurs lignes,
 avec des maths en ligne : $\frac{a}{b}$, $\sqrt{2}$, $e^{i\pi} + 1 = 0$"
     pos     : (50%, 78%)
-    font    : 34px
+    size    : 34px
 
 # Formule seule : LaTeX lu jusqu'à la fin de la ligne
 deffigure l_integrale =
@@ -458,7 +458,7 @@ deffigure l_matrice =
 deffigure l_bloc =
     type    : latex
     pos     : (72%, 52%)
-    font    : 46px
+    size    : 46px
     content : |
         \begin{aligned}
         (a+b)^2 &= a^2 + 2ab + b^2 \\
@@ -469,7 +469,7 @@ deffigure l_bloc =
 deffigure l_table =
     type   : table
     pos    : (72%, 22%)
-    font   : 38px
+    size   : 38px
     header : ["$n$", "$n!$", "$2^n$"]
     rows   : |
         $1$ | $1$   | $2$
@@ -489,13 +489,13 @@ deffigure fin =
     type    : text
     content : "Fin de la démo"
     pos     : (50%, 55%)
-    font    : 72px
+    size    : 72px
 
 deffigure fin_sous =
     type    : text
     content : "Tout ce que vous avez vu tient dans un fichier texte de quelques ko."
     pos     : (50%, 42%)
-    font    : 32px
+    size    : 32px
     color   : #6B7280
 
 [timeline]

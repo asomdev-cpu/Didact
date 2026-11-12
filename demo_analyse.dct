@@ -1,0 +1,58 @@
+# ─────────────────────────────────────────────
+#  Analyse : deffunction, riemann, tangent, frame, below
+#  didact demo_analyse.dct
+# ─────────────────────────────────────────────
+
+[config]
+window : [16:9]
+[figures]
+deffunction f(x) = 0.5*x^2 - 1
+defparam a = 1
+defparam N = 4
+deffigure r =
+    type : axes
+    from : (5%, 10%)
+    to : (55%, 90%)
+    xrange : [-3, 3]
+    yrange : [-2, 4]
+deffigure p =
+    type : plot
+    axes : r
+    expr : f(x)
+    color : blue
+deffigure s =
+    type : riemann
+    axes : r
+    expr : f(x)
+    xrange : [0, 2.5]
+    n : N
+    method : mid
+    color : orange
+deffigure tg =
+    type : tangent
+    axes : r
+    expr : f(x)
+    at : a
+    color : red
+deffigure e =
+    type : equation
+    expr : \int_0^{2.5} f(x)\,dx \approx \sum_{i=1}^{N} f(x_i)\,\Delta x
+    pos : (78%, 30%)
+deffigure fr =
+    type : frame
+    around : e
+    part : "\sum_{i=1}^{N}"
+    color : red
+    corner_radius : 1%
+deffigure note =
+    type : text
+    content : "somme de Riemann"
+    pos : below(e, 3%)
+[timeline]
+0.000 => { start : [r, p, s, tg, e, fr, note] }
+1.000 => {
+    anim    : [a to(-2, 2s), N to(20, 2s)]
+    comment : ["Plus de rectangles : la somme approche l'intégrale."]
+}
+
+3.500 => { comment : none }

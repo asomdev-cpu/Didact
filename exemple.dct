@@ -97,7 +97,7 @@ deffigure label_theta =
     content : "$\theta$"
     pos     : offset(arc_theta, 1%)
     color   : red
-    font    : 20px
+    size    : 20px
 
 [timeline]
 

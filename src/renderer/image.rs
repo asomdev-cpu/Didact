@@ -15,7 +15,7 @@
 //! - Fichiers : lus à côté du `.dct` (natif, `set_base_dir`), ou donnés par le lecteur web
 //!   (`register`), qui les télécharge d'après `files`.
 
-use super::geometry::{anchor_frac, length, point, require, Raster, Refs, Rgba, Scene, Shape};
+use super::geometry::{length, point, require, Raster, Refs, Rgba, Scene, Shape};
 use crate::ast::PropValue;
 use crate::renderer::geometry::PathCmd;
 use crate::resolver::{fmt_value, ResolvedFigure};
@@ -195,10 +195,7 @@ pub fn shapes(f: &ResolvedFigure, scene: &Scene, refs: &Refs, opacity: f32) -> R
     let size = length(require(f, "size")?, scene, scene.min_side())?;
     let (w, h) = if nw >= nh { (size, size * nh / nw) } else { (size * nw / nh, size) };
     let (x, y) = point(require(f, "pos")?, scene, refs)?;
-    let (fx, fy) = match f.properties.get("anchor") {
-        Some(a) => anchor_frac(&fmt_value(a))?,
-        None => (0.5, 0.5),
-    };
+    let (fx, fy) = super::geometry::anchor_of(f)?.unwrap_or((0.5, 0.5));
     let (left, top) = (x - fx * w, y - fy * h);
     // Coins dans l'ordre haut-gauche, haut-droit, bas-droit, bas-gauche : l'image suit
     // ce cadre même tourné (rotate) ou agrandi (scale, grow)

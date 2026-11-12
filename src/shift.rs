@@ -17,7 +17,7 @@ fn ms(t: f64) -> f64 {
     (t * 1000.0).round() / 1000.0
 }
 
-/// Instants des blocs du fichier, avec leur ligne
+/// Blocs du fichier dans l'ordre d'écriture : (ligne, instant)
 fn blocks(source: &str) -> Result<Vec<(usize, f64)>, String> {
     let tokens = crate::lexer::tokenize(source);
     let doc = crate::parser::parse_with_source(tokens, source)?;
@@ -67,11 +67,14 @@ pub fn shift(source: &str, start: f64, delta: f64) -> Result<(String, Vec<Moved>
         }
     }
 
-    // Réécriture : sur chaque ligne d'un bloc décalé, le nombre juste avant `=>`
+    // Ce qu'il faut réécrire : (ligne, ancien instant, nouvel instant)
+    let edits: Vec<(usize, f64, f64)> = moved.iter().map(|m| (m.line, m.from, m.to)).collect();
+
+    // Réécriture : sur chaque ligne concernée, le nombre juste avant `=>`
     let mut out = String::with_capacity(source.len() + 16);
     let mut replaced = 0;
     for (i, text) in source.split_inclusive('\n').enumerate() {
-        let here: Vec<&Moved> = moved.iter().filter(|m| m.line == i + 1).collect();
+        let here: Vec<(f64, f64)> = edits.iter().filter(|e| e.0 == i + 1).map(|e| (e.1, e.2)).collect();
         if here.is_empty() {
             out.push_str(text);
             continue;
@@ -80,8 +83,8 @@ pub fn shift(source: &str, start: f64, delta: f64) -> Result<(String, Vec<Moved>
         replaced += n;
         out.push_str(&new_text);
     }
-    if replaced != moved.len() {
-        return Err(format!("{} bloc(s) à décaler, {} trouvé(s) dans le texte : fichier non modifié", moved.len(), replaced));
+    if replaced != edits.len() {
+        return Err(format!("{} bloc(s) à réécrire, {} trouvé(s) dans le texte : fichier non modifié", edits.len(), replaced));
     }
 
     // Vérification : le nouveau fichier se relit, avec exactement les instants attendus
@@ -96,11 +99,12 @@ pub fn shift(source: &str, start: f64, delta: f64) -> Result<(String, Vec<Moved>
     Ok((out, moved))
 }
 
-/// Remplace, sur une ligne, les timestamps suivis de `=>` qui correspondent à un bloc décalé
-fn rewrite_line(text: &str, moved: &[&Moved]) -> (String, usize) {
+/// Remplace, sur une ligne, les nombres suivis de `=>` qui valent `from` par `to` : (from, to)
+fn rewrite_line(text: &str, edits: &[(f64, f64)]) -> (String, usize) {
     let bytes = text.as_bytes();
     let mut out = String::with_capacity(text.len() + 8);
     let (mut i, mut last, mut count) = (0, 0, 0);
+    let mut done = vec![false; edits.len()];
     while i < bytes.len() {
         let starts_number = bytes[i].is_ascii_digit()
             && (i == 0 || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'.' || bytes[i - 1] == b'_'));
@@ -120,9 +124,10 @@ fn rewrite_line(text: &str, moved: &[&Moved]) -> (String, usize) {
             continue;
         }
         let Ok(t) = text[begin..i].parse::<f64>() else { continue };
-        if let Some(m) = moved.iter().find(|m| m.from == ms(t)) {
+        if let Some(k) = (0..edits.len()).find(|&k| !done[k] && edits[k].0 == ms(t)) {
+            done[k] = true;
             out.push_str(&text[last..begin]);
-            out.push_str(&format!("{:.3}", m.to));
+            out.push_str(&format!("{:.3}", edits[k].1));
             last = i;
             count += 1;
         }

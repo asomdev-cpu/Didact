@@ -237,6 +237,21 @@ impl RenderBackend for BoxBackend {
     }
 }
 
+/// Boîtes des figures dessinées à l'instant t (pixels, origine en haut à gauche), et la taille
+/// de l'image ; pour les tests
+pub fn boxes_at(source: &str, t: f64) -> Result<(HashMap<String, Rect>, (u32, u32)), Vec<String>> {
+    let (resolved, timeline) = crate::load(source)?;
+    let (w, h) = Scene::default_size(&resolved.config);
+    let scene = Scene::new(&resolved.config, w, h);
+    let frame = timeline.frame_at(t, None);
+    let mut backend = BoxBackend::default();
+    let problems = renderer::render_frame(&frame, &scene, &mut backend);
+    if !problems.is_empty() {
+        return Err(problems.into_iter().map(|(n, r)| format!("{} : {}", n, r)).collect());
+    }
+    Ok((backend.boxes.into_iter().collect(), (w, h)))
+}
+
 /// Ce que la figure autorise : (sortir du cadre, chevaucher)
 fn allowed(v: Option<&PropValue>) -> (bool, bool) {
     let words: Vec<String> = match v {
@@ -259,8 +274,10 @@ pub fn layout(resolved: &ResolvedDocument, timeline: &Timeline, lang: Option<&st
     let duration = timeline.duration();
     let mut times: Vec<f64> = timeline.times().to_vec();
     times.extend(timeline.anim_ends());
-    let steps = (duration / 0.25).ceil() as usize;
-    times.extend((0..=steps).map(|i| (i as f64 * 0.25).min(duration)));
+    // (au plus 20 000 instants : pas plus large pour une timeline de plusieurs heures)
+    let step = (duration / 20_000.0).max(0.25);
+    let steps = (duration / step).ceil() as usize;
+    times.extend((0..=steps).map(|i| (i as f64 * step).min(duration)));
     times.retain(|t| t.is_finite() && *t >= 0.0 && *t <= duration + 1e-9);
     times.sort_by(f64::total_cmp);
     times.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
@@ -484,6 +501,93 @@ pub fn unused(doc: &crate::ast::Document) -> Vec<Diagnostic> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cercle_en_unites_du_repere() {
+        let src = "[config]\nwindow : [1000, 1000]\n[figures]\ndefparam a = 2\n\
+                   deffigure r =\n    type : axes\n    from : (0%, 0%)\n    to : (100%, 100%)\n    xrange : [-5, 5]\n    yrange : [-5, 5]\n    ticks : false\n\
+                   deffigure c =\n    type : circle\n    axes : r\n    center : r(1, 0)\n    radius : 1\n\
+                   deffigure e =\n    type : circle\n    axes : r\n    center : r(0, 0)\n    radius : (a, 1)\n\
+                   [timeline]\n0.000 => { start : [r, c, e] }\n";
+        let (b, _) = boxes_at(src, 0.0).unwrap();
+        // 100 px par unité ; trait de 2 px
+        let c = b["c"];
+        assert!((c.2 - c.0 - 202.0).abs() < 1.0 && (c.0 - 499.0).abs() < 1.0, "{:?}", c);
+        let e = b["e"];
+        assert!((e.2 - e.0 - 402.0).abs() < 1.0 && (e.3 - e.1 - 202.0).abs() < 1.0, "{:?}", e);
+    }
+
+    #[test]
+    fn morceaux_et_placement_relatif() {
+        let src = "[config]\nwindow : [1000, 1000]\n[figures]\n\
+                   deffigure e =\n    type : equation\n    expr : x^2 + \\frac{a}{b}\n    pos : (50%, 50%)\n\
+                   deffigure r =\n    type : rect\n    pos : center(e, part=\"\\frac{a}{b}\")\n    width : 1%\n    height : 1%\n\
+                   deffigure d =\n    type : rect\n    pos : below(e, 2%, left)\n    width : 4%\n    height : 4%\n\
+                   deffigure g =\n    type : text\n    content : \"Mot\"\n    pos : right_of(e, 1%)\n\
+                   [timeline]\n0.000 => { start : [e, r, d, g] }\n";
+        let (b, _) = boxes_at(src, 0.0).unwrap();
+        let (e, r, d, g) = (b["e"], b["r"], b["d"], b["g"]);
+        let mid = |b: Rect| ((b.0 + b.2) / 2.0, (b.1 + b.3) / 2.0);
+        // La fraction est dans la moitié droite de la formule
+        assert!(mid(r).0 > mid(e).0 && mid(r).0 < e.2, "{:?} {:?}", r, e);
+        // Sous la formule, alignée à gauche, 20 px plus bas (trait de 2 px)
+        assert!((d.1 - e.3 - 20.0).abs() < 3.0 && (d.0 - e.0).abs() < 3.0, "{:?} {:?}", d, e);
+        // À droite, centrée verticalement
+        assert!((g.0 - e.2 - 10.0).abs() < 4.0 && (mid(g).1 - mid(e).1).abs() < 8.0, "{:?} {:?}", g, e);
+    }
+
+    #[test]
+    fn cadre_riemann_tangente_reperes_alignes() {
+        let src = "[config]\nwindow : [1000, 1000]\n[figures]\ndeffunction f(x) = x\n\
+                   deffigure r =\n    type : axes\n    from : (0%, 50%)\n    to : (100%, 100%)\n    xrange : [-5, 5]\n    yrange : [-2.5, 2.5]\n    ticks : false\n\
+                   deffigure r2 =\n    type : axes\n    from : (30%, 0%)\n    to : (60%, 50%)\n    xrange : [0, 2]\n    yrange : [-1, 1]\n    ticks : false\n    align_x : r\n\
+                   deffigure s =\n    type : riemann\n    axes : r\n    expr : f(x)\n    xrange : [0, 2]\n    n : 4\n    stroke : 0px\n\
+                   deffigure t =\n    type : tangent\n    axes : r\n    expr : f(x)^2\n    at : 1\n    length : 2\n\
+                   deffigure e =\n    type : equation\n    expr : a + b\n    pos : (50%, 20%)\n\
+                   deffigure c =\n    type : frame\n    around : e\n    padding : 10px\n    stroke : 0px\n    fill : red\n\
+                   [timeline]\n0.000 => { start : [r, r2, s, t, e, c] }\n";
+        let (b, _) = boxes_at(src, 0.0).unwrap();
+        // 100 px par unité ; rectangles de 0 à 2 en x, hauteur max f(1.5) = 1.5 (gauche)
+        let s = b["s"];
+        assert!((s.0 - 500.0).abs() < 1.0 && (s.2 - 700.0).abs() < 1.0 && (s.3 - s.1 - 150.0).abs() < 1.0, "{:?}", s);
+        // Tangente à x² en 1 : pente 2, longueur 2 → largeur 2/√5 unités
+        let t = b["t"];
+        assert!((t.2 - t.0 - 200.0 / 5f32.sqrt()).abs() < 4.0, "{:?}", t);
+        // r2 aligné sur r : x = 0 à la même colonne (500 px), mêmes unités
+        let r2 = b["r2"];
+        assert!((r2.0 - 500.0).abs() < 8.0 && (r2.2 - 700.0).abs() < 2.0 && (r2.3 - r2.1 - 200.0).abs() < 3.0, "{:?}", r2);
+        // Cadre : la formule plus 10 px de chaque côté
+        let (e, c) = (b["e"], b["c"]);
+        assert!((e.0 - c.0 - 10.0).abs() < 1.5 && (c.3 - e.3 - 10.0).abs() < 1.5, "{:?} {:?}", e, c);
+    }
+
+    #[test]
+    fn courbes_partielles_et_parametrees() {
+        let src = |t: &str| {
+            format!(
+                "[config]\nwindow : [1000, 1000]\n[figures]\ndefparam T = {}\n\
+                 deffigure r =\n    type : axes\n    from : (0%, 0%)\n    to : (100%, 100%)\n    xrange : [-5, 5]\n    yrange : [-5, 5]\n    ticks : false\n\
+                 deffigure c =\n    type : curve\n    axes : r\n    expr : (cos(t), sin(t))\n    t : [0, T]\n\
+                 deffigure p =\n    type : curve\n    axes : r\n    polar : 2\n\
+                 deffigure s =\n    type : plot\n    axes : r\n    expr : 1\n    xrange : [0, T]\n\
+                 [timeline]\n0.000 => {{ start : [r, c, p, s] }}\n",
+                t
+            )
+        };
+        // Demi-cercle (T = π) : de x = -1 à 1, y de 0 à 1 ; cercle polaire complet de rayon 2
+        let (b, _) = boxes_at(&src("3.14159265"), 0.0).unwrap();
+        let unit = 100.0; // 1000 px pour 10 unités
+        let c = b["c"];
+        assert!((c.2 - c.0 - 2.0 * unit).abs() < 4.0 && (c.3 - c.1 - unit).abs() < 4.0, "{:?}", c);
+        let p = b["p"];
+        assert!((p.2 - p.0 - 4.0 * unit).abs() < 4.0 && (p.3 - p.1 - 4.0 * unit).abs() < 4.0, "{:?}", p);
+        // plot sur [0, π] seulement
+        let s = b["s"];
+        assert!((s.0 - 500.0).abs() < 3.0 && (s.2 - (500.0 + 3.14159 * unit)).abs() < 3.0, "{:?}", s);
+        // T = 0 : rien de tracé
+        let (b, _) = boxes_at(&src("0"), 0.0).unwrap();
+        assert!(!b.contains_key("c") && !b.contains_key("s"));
+    }
 
     #[test]
     fn messages_decoupes() {

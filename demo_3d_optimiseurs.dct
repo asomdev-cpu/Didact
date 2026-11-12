@@ -72,7 +72,7 @@ deffigure bille =
     glow   : 10px
 
 defstyle legende =
-    font  : 34px
+    size  : 34px
     align : left
 
 deffigure l_gd =

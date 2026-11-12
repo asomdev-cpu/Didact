@@ -19,11 +19,11 @@ use std::collections::HashMap;
 //  LISTES DE RÉFÉRENCE (tirées de SPEC.md)
 // ─────────────────────────────────────────────
 
-/// Types de figures acceptés (§8, §10, §14)
-const FIGURE_TYPES: &[&str] = &[
+/// Types de figures acceptés (SPEC §6, §10)
+pub(crate) const FIGURE_TYPES: &[&str] = &[
     "line", "circle", "rect", "polygon", "arc", "star",
     "text", "equation", "latex", "table",
-    "axes", "plot", "scatter", "histogram", "grid", "contour", "region", "pixels", "trajectory", "graph", "array",
+    "axes", "plot", "curve", "frame", "brace", "tangent", "riemann", "scatter", "histogram", "grid", "contour", "region", "pixels", "trajectory", "graph", "array",
     "image",
     "raw.latex", "raw.matplotlib",
     "group",
@@ -31,22 +31,124 @@ const FIGURE_TYPES: &[&str] = &[
     "cube", "box", "sphere", "cylinder", "cone", "plane", "polyhedron",
 ];
 
-/// Animations acceptées (§11)
-const ANIMATIONS: &[&str] = &[
+/// Propriétés de toute figure
+pub(crate) const COMMON_PROPS: &[&str] = &["type", "style", "color", "fill", "opacity", "stroke", "layer", "glow", "allow", "rotate", "clip"];
+/// Figures 2D : placées dans un repère et déformables (SPEC §6.7)
+pub(crate) const PLANE_PROPS: &[&str] = &["axes", "matrix", "map", "cmap", "amount"];
+/// Objets 3D
+pub(crate) const SPACE_PROPS: &[&str] = &["scene", "shading", "tube", "map", "matrix", "amount", "resolution", "center"];
+
+/// Propriétés propres à chaque type (en plus des communes) ; None : pas vérifiées
+pub fn type_props(ftype: &str) -> Option<(&'static [&'static str], &'static [&'static str])> {
+    let own: &[&str] = match ftype {
+        "line" => &["from", "to", "arrow", "extend"],
+        "circle" => &["center", "radius"],
+        "rect" => &["pos", "width", "height", "corner_radius", "anchor"],
+        "polygon" => &["points", "closed", "sides", "center", "radius"],
+        "arc" => &["center", "radius", "from_angle", "to_angle", "arrow"],
+        "star" => &["pos", "size", "points", "inner"],
+        "text" => &["content", "pos", "size", "align", "anchor"],
+        "equation" => &["expr", "pos", "size", "align", "anchor"],
+        "latex" | "raw.latex" => &["content", "code", "pos", "size", "align", "anchor"],
+        "table" => &["header", "rows", "pos", "size", "align", "anchor"],
+        "axes" => &["from", "to", "xrange", "yrange", "xlabel", "ylabel", "grid", "ticks", "equal", "step", "center", "zoom", "same_scale", "align_x", "align_y"],
+        "plot" => &["expr", "samples", "xrange"],
+        "curve" => &["expr", "polar", "t", "samples"],
+        "frame" => &["around", "part", "padding", "corner_radius"],
+        "brace" => &["from", "to", "size"],
+        "tangent" => &["expr", "at", "length"],
+        "riemann" => &["expr", "xrange", "n", "method"],
+        "grid" => &["step", "xrange", "yrange"],
+        "scatter" => &["points", "size", "marker", "count", "x", "y", "where"],
+        "histogram" => &["data", "bins", "range", "density", "count", "sample"],
+        "contour" => &["expr", "levels", "colormap", "resolution", "xrange", "yrange"],
+        "region" => &["upper", "lower", "where", "xrange", "yrange", "resolution"],
+        "pixels" => &["expr", "domain", "bands", "escape", "z0", "iterations", "bailout", "inside", "colormap", "crange", "resolution"],
+        "trajectory" => &["axes", "scene", "vars", "ode", "init", "count", "duration", "dt", "trail", "head", "colormap", "tube"],
+        "graph" => &["nodes", "edges", "weights", "layout", "root", "positions", "pos", "size", "radius", "label_color", "labels", "font", "anchor", "initial", "accepting"],
+        "array" => &["values", "pos", "cell", "brackets", "grid", "grid_color", "font", "anchor"],
+        "image" => &["file", "pos", "size", "anchor"],
+        "group" => &["items", "offset"],
+        "scene3d" => &["xrange", "yrange", "zrange", "camera", "projection", "fov", "zoom", "target", "equal", "box", "light", "ambient", "frame", "floor", "labels", "from", "to"],
+        "surface" => &["expr", "xrange", "yrange", "urange", "vrange", "grid", "colormap", "color_by", "crange", "levels", "levels_on", "level_color", "level_stroke"],
+        "curve3d" => &["expr", "t", "samples", "points", "markers"],
+        "iterate" => &["axes", "vars", "init", "update", "steps", "on", "start", "method", "rate", "beta", "beta2", "eps", "lift", "drape", "markers"],
+        "arrow" => &["from", "to", "head", "axes"],
+        "field" => &["axes", "expr", "density", "length", "normalize", "colormap", "xrange", "yrange", "zrange"],
+        "cube" | "box" | "plane" => &["size", "grid"],
+        "sphere" => &["radius"],
+        "cylinder" | "cone" => &["radius", "height"],
+        "polyhedron" => &["points", "faces"],
+        _ => return None,
+    };
+    let space = matches!(
+        ftype,
+        "scene3d" | "surface" | "curve3d" | "iterate" | "arrow" | "field" | "cube" | "box" | "sphere" | "cylinder" | "cone" | "plane" | "polyhedron" | "trajectory"
+    );
+    Some((own, if space { SPACE_PROPS } else { PLANE_PROPS }))
+}
+
+/// Tous les noms de propriétés connus (pour vérifier les styles)
+fn all_props() -> Vec<&'static str> {
+    let mut all: Vec<&str> = COMMON_PROPS.iter().chain(PLANE_PROPS).chain(SPACE_PROPS).copied().collect();
+    for t in FIGURE_TYPES {
+        if let Some((own, _)) = type_props(t) {
+            all.extend(own.iter().copied());
+        }
+    }
+    all.extend(["extends"]);
+    all.sort();
+    all.dedup();
+    all
+}
+
+/// Le nom le plus proche d'un mot mal écrit (au plus 2 fautes, ou un préfixe/suffixe ajouté)
+pub fn suggest<'a>(word: &str, candidates: &[&'a str]) -> Option<&'a str> {
+    fn dist(a: &str, b: &str) -> usize {
+        let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+        let mut prev: Vec<usize> = (0..=b.len()).collect();
+        for i in 1..=a.len() {
+            let mut cur = vec![i; b.len() + 1];
+            for j in 1..=b.len() {
+                let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
+                cur[j] = (prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + cost);
+            }
+            prev = cur;
+        }
+        prev[b.len()]
+    }
+    let w = word.to_lowercase();
+    candidates
+        .iter()
+        .map(|c| (dist(&w, c), *c))
+        .filter(|(d, c)| {
+            // début commun : `easing` → `ease`, `colormaps` → `colormap`
+            let common = w.chars().zip(c.chars()).take_while(|(a, b)| a == b).count();
+            *d <= 2.min(c.len() / 2 + 1) || (common >= 3 && common + 1 >= c.len())
+        })
+        .min_by_key(|(d, _)| *d)
+        .map(|(_, c)| c)
+}
+
+/// Animations acceptées (SPEC §9)
+pub(crate) const ANIMATIONS: &[&str] = &[
     "fadein", "slidein", "grow", "write", "draw",
     "move", "follow", "rotate",
     "color", "scale", "transform",
     "fadeout", "slideout", "shrink",
-    "to", "rotate3d", "fill",
+    "to", "rotate3d", "fill", "swap",
 ];
 
-/// Fonctions de référence dynamique dont le 1er argument est une figure (§12)
-const REF_FUNCTIONS: &[&str] = &["center", "angle", "offset", "auto_tangent"];
+/// Fonctions de référence dynamique dont le 1er argument est une figure (SPEC §7)
+pub(crate) const REF_FUNCTIONS: &[&str] = &[
+    "center", "angle", "offset", "auto_tangent", "top", "bottom", "left", "right", "topleft", "topright", "bottomleft",
+    "bottomright", "below", "above", "left_of", "right_of", "start", "end", "vertex", "side",
+];
 
 /// Propriétés dont la valeur est du texte libre (LaTeX, maths, code) :
 /// on n'y cherche pas de références. Ex : `expr : sin(x)` n'est pas un appel.
 const FREE_TEXT_PROPS: &[&str] =
-    &["type", "expr", "content", "code", "rows", "header", "color_by", "update", "init", "vars", "map", "cmap", "matrix", "amount", "upper", "lower", "where", "domain", "escape", "z0", "ode", "nodes", "edges", "weights", "values", "positions", "layout", "root", "labels", "sample", "x", "y", "allow"];
+    &["type", "expr", "polar", "part", "content", "code", "rows", "header", "color_by", "update", "init", "vars", "map", "cmap", "matrix", "amount", "upper", "lower", "where", "domain", "escape", "z0", "ode", "nodes", "edges", "weights", "values", "positions", "layout", "root", "labels", "sample", "x", "y", "allow"];
 
 // ─────────────────────────────────────────────
 //  STRUCTURES INTERNES
@@ -181,6 +283,10 @@ impl Validator {
         all.sort_by_key(|(index, _, _, _)| *index);
 
         for (index, line, name, kind) in all {
+            // `top`, `below`, `center`, ... : un repère de ce nom se confondrait avec la fonction
+            if REF_FUNCTIONS.contains(&name) {
+                self.error(line, format!("'{}' : ce nom est réservé (fonction de position) ; choisir un autre nom", name));
+            }
             if let Some(first) = self.defs.get(name) {
                 let first_line = first.line;
                 self.error(line, format!("'{}' est défini deux fois (déjà à la ligne {})", name, first_line));
@@ -273,6 +379,17 @@ impl Validator {
                 let line = s.prop_lines.get("extends").copied().unwrap_or(s.line);
                 self.check_ref(line, &s.name, s.index, parent, Expected::Style);
             }
+            // Un style sert à plusieurs types : seuls les noms inconnus de tous sont des erreurs
+            let all = all_props();
+            let mut names: Vec<&String> = s.properties.keys().collect();
+            names.sort();
+            for key in names {
+                if !all.contains(&key.as_str()) {
+                    let line = s.prop_lines.get(key).copied().unwrap_or(s.line);
+                    let hint = suggest(key, &all).map(|h| format!(" ; vouliez-vous dire `{}` ?", h)).unwrap_or_default();
+                    self.error(line, format!("style '{}' : propriété `{}` inconnue{}", s.name, key, hint));
+                }
+            }
         }
     }
 
@@ -291,7 +408,33 @@ impl Validator {
             if ftype.is_empty() {
                 self.error(f.line, format!("'{}' : propriété `type` manquante", f.name));
             } else if !FIGURE_TYPES.contains(&ftype) {
-                self.error(line_of("type"), format!("'{}' : type inconnu '{}'", f.name, ftype));
+                let hint = suggest(ftype, FIGURE_TYPES).map(|s| format!(" ; vouliez-vous dire `{}` ?", s)).unwrap_or_default();
+                self.error(line_of("type"), format!("'{}' : type inconnu '{}'{} (types : {})", f.name, ftype, hint, FIGURE_TYPES.join(", ")));
+            }
+
+            // Propriétés inconnues pour ce type : une faute de frappe ou une propriété d'un autre
+            // type n'est jamais ignorée en silence (celles d'un style le sont : un style sert à
+            // plusieurs types)
+            if let Some((own, family)) = type_props(ftype) {
+                let mut names: Vec<&String> = f.properties.keys().collect();
+                names.sort();
+                for key in names {
+                    let k = key.as_str();
+                    if COMMON_PROPS.contains(&k) || own.contains(&k) || family.contains(&k) || k == "width" {
+                        continue;
+                    }
+                    let mut known: Vec<&str> = COMMON_PROPS.iter().chain(own).chain(family).copied().collect();
+                    known.sort();
+                    known.dedup();
+                    let hint = match suggest(k, &known) {
+                        Some(s) => format!(" ; vouliez-vous dire `{}` ?", s),
+                        None => String::new(),
+                    };
+                    self.error(
+                        line_of(k),
+                        format!("'{}' : propriété `{}` inconnue pour un {}{} (propriétés : {})", f.name, k, ftype, hint, own.join(", ")),
+                    );
+                }
             }
 
             // `width` est réservé aux rect (l'épaisseur du trait s'appelle `stroke`),
@@ -373,7 +516,7 @@ impl Validator {
                     self.typeset.insert(f.name.clone(), (ftype.to_string(), content));
                 }
                 // Formule d'un plot : on vérifie qu'elle se lit
-                if key == "expr" && ftype == "plot" {
+                if key == "expr" && matches!(ftype, "plot" | "tangent" | "riemann") {
                     if let PropValue::Single(src) = &f.properties[key] {
                         self.check_expr(line_of(key), &f.name, f.index, src, true);
                     }
@@ -382,6 +525,10 @@ impl Validator {
                     continue;
                 }
                 let line = line_of(key);
+                if let Some(w) = self.not_a_number(&crate::resolver::fmt_value(&f.properties[key])) {
+                    self.error(line, format!("'{}' : {} : `{}` n'est pas un nombre", f.name, key, w));
+                    continue;
+                }
                 match (key.as_str(), &f.properties[key]) {
                     ("style", PropValue::Single(s)) => {
                         self.check_ref(line, &f.name, f.index, s, Expected::Style);
@@ -400,6 +547,12 @@ impl Validator {
                                 self.error(line, msg);
                             }
                         }
+                        refs.push(a.clone());
+                    }
+                    // Cadre : la figure entourée
+                    ("around" | "same_scale" | "align_x" | "align_y", PropValue::Single(a)) => {
+                        let want = if key == "around" { Expected::Figure } else { Expected::Axes };
+                        self.check_ref(line, &f.name, f.index, a, want);
                         refs.push(a.clone());
                     }
                     ("items", PropValue::List(items)) => {
@@ -442,6 +595,30 @@ impl Validator {
             let merged = with_style_props(f, &styles_by_name);
             for (key, msg) in crate::renderer::three::check(ftype, &merged, &self.params) {
                 self.error(line_of(&key), format!("'{}' : {}", f.name, msg));
+            }
+
+            // Courbe paramétrée ou polaire : formules en t
+            if ftype == "curve" {
+                let mut names = self.params.clone();
+                names.push("t".to_string());
+                let mut check = |key: &str, src: &str| {
+                    if let Err(e) = crate::renderer::expr::parse_with(src, &names) {
+                        self.error(line_of(key), format!("'{}' : {} : '{}' : {}", f.name, key, src, e));
+                    }
+                };
+                let pair = merged.get("expr").and_then(crate::renderer::geometry::tuple_items).filter(|v| v.len() == 2);
+                match (pair, merged.get("polar")) {
+                    (Some(v), None) => {
+                        check("expr", &v[0]);
+                        check("expr", &v[1]);
+                        if !merged.contains_key("t") {
+                            self.error(line_of("expr"), format!("'{}' : intervalle `t : [début, fin]` manquant", f.name));
+                        }
+                    }
+                    (None, Some(PropValue::Single(r))) if !merged.contains_key("expr") => check("polar", r),
+                    (None, None) if !merged.contains_key("expr") => self.error(f.line, format!("'{}' : `expr : (x(t), y(t))` ou `polar : r(t)` manquant", f.name)),
+                    _ => self.error(line_of("expr"), format!("'{}' : attendu `expr : (x(t), y(t))` ou `polar : r(t)` (l'un ou l'autre)", f.name)),
+                }
             }
 
             if ftype == "image" {
@@ -610,10 +787,68 @@ impl Validator {
     //  [timeline]
     // ─────────────────────────────────────────────
 
+    /// Deux animations qui fixent la même chose d'une figure en même temps (deux `move(to=...)`,
+    /// `move` et `follow`, deux `color` du même morceau, deux `scale`...) : l'une annulerait l'autre
+    fn check_conflicts(&mut self, doc: &Document) {
+        // (figure, famille) → (début, fin, ligne)
+        let mut seen: HashMap<(String, String), Vec<(f64, f64, usize)>> = HashMap::new();
+        let mut events: Vec<&crate::ast::TimelineEvent> = doc.timeline.iter().collect();
+        events.sort_by(|a, b| a.timestamp.total_cmp(&b.timestamp));
+        for ev in events {
+            for action in &ev.actions {
+                let crate::ast::TimelineAction::Anim(items) = &action.action else { continue };
+                for item in items {
+                    let mut t = ev.timestamp;
+                    for call in &item.calls {
+                        let Ok((kind, d, _)) = animation::parse_call(call) else { break };
+                        let family = match &kind {
+                            AnimKind::Move { .. } | AnimKind::Follow { .. } | AnimKind::Transform { .. } => Some("move, follow ou transform".to_string()),
+                            AnimKind::Scale(_) => Some("scale".to_string()),
+                            AnimKind::Fill { .. } => Some("fill".to_string()),
+                            AnimKind::Color { part, .. } => Some(match part {
+                                Some(p) => format!("color(part=\"{}\")", p),
+                                None => "color".to_string(),
+                            }),
+                            _ => None,
+                        };
+                        if let Some(family) = family {
+                            let list = seen.entry((item.figure.clone(), family.clone())).or_default();
+                            if let Some(&(a, _, l)) = list.iter().find(|(a, b, _)| *a < t + d - 1e-9 && t < *b - 1e-9) {
+                                self.error_t(
+                                    call.line,
+                                    t,
+                                    format!(
+                                        "'{}' : deux animations {} en même temps (l'autre commence à {:.3}, ligne {}) : la dernière annulerait l'autre ; les enchaîner avec [ ... ] ou changer les instants",
+                                        item.figure, family, a, l
+                                    ),
+                                );
+                            }
+                            list.push((t, t + d, call.line));
+                        }
+                        t += d;
+                    }
+                }
+            }
+        }
+    }
+
     fn check_timeline(&mut self, doc: &Document) {
+        self.check_conflicts(doc);
         // Timestamps uniques (comparés à la milliseconde) : ms → ligne de la 1re occurrence
         let mut seen: HashMap<i64, usize> = HashMap::new();
+        let mut previous: Option<(f64, usize)> = None;
         for ev in &doc.timeline {
+            // Blocs dans l'ordre du temps : le fichier se lit de haut en bas comme la vidéo
+            if let Some((p, l)) = previous {
+                if ev.timestamp < p {
+                    self.error(ev.line, format!("le bloc à {:.3} est écrit après celui à {:.3} (ligne {}) : écrire les blocs dans l'ordre du temps", ev.timestamp, p, l));
+                }
+            }
+            previous = Some((ev.timestamp, ev.line));
+            let max = crate::runtime::animation::MAX_SECONDS;
+            if !(0.0..=max).contains(&ev.timestamp) {
+                self.error(ev.line, format!("instant {} invalide (entre 0 et {} s)", ev.timestamp, max));
+            }
             let ms = (ev.timestamp * 1000.0).round() as i64;
             if let Some(&first_line) = seen.get(&ms) {
                 self.error(
@@ -666,7 +901,7 @@ impl Validator {
                 }
             }
 
-            // Ordre fixe : destroy → end → start → anim (cf. SPEC §6.3)
+            // Ordre fixe : destroy → end → start → anim (cf. SPEC §8)
 
             // 1. destroy
             let mut destroyed_now: Vec<(usize, String)> = Vec::new();
@@ -801,6 +1036,16 @@ impl Validator {
         }
         match animation::parse_call(call) {
             Err(e) => self.error_t(line, t, format!("'{}' : {}", figure, e)),
+            Ok((AnimKind::Swap { a, b }, _, _)) => {
+                let is_array = matches!(self.defs.get(figure), Some(Def { kind: Kind::Figure { ftype }, .. }) if ftype == "array");
+                if !is_array {
+                    self.error_t(line, t, format!("'{}' : swap ne s'applique qu'à un array", figure));
+                } else {
+                    for cell in [a, b] {
+                        self.check_part(line, t, figure, &crate::renderer::discrete::cell_key(&cell));
+                    }
+                }
+            }
             Ok((AnimKind::Fill { to }, _, _)) => {
                 if let Err(e) = parse_color(&to) {
                     self.error_t(line, t, format!("'{}' : {}", figure, e));
@@ -814,7 +1059,7 @@ impl Validator {
                     self.check_part(line, t, figure, &part);
                 }
             }
-            Ok((AnimKind::Transform { to }, _, _)) => {
+            Ok((AnimKind::Transform { to, .. }, _, _)) => {
                 if to == figure {
                     self.error_t(line, t, format!("'{}' : transform vers elle-même", figure));
                 }
@@ -829,12 +1074,17 @@ impl Validator {
             }
             Ok(_) => {}
         }
+        for p in &call.params {
+            if let Some(w) = self.not_a_number(p.split_once('=').map_or(p.as_str(), |(_, v)| v)) {
+                self.error_t(line, t, format!("'{}' : {} : `{}` n'est pas un nombre", figure, call.name, w));
+            }
+        }
         // Figures citées dans les paramètres : follow(path=…), transform(to=…), move(to=center(…))
         for p in &call.params {
             let Some((key, value)) = p.split_once('=') else { continue };
             let target = match (call.name.as_str(), key) {
                 ("follow", "path") | ("transform", "to") => Some(value.to_string()),
-                ("move", "to") if value.contains('(') && !value.starts_with('(') => {
+                ("move", "to") | ("rotate", "around") if value.contains('(') && !value.starts_with('(') => {
                     let (fname, args) = split_call(value);
                     if REF_FUNCTIONS.contains(&fname) {
                         args.first().map(|a| a.to_string())
@@ -845,6 +1095,10 @@ impl Validator {
                 _ => None,
             };
             if let Some(target) = target {
+                if target == figure && matches!(call.name.as_str(), "move" | "rotate") {
+                    self.error_t(line, t, format!("'{}' : {}({}=...) vise la figure elle-même ; écrire un point fixe, ex : (30%, 40%) ou repere(1, 2)", figure, call.name, key));
+                    continue;
+                }
                 self.check_usable(line, t, &target, destroyed);
                 // move(to=repere(a, sin(a)), ...) : coordonnées avec des paramètres
                 let (fname, args) = split_call(value);
@@ -857,6 +1111,13 @@ impl Validator {
                 }
             }
         }
+    }
+
+    /// `nan`, `inf`, `infinity` écrits à la place d'un nombre (Rust les lirait comme des nombres)
+    fn not_a_number(&self, text: &str) -> Option<String> {
+        text.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .find(|w| ["nan", "inf", "infinity"].contains(&w.to_lowercase().as_str()) && !self.defs.contains_key(*w))
+            .map(|w| w.to_string())
     }
 
     /// Vérifie qu'un nom utilisé dans la timeline est une figure existante et pas encore détruite.
@@ -999,6 +1260,35 @@ mod tests {
     #[test]
     fn exemple_officiel_valide() {
         assert_eq!(check(include_str!("../exemple.dct")), Ok(()));
+    }
+
+    #[test]
+    fn proprietes_inconnues() {
+        let base = |extra: &str| {
+            format!(
+                "[figures]
+            defstyle s =
+                colr : red
+            deffigure c =
+                type   : circle
+                center : (50%, 50%)
+                radius : 10%
+{}
+            deffigure p =
+                type   : plot
+                expr   : sin(x)
+                yrange : [0, 1]
+            [timeline]",
+                extra
+            )
+        };
+        let src = base("                colour : red");
+        assert_error(&src, "propriété `colour` inconnue pour un circle ; vouliez-vous dire `color` ?");
+        assert_error(&src, "propriété `yrange` inconnue pour un plot");
+        assert_error(&src, "style 's' : propriété `colr` inconnue ; vouliez-vous dire `color` ?");
+        assert_error("[figures]\ndeffigure a =\n    type : cirle\n[timeline]", "vouliez-vous dire `circle` ?");
+        assert_eq!(suggest("fil", &["fill", "file", "font"]), Some("fill"));
+        assert_eq!(suggest("zzzz", &["fill", "color"]), None);
     }
 
     #[test]
@@ -1526,7 +1816,7 @@ defparam theta = 30
 deffigure s =
     type   : scene3d
     camera : (40, theta)
-    axes   : box
+    frame  : box
 deffigure f =
     type     : surface
     scene    : s

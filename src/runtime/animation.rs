@@ -102,13 +102,18 @@ pub enum AnimKind {
     /// Se déplace de `distance` % (de la largeur pour left/right, de la hauteur pour up/down)
     MoveBy { dir: Dir, distance: f64 },
     /// Se transforme en la figure `to`, qui la remplace à la fin
-    Transform { to: String },
+    /// rigid : glisse et tourne en bloc (sans se déformer)
+    Transform { to: String, rigid: bool },
     /// La couleur du trait va vers `to` ; avec `part`, seulement ce morceau d'un texte ou d'une équation
     Color { to: String, part: Option<String> },
     /// La taille va vers ce facteur (1 = taille d'origine)
     Scale(f64),
     /// Tourne de cet angle en degrés (positif = sens trigonométrique)
     Rotate(f64),
+    /// swap("(1,2)", "(1,3)") : échange le contenu de deux cases d'un `array`
+    Swap { a: String, b: String },
+    /// rotate(angle, around=point) : tourne autour de ce point (le centre décrit un arc)
+    RotateAround { angle: f64, around: String },
     /// Le centre parcourt le contour d'une figure (de son début à sa fin, à vitesse régulière) ;
     /// `tangent` : la figure s'oriente selon la tangente
     Follow { path: String, tangent: bool },
@@ -167,6 +172,9 @@ impl Anim {
     }
 }
 
+/// Durée maximale d'une animation et instant maximal d'un bloc (24 h)
+pub const MAX_SECONDS: f64 = 86_400.0;
+
 /// Lit un appel d'animation. Renvoie (ce qu'elle fait, durée, easing).
 pub fn parse_call(call: &AnimCall) -> Result<(AnimKind, f64, Ease), String> {
     let name = call.name.as_str();
@@ -196,6 +204,31 @@ pub fn parse_call(call: &AnimCall) -> Result<(AnimKind, f64, Ease), String> {
         } else {
             positional.push(p);
         }
+    }
+
+    // Paramètres permis : une faute de frappe (`easing=`, `too=`) est une erreur, pas un oubli silencieux
+    let (allowed_named, max_positional): (&[&str], usize) = match name {
+        "move" => (&["to"], if named.iter().any(|(k, _)| *k == "to") { 0 } else { 2 }),
+        "transform" => (&["to", "rigid"], 0),
+        "fill" => (&["to"], 0),
+        "color" => (&["to", "part"], 0),
+        "follow" => (&["path", "rotate", "speed"], 0),
+        "rotate3d" => (&["axis"], 1),
+        "rotate" => (&["around"], 1),
+        "swap" => (&[], 2),
+        "slidein" | "slideout" | "scale" | "to" => (&[], 1),
+        _ => (&[], 0),
+    };
+    for (k, _) in &named {
+        if !allowed_named.contains(k) {
+            let mut known: Vec<&str> = allowed_named.iter().copied().filter(|k| *k != "speed").collect();
+            known.extend(["ease", "duration"]);
+            let hint = crate::validator::suggest(k, &known).map(|s| format!(" ; vouliez-vous dire `{}` ?", s)).unwrap_or_default();
+            return Err(format!("{} : paramètre inconnu `{}`{} (permis : {})", name, k, hint, known.join(", ")));
+        }
+    }
+    if positional.len() > max_positional {
+        return Err(format!("{} : valeur en trop `{}`", name, positional[max_positional]));
     }
 
     let named_value = |key: &str| named.iter().find(|(k, _)| *k == key).map(|(_, v)| v.to_string());
@@ -230,7 +263,14 @@ pub fn parse_call(call: &AnimCall) -> Result<(AnimKind, f64, Ease), String> {
             None => return Err("move attend une destination : move(to=(x%, y%), durée) ou move(down, 20%, durée)".to_string()),
         },
         "transform" => match named_value("to") {
-            Some(to) => AnimKind::Transform { to },
+            Some(to) => AnimKind::Transform {
+                to,
+                rigid: match named_value("rigid").as_deref() {
+                    None | Some("false") => false,
+                    Some("true") => true,
+                    Some(v) => return Err(format!("transform : rigid={} invalide (true ou false)", v)),
+                },
+            },
             None => return Err("transform attend une figure : transform(to=autre_figure, durée)".to_string()),
         },
         "color" => match named_value("to") {
@@ -277,15 +317,25 @@ pub fn parse_call(call: &AnimCall) -> Result<(AnimKind, f64, Ease), String> {
             Some(to) => AnimKind::Fill { to },
             None => return Err("fill attend une couleur : fill(to=red, durée)".to_string()),
         },
+        "swap" => match positional.as_slice() {
+            [a, b] => AnimKind::Swap { a: a.trim_matches('"').to_string(), b: b.trim_matches('"').to_string() },
+            _ => return Err("swap attend deux cases : swap(\"(1,2)\", \"(1,3)\", durée), ou swap(2, 3, durée) sur une seule ligne".to_string()),
+        },
         "to" => AnimKind::To(parse_number(positional.first(), "to attend une valeur : to(3, durée)")?),
-        "rotate" => AnimKind::Rotate(parse_number(
-            positional.first(),
-            "rotate attend un angle en degrés : rotate(90, durée)",
-        )?),
+        "rotate" => {
+            let angle = parse_number(positional.first(), "rotate attend un angle en degrés : rotate(90, durée)")?;
+            match named_value("around") {
+                Some(around) => AnimKind::RotateAround { angle, around },
+                None => AnimKind::Rotate(angle),
+            }
+        }
         other => return Err(format!("animation inconnue '{}'", other)),
     };
 
     let duration = duration.ok_or_else(|| format!("{} : durée manquante (ex : 1s ou 500ms)", name))?;
+    if !(0.0..=MAX_SECONDS).contains(&duration) {
+        return Err(format!("{} : durée {} s invalide (entre 0 et {} s)", name, duration, MAX_SECONDS));
+    }
     Ok((kind, duration, ease))
 }
 
@@ -300,13 +350,29 @@ fn parse_duration(s: &str) -> Option<f64> {
     }
 }
 
-/// Nombre ; un angle peut être en degrés (90, 90deg) ou en radians (1.57rad)
+/// Nombre ou calcul de constantes (`2*pi`, `-pi/2`, `sqrt(2)`) ; un angle peut être en degrés
+/// (90, 90deg) ou en radians (1.57rad, pi/2 rad)
 fn parse_number(s: Option<&&str>, err: &str) -> Result<f64, String> {
-    s.and_then(|v| match v.strip_suffix("rad") {
-        Some(r) => r.trim().parse::<f64>().ok().map(f64::to_degrees),
-        None => v.trim_end_matches("deg").parse::<f64>().ok(),
-    })
-    .ok_or_else(|| err.to_string())
+    let v = s.ok_or_else(|| err.to_string())?.trim();
+    let (body, rad) = match v.strip_suffix("rad") {
+        Some(r) => (r.trim(), true),
+        None => (v.strip_suffix("deg").unwrap_or(v).trim(), false),
+    };
+    let n = match body.parse::<f64>() {
+        Ok(n) => n,
+        Err(_) => {
+            let e = crate::renderer::expr::parse_with(body, &[])
+                .map_err(|e| format!("{} ; « {} » : {} (seuls des nombres et des calculs de constantes, ex : 2*pi)", err, body, e))?;
+            if e.uses_x() {
+                return Err(format!("{} ; « {} » : x n'a pas de sens ici", err, body));
+            }
+            e.eval(0.0, &std::collections::HashMap::new())
+        }
+    };
+    if !n.is_finite() {
+        return Err(format!("{} ; « {} » ne donne pas un nombre", err, body));
+    }
+    Ok(if rad { n.to_degrees() } else { n })
 }
 
 #[cfg(test)]
@@ -315,6 +381,20 @@ mod tests {
 
     fn call(name: &str, params: &[&str]) -> AnimCall {
         AnimCall { name: name.into(), params: params.iter().map(|s| s.to_string()).collect(), line: 1 }
+    }
+
+    #[test]
+    fn valeurs_calculees_et_parametres_inconnus() {
+        let pi = std::f64::consts::PI;
+        assert_eq!(parse_call(&call("to", &["2*pi", "1s"])).unwrap().0, AnimKind::To(2.0 * pi));
+        assert_eq!(parse_call(&call("to", &["-pi/2", "1s"])).unwrap().0, AnimKind::To(-pi / 2.0));
+        assert!(matches!(parse_call(&call("rotate", &["pi/2rad", "1s"])).unwrap().0, AnimKind::Rotate(a) if (a - 90.0).abs() < 1e-9));
+        assert!(parse_call(&call("to", &["2*q", "1s"])).unwrap_err().contains("calculs de constantes"));
+        let e = parse_call(&call("fadein", &["1s", "easing=linear"])).unwrap_err();
+        assert!(e.contains("`easing`") && e.contains("`ease`"), "{}", e);
+        assert!(parse_call(&call("move", &["to=(1%,1%)", "1s", "eas=smooth"])).unwrap_err().contains("`ease`"));
+        assert!(parse_call(&call("fadein", &["1s", "2s"])).is_ok()); // deux durées : la dernière
+        assert!(parse_call(&call("fadein", &["left", "1s"])).unwrap_err().contains("en trop"));
     }
 
     #[test]
@@ -352,7 +432,7 @@ mod tests {
         assert!(parse_call(&call("slideout", &["dehors", "1s"])).is_err());
         assert_eq!(
             parse_call(&call("transform", &["to=b", "2s"])).unwrap().0,
-            AnimKind::Transform { to: "b".into() }
+            AnimKind::Transform { to: "b".into(), rigid: false }
         );
         assert!(parse_call(&call("fadein", &["1s", "ease=rapide"])).is_err());
         assert_eq!(

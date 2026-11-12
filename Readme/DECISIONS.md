@@ -711,6 +711,18 @@ Une figure placée dans un repère est coupée à son cadre (voir « Caméra 2D 
 
 **Raisonnement :** pouvoir réutiliser un schéma fait ailleurs sans le redessiner. Une image n'a pas de contour : ce qui doit se transformer se dessine en Didact.
 
+### Rien n'est ignoré en silence
+
+**Décision :** une propriété inconnue pour le type de la figure, un paramètre d'animation inconnu, un type inconnu sont des erreurs, avec une suggestion (« vouliez-vous dire `color` ? »). Un calcul dans une animation (`to(2*pi, 3s)`) est calculé ou refusé, jamais tronqué. Dans un style, seuls les noms inconnus de tous les types sont des erreurs (un style sert à plusieurs types).
+
+**Raisonnement :** des essais en écrivant comme une IA (9 vidéos) ont montré que les erreurs silencieuses sont le pire défaut pour elle : `colour : red`, `xrange` sur un `plot` ou `to(2*pi)` (lu 2) passaient `--check` sans un mot et donnaient une vidéo fausse sans moyen de le savoir.
+
+### LaTeX : compléter MiTeX plutôt que le remplacer
+
+**Décision :** les anciens noms de symboles produits par MiTeX (`diff`, `sect`, `angle.l`, ...) sont redéfinis pour Typst 0.15 ; `|x|` et `\|x\|` sont appariés en délimiteurs ; `\textcolor` / `\color` gardent leur couleur ; les listes d'un bloc `latex` sont alignées à gauche.
+
+**Raisonnement :** `\partial`, `\langle`, `\cap` et les valeurs absolues sont partout en maths ; une table de correspondance et quelques retouches du LaTeX suffisent, sans toucher à MiTeX.
+
 ### Licence MIT
 
 **Décision :** Le projet est sous licence MIT.
@@ -828,6 +840,13 @@ Idées qui ont été discutées et rejetées explicitement.
 ## Changelog des versions du langage
 
 ### v0.2 (en cours)
+- Graphes : boucles `A->A`, arêtes réciproques courbes, `initial` et `accepting` (automates), étiquettes entre guillemets ; `part=` vise aussi un nœud, une arête ou une case dans les positions (`above(g, 1%, part="B")`) et `frame`
+- Cohérence : `offset` (et non `pos`) pour le décalage d'un groupe ; `font` retiré des textes (`size` seul ; `font` reste sur `graph` et `array`) ; `frame` (et non `axes`) pour l'affichage du repère d'une `scene3d` ; blocs de la timeline dans l'ordre du temps (erreur sinon) ; `comment : "Texte"` avec une seule langue ; action de timeline inconnue : erreur ; instants relatifs `+d =>` retirés (`didact shift` sert à insérer) ; `move(to=)` pose le point de `pos` (ancre) ; deux animations contradictoires en même temps : erreur
+- Audit et tests à l'aveugle (des IA n'ayant que la doc reproduisent des vidéos) : calculs dans les listes et couples (`[0, 2*pi]`) ; `line extend`, type `brace`, polygone régulier (`sides`), positions `start` / `end` / `vertex` / `side`, `offset` au bout d'une flèche ; `rotate(..., around=)`, `swap` sur un `array` ; `decimal : comma` ; `\"` dans une chaîne ; sous-titres dans `--png` ; `riemann` en fondu quand `n` est animé ; rayon sans unité refusé hors repère (cercle, arc) ; noms de fonctions de position réservés ; erreurs claires pour guillemet ou crochet non fermé, `nan`, durées absurdes ; une figure qui ferait planter le calcul devient une erreur ; section Recettes de la SPEC
+- Propriété inconnue dans `[config]` : erreur avec suggestion (avant : avertissement) ; `bands` accepté sur `pixels` ; test `src/doc_check.rs` : SPEC et REFERENCE doivent nommer chaque type, propriété, animation, fonction, position et palette du code
+- SPEC réécrite en version compacte (tout ce qui est décrit est implémenté, vérifié sur le code) et fiche d'une page `Readme/REFERENCE.md` ; `size` marche sur `text` (synonyme de `font`), `align` sur `latex` et `table` ; `didact --help`
+- Bloc B des essais « comme une IA » : `deffunction f(x) = ...` (fonctions nommées dans toutes les formules) ; `plot` partiel (`xrange : [0, T]`) ; type `curve` (paramétrée `(x(t), y(t))` ou `polar`) ; rayon de `circle` en unités du repère ; `transform(..., rigid=true)` (déplacement rigide, symétrie au besoin) ; morceaux de formule (`center(eq, part="...")`, `top`/`bottom`/`left`/`right`/coins) et type `frame` ; placement relatif `below` / `above` / `left_of` / `right_of` avec ancre implicite ; repères alignés (`align_x`, `align_y`, `same_scale`) ; types `tangent` et `riemann` ; texte des cases d'un `array` colorable (`part="text (i,j)"`)
+- Bloc A des essais « comme une IA » : propriétés, paramètres d'animation et types inconnus refusés avec suggestion ; calculs de constantes dans les animations (`to(2*pi, 3s)`, auparavant tronqué à 2) ; `expr : |x| ...` n'est plus pris pour un bloc ; LaTeX `\partial`, `\langle`, `\cap`, `\hbar`, `\Re`, `\Im`, `\mathscr`, `\color`, `\textcolor`, `|x|`, `cases`, `\not\in` ; paramètres utilisables dans un `defmodel` (`opacity : @i < n`) ; pointes de flèche rigides sous `matrix` / `map` / `cmap` ; listes `itemize` alignées à gauche ; `-0.00` affiché `0.00`
 - Type `image` (PNG, SVG via resvg ; `src/renderer/image.rs`) ; `corner_radius`, ellipses (`radius : (rx, ry)`), `inner` (étoile), `marker` (scatter), `step` des axes et graduations en π, `closed : false`, `audio ... loop` ; gras et italique (`\textbf`, `\textit`, `\emph`) avec les polices Latin Modern grasse et italique ; `demo_details.dct`
 - `to` sur un paramètre à vitesse constante par défaut ; une figure dans un seul groupe ; `comment : none` ; unités `%`, `px`, `deg`, `rad`, `s`, `ms` (`rotate : 30deg` / `0.5rad` marche enfin), `cm`/`mm`/`pt`/`em` et positions en px refusés ; remarques `unused_figure` / `unused_style` / `unused_param` dans `--check`
 - `pos` d'un `rect` = son centre (avant : coin bas-gauche) ; `anchor` à 9 valeurs pour `rect` et les figures de texte (`text`, `equation`, `latex`, `raw.latex`, `table`, `array`, `graph`) ; couleurs `hsl(t, s%, l%[, a])` (paramètres acceptés) ; k de 1 à n dans `trajectory`

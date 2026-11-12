@@ -53,7 +53,14 @@ pub fn param_expr(s: &str, params: &[String]) -> Option<(Expr, &'static str)> {
 /// Nombre écrit court : 3, 2.5, 0.33
 pub fn fmt_num(v: f64, decimals: Option<usize>) -> String {
     match decimals {
-        Some(d) => format!("{:.*}", d, v),
+        Some(d) => {
+            let s = format!("{:.*}", d, v);
+            // -0.00 → 0.00 : un zéro arrondi n'a pas de signe
+            match s.strip_prefix('-') {
+                Some(rest) if rest.chars().all(|c| c == '0' || c == '.') => rest.to_string(),
+                _ => s,
+            }
+        }
         None => {
             let s = format!("{:.2}", v);
             let s = s.trim_end_matches('0').trim_end_matches('.');
@@ -101,8 +108,25 @@ pub fn interpolations(s: &str) -> Result<Vec<(usize, usize, String, Option<usize
     Ok(out)
 }
 
+/// `decimal : comma` dans [config] : les nombres affichés s'écrivent avec une virgule
+pub static DECIMAL_COMMA: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Séparateur décimal du document : virgule (texte), ou virgule sans espace après (maths)
+pub fn localize(number: &str, math: bool) -> String {
+    if DECIMAL_COMMA.load(std::sync::atomic::Ordering::Relaxed) {
+        number.replace('.', if math { "\\mathord{,}" } else { "," })
+    } else {
+        number.to_string()
+    }
+}
+
 /// Remplace les `#{...}` par leurs valeurs
 pub fn interpolate(s: &str, names: &[String], vals: &HashMap<String, f64>) -> Result<String, String> {
+    interpolate_in(s, names, vals, false)
+}
+
+/// Comme `interpolate` ; `math` : tout le texte est une formule (expr d'une equation)
+pub fn interpolate_in(s: &str, names: &[String], vals: &HashMap<String, f64>, math: bool) -> Result<String, String> {
     let parts = interpolations(s)?;
     if parts.is_empty() {
         return Ok(s.to_string());
@@ -112,7 +136,9 @@ pub fn interpolate(s: &str, names: &[String], vals: &HashMap<String, f64>) -> Re
     for (a, b, src, decimals) in parts {
         out.push_str(&s[last..a]);
         let e = expr::parse_with(&src, names).map_err(|e| format!("#{{{}}} : {}", src, e))?;
-        out.push_str(&fmt_num(e.eval(0.0, vals), decimals));
+        // Dans une formule (ou entre deux `$` d'un texte), la virgule ne doit pas être suivie d'une espace
+        let in_math = math || s[..a].matches('$').count() % 2 == 1;
+        out.push_str(&localize(&fmt_num(e.eval(0.0, vals), decimals), in_math));
         last = b;
     }
     out.push_str(&s[last..]);
@@ -177,7 +203,8 @@ pub fn bind(fig: &ResolvedFigure, vals: &HashMap<String, f64>) -> Result<Option<
         let text = TEXT_PROPS.contains(&key.as_str());
         let new = match v {
             PropValue::Single(s) | PropValue::Block(s) if s.contains("#{") => {
-                let r = interpolate(s, &names, vals).map_err(|e| format!("{} : {}", key, e))?;
+                let math = fig.ftype == "equation" && key == "expr";
+                let r = interpolate_in(s, &names, vals, math).map_err(|e| format!("{} : {}", key, e))?;
                 Some(if matches!(v, PropValue::Block(_)) { PropValue::Block(r) } else { PropValue::Single(r) })
             }
             PropValue::List(items) if items.iter().any(|i| i.contains("#{")) => {
@@ -259,6 +286,8 @@ mod tests {
         assert_eq!(t("k = #{k:3}, 2k = #{2k:0}"), "k = 0.667, 2k = 1");
         assert_eq!(t("\\sum_{i=1}^{#{n}} i = #{n(n+1)/2}"), "\\sum_{i=1}^{12} i = 78");
         assert_eq!(t("sans rien"), "sans rien");
+        assert_eq!(fmt_num(-0.001, Some(2)), "0.00");
+        assert_eq!(fmt_num(-0.5, Some(1)), "-0.5");
         assert!(interpolate("#{k", &names(), &vals).is_err());
         assert!(interpolate("#{z}", &names(), &vals).unwrap_err().contains("nom inconnu"));
         assert!(interpolate("#{k:a}", &names(), &vals).unwrap_err().contains("décimales"));

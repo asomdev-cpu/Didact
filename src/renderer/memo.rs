@@ -46,6 +46,16 @@ pub fn key(props: &HashMap<String, PropValue>, params: &HashMap<String, f64>, ex
         params[n].to_bits().hash(&mut h);
     }
     extra.hash(&mut h);
+    // Fonctions de l'utilisateur : leur texte, et les paramètres de leur corps
+    let funcs = super::expr::functions_text();
+    if !funcs.is_empty() {
+        funcs.hash(&mut h);
+        let mut fnames: Vec<&String> = params.keys().filter(|n| funcs.contains(n.as_str())).collect();
+        fnames.sort();
+        for n in fnames {
+            params[n].to_bits().hash(&mut h);
+        }
+    }
     h.finish()
 }
 

@@ -98,21 +98,26 @@ pub fn render_frame(frame: &Frame, scene: &Scene, backend: &mut dyn RenderBacken
             continue;
         }
         let name = st.fig.name.clone();
-        let result = if st.fig.ftype == "group" {
-            build_group(st, frame.t, scene, &mut refs, &mut shapes_by_name, &visible, &mut objs)
-        } else if st.fig.ftype == "scene3d" {
-            build_scene3d(st, frame.t, scene, &mut refs, &mut objs)
-        } else if three::is_3d(st.fig, &refs) {
-            build_object3d(st, frame.t, scene, &mut refs, &mut objs)
-        } else {
-            build_figure(st, frame.t, scene, &refs).map(|(shapes, geom)| {
-                refs.insert(name.clone(), geom);
-                shapes_by_name.insert(name.clone(), shapes);
-                if st.fig.ftype == "plot" {
-                    three::register_plot(st.fig, &mut refs);
-                }
-            })
-        };
+        // Filet de sécurité : une valeur imprévue qui ferait planter le calcul d'une figure
+        // devient une erreur de cette figure, pas l'arrêt du programme
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if st.fig.ftype == "group" {
+                build_group(st, frame.t, scene, &mut refs, &mut shapes_by_name, &visible, &mut objs)
+            } else if st.fig.ftype == "scene3d" {
+                build_scene3d(st, frame.t, scene, &mut refs, &mut objs)
+            } else if three::is_3d(st.fig, &refs) {
+                build_object3d(st, frame.t, scene, &mut refs, &mut objs)
+            } else {
+                build_figure(st, frame.t, scene, &refs).map(|(shapes, geom)| {
+                    refs.insert(name.clone(), geom);
+                    shapes_by_name.insert(name.clone(), shapes);
+                    if st.fig.ftype == "plot" {
+                        three::register_plot(st.fig, &mut refs);
+                    }
+                })
+            }
+        }))
+        .unwrap_or_else(|_| Err("valeur imprévue : cette figure n'a pas pu être calculée (vérifier ses nombres et intervalles)".to_string()));
         if let Err(reason) = result {
             if st.visible {
                 problems.push((st.fig.name.clone(), reason));
@@ -127,7 +132,7 @@ pub fn render_frame(frame: &Frame, scene: &Scene, backend: &mut dyn RenderBacken
             continue;
         }
         for a in &st.anims {
-            if let AnimKind::Transform { to } = &a.kind {
+            if let AnimKind::Transform { to, rigid } = &a.kind {
                 if a.start < st.last_start {
                     continue;
                 }
@@ -168,7 +173,13 @@ pub fn render_frame(frame: &Frame, scene: &Scene, backend: &mut dyn RenderBacken
                 };
                 let glyphs = typeset(&st.fig.name) && typeset(to);
                 if let Some(shapes) = shapes_by_name.get_mut(&st.fig.name) {
-                    *shapes = if glyphs { morph::morph_glyphs(shapes, &target, e) } else { morph::morph(shapes, &target, e) };
+                    *shapes = if *rigid {
+                        morph::rigid(shapes, &target, e)
+                    } else if glyphs {
+                        morph::morph_glyphs(shapes, &target, e)
+                    } else {
+                        morph::morph(shapes, &target, e)
+                    };
                 }
             }
         }
@@ -338,6 +349,15 @@ fn compute_effect(
     let mut appear: f32 = 1.0; // grow / shrink
     let mut slide = (0.0f32, 0.0f32); // décalage temporaire de slidein / slideout
     let slide_len = scene.height as f32 * SLIDE_DISTANCE;
+    // move(to=p) pose sur p le point que désigne `pos` (le bord gauche avec `anchor : left`, ...),
+    // comme `pos` lui-même ; sans `pos` (cercle, ligne...), le centre
+    let anchor_shift = match (st.fig.properties.get("pos"), st.fig.ftype.as_str()) {
+        (Some(_), "group") | (None, _) => (0.0, 0.0),
+        (Some(p), _) => match geometry::point(p, scene, refs) {
+            Ok(p) => (base_center.0 - p.0, base_center.1 - p.1),
+            Err(_) => (0.0, 0.0),
+        },
+    };
     for a in &st.anims {
         let e = a.progress(t) as f32;
         // Les apparitions / disparitions d'avant le dernier `start` ne comptent plus
@@ -347,6 +367,7 @@ fn compute_effect(
         match &a.kind {
             AnimKind::Move { to } => {
                 let target = geometry::resolve_point(to, scene, refs)?;
+                let target = (target.0 + anchor_shift.0, target.1 + anchor_shift.1);
                 fx.center.0 += (target.0 - fx.center.0) * e;
                 fx.center.1 += (target.1 - fx.center.1) * e;
             }
@@ -358,6 +379,14 @@ fn compute_effect(
             }
             AnimKind::Scale(f) => size_factor += (*f as f32 - size_factor) * e,
             AnimKind::Rotate(deg) => fx.rotation += *deg as f32 * e,
+            AnimKind::RotateAround { angle, around } => {
+                // Le centre tourne autour du point (sens trigonométrique, y écran vers le bas)
+                let (px, py) = geometry::resolve_point(around, scene, refs)?;
+                let a = (*angle as f32 * e).to_radians();
+                let (dx, dy) = (fx.center.0 - px, fx.center.1 - py);
+                fx.center = (px + dx * a.cos() + dy * a.sin(), py - dx * a.sin() + dy * a.cos());
+                fx.rotation += *angle as f32 * e;
+            }
             AnimKind::Follow { path, tangent } => {
                 let outline = &geometry::resolve_geom(path, refs)?.outline;
                 let (point, dir) = point_along(outline, e as f64)
@@ -388,6 +417,7 @@ fn compute_effect(
                 fx.rotation += (*angle * axis[2].signum()) as f32 * e
             }
             AnimKind::Color { .. }
+            | AnimKind::Swap { .. }
             | AnimKind::Fill { .. }
             | AnimKind::Transform { .. }
             | AnimKind::To(_)
@@ -465,18 +495,33 @@ fn build_figure(st: &FigureState, t: f64, scene: &Scene, refs: &Refs) -> Result<
     let fig: &ResolvedFigure = fig_with_color.as_ref().unwrap_or(st.fig);
 
     // ── Formes de base ──
-    let mut shapes = geometry::figure_shapes(fig, scene, refs)?;
+    let warp = warp::of(fig, &refs.params, 2)?;
+    // Sous une transformation, une flèche est déformée sans sa pointe, puis la pointe est posée,
+    // rigide, au bout du trait transformé (sinon elle serait étirée comme le reste)
+    let (arrow_start, arrow_end) = if warp.is_some() { geometry::arrow_ends(fig)? } else { (false, false) };
+    let bare;
+    let base = if arrow_start || arrow_end {
+        bare = geometry::without_arrows(fig);
+        &bare
+    } else {
+        fig
+    };
+    let mut shapes = geometry::figure_shapes(base, scene, refs)?;
     // Transformation du plan (matrix / map / cmap), dans les coordonnées de son repère
-    if let Some(w) = warp::of(fig, &refs.params, 2)? {
+    if let Some(w) = warp {
         let name = fig.properties.get("axes").map(fmt_value).ok_or("une transformation (matrix, map, cmap) se fait dans un repère : ajouter `axes : nom_du_repere`")?;
         let m = geometry::resolve_geom(&name, refs)?.axes.ok_or_else(|| format!("'{}' n'est pas un repère axes", name))?;
         w.shapes(&mut shapes, &m);
+        if arrow_start || arrow_end {
+            geometry::rigid_arrow_heads(&mut shapes, arrow_start, arrow_end, scene);
+        }
     }
     // Une figure placée dans un repère est découpée à son cadre (sauf `clip : false`)
     if let Some(r) = axes_clip_rect(fig, refs)? {
         clip::clip_shapes(&mut shapes, r);
     }
     color_parts(st, t, &mut shapes, fig, scene, refs)?;
+    swap_cells(st, t, &mut shapes, fig, scene, refs)?;
     let base_center = bbox_center(&shapes);
 
     // ── Animations ──
@@ -512,7 +557,7 @@ fn build_figure(st: &FigureState, t: f64, scene: &Scene, refs: &Refs) -> Result<
     };
 
     // La géométrie publiée est celle de la figure entière, même pendant draw / write
-    let geom = figure_geom(fig, &shapes, &fx, axes);
+    let geom = figure_geom(fig, &shapes, &fx, axes, scene, refs);
     if let Some((mode, e)) = fx.reveal {
         let n = shapes.len();
         shapes = reveal::reveal(shapes, mode, e, 0, n, reveal_line(scene));
@@ -609,19 +654,19 @@ fn build_group(
     let all: Vec<Shape> = basis.iter().flat_map(|m| shapes_by_name[*m].clone()).collect();
     let base_center = bbox_center(&all);
 
-    // pos : décalage (x en % de la largeur, y en % de la hauteur, vers le haut)
-    let offset = match st.fig.properties.get("pos") {
+    // offset : décalage (x en % de la largeur, y en % de la hauteur, vers le haut)
+    let offset = match st.fig.properties.get("offset") {
         Some(PropValue::Tuple(v)) if v.len() == 2 => {
             let pct = |s: &str| {
                 s.trim()
                     .trim_end_matches('%')
                     .parse::<f32>()
-                    .map_err(|_| format!("pos d'un groupe : décalage en %, ex : (10%, 0%), pas '{}'", s))
+                    .map_err(|_| format!("offset d'un groupe : décalage en %, ex : (10%, 0%), pas '{}'", s))
             };
             (pct(&v[0])? / 100.0 * scene.width as f32, -pct(&v[1])? / 100.0 * scene.height as f32)
         }
         Some(other) => {
-            return Err(format!("pos d'un groupe : décalage (x%, y%) attendu, pas '{}'", fmt_value(other)))
+            return Err(format!("offset d'un groupe : décalage (x%, y%) attendu, pas '{}'", fmt_value(other)))
         }
         None => (0.0, 0.0),
     };
@@ -666,6 +711,8 @@ fn build_group(
             label: None,
             axes: None,
             outline: Vec::new(),
+            glyphs: None,
+            named: Vec::new(),
         },
     );
     shapes_by_name.insert(st.fig.name.clone(), Vec::new());
@@ -837,8 +884,8 @@ pub fn needed_figures<'a>(frame: &'a Frame) -> std::collections::HashSet<&'a str
 }
 
 /// Géométrie publiée pour les références : centre, angle, boîte, point d'étiquette
-fn figure_geom(fig: &ResolvedFigure, shapes: &[Shape], fx: &AnimEffect, axes: Option<AxesMap>) -> Geom {
-    let bbox = bbox(shapes);
+fn figure_geom(fig: &ResolvedFigure, shapes: &[Shape], fx: &AnimEffect, axes: Option<AxesMap>, scene: &Scene, refs: &Refs) -> Geom {
+    let whole = bbox(shapes);
 
     // Angle : direction pour une line (from → to), rotation sinon
     let angle = match (fig.ftype.as_str(), shapes.first().map(|s| s.path.as_slice())) {
@@ -864,10 +911,112 @@ fn figure_geom(fig: &ResolvedFigure, shapes: &[Shape], fx: &AnimEffect, axes: Op
             let n = (dx * dx + dy * dy).sqrt();
             Some((mid, if n > 0.0 { (dx / n, dy / n) } else { (0.0, -1.0) }))
         }
+        // Ligne, flèche : la pointe, direction du trait (étiquette au bout d'un vecteur)
+        ("line" | "arrow", Some(_)) => {
+            let pts = outline(shapes);
+            match pts.as_slice() {
+                [.., a, b] => {
+                    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+                    let n = (dx * dx + dy * dy).sqrt();
+                    (n > 0.0).then(|| (*b, (dx / n, dy / n)))
+                }
+                _ => None,
+            }
+        }
+        // Accolade : sa pointe (au milieu), direction vers l'extérieur
+        ("brace", Some(_)) => {
+            let pts = outline(shapes);
+            match (pts.first(), pts.last(), pts.get(pts.len() / 2)) {
+                (Some(a), Some(b), Some(tip)) if pts.len() > 4 => {
+                    let mid = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
+                    let (dx, dy) = (tip.0 - mid.0, tip.1 - mid.1);
+                    let n = (dx * dx + dy * dy).sqrt();
+                    (n > 0.0).then(|| (*tip, (dx / n, dy / n)))
+                }
+                _ => None,
+            }
+        }
         _ => None,
     };
 
-    Geom { center: fx.center, angle, bbox, label, axes, outline: outline(shapes) }
+    // Texte ou formule : les morceaux, pour viser une partie (center(eq, part="..."))
+    let glyphs = is_typeset(&fig.ftype).then(|| geometry::Glyphs(fig.ftype.clone(), shapes.to_vec()));
+    // Graphe, tableau : boîte de chaque nœud, arête, case (center(g, part="B"))
+    let named = match fig.ftype.as_str() {
+        "graph" | "array" => discrete::build(fig, scene, refs)
+            .map(|(_, parts)| {
+                parts
+                    .into_iter()
+                    .filter(|(_, ids)| !ids.is_empty() && ids.iter().all(|i| *i < shapes.len()))
+                    .map(|(k, ids)| (k, bbox(&ids.iter().map(|i| shapes[*i].clone()).collect::<Vec<_>>())))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    Geom { center: fx.center, angle, bbox: whole, label, axes, outline: outline(shapes), glyphs, named }
+}
+
+/// swap : les contenus de deux cases d'un `array` s'échangent (l'un passe au-dessus, l'autre
+/// en dessous). Les échanges s'enchaînent : chacun déplace ce qui se trouve alors dans les cases.
+fn swap_cells(st: &FigureState, t: f64, shapes: &mut [Shape], fig: &ResolvedFigure, scene: &Scene, refs: &Refs) -> Result<(), String> {
+    let mut swaps: Vec<(&crate::runtime::animation::Anim, &String, &String)> = st
+        .anims
+        .iter()
+        .filter_map(|a| match &a.kind {
+            AnimKind::Swap { a: x, b: y } if t > a.start => Some((*a, x, y)),
+            _ => None,
+        })
+        .collect();
+    if swaps.is_empty() {
+        return Ok(());
+    }
+    if fig.ftype != "array" {
+        return Err("swap ne s'applique qu'à un array".to_string());
+    }
+    swaps.sort_by(|a, b| a.0.start.total_cmp(&b.0.start));
+    let built = discrete::build(fig, scene, refs)?;
+    let ids = |key: &str| discrete::part_indices(&built, key);
+    let center = |key: &str| -> Result<(f32, f32), String> {
+        let i = ids(key).and_then(|v| v.first().copied()).ok_or_else(|| format!("swap : case « {} » introuvable", key))?;
+        let b = bbox(&built.0[i..=i]);
+        Ok(((b.0 + b.2) / 2.0, (b.1 + b.3) / 2.0))
+    };
+    // Pour chaque case : le contenu (case d'origine) qui s'y trouve, et le déplacement de chaque contenu
+    let mut content: HashMap<String, String> = HashMap::new();
+    let mut moves: HashMap<String, (f32, f32)> = HashMap::new();
+    for (anim, a, b) in swaps {
+        let (a, b) = (discrete::cell_key(a), discrete::cell_key(b));
+        let (pa, pb) = (center(&a)?, center(&b)?);
+        let (ca, cb) = (content.get(&a).cloned().unwrap_or(a.clone()), content.get(&b).cloned().unwrap_or(b.clone()));
+        let e = anim.progress(t) as f32;
+        // Détour : un contenu passe d'un côté, l'autre de l'autre (demi-case au plus fort)
+        let (dx, dy) = (pb.0 - pa.0, pb.1 - pa.1);
+        let len = (dx * dx + dy * dy).sqrt().max(1e-3);
+        let lift = (std::f32::consts::PI * e).sin() * len.min(scene.min_side() * 0.5) * 0.22;
+        let (nx, ny) = (dy / len * lift, -dx / len * lift);
+        let (oa, ob) = (center(&ca)?, center(&cb)?);
+        moves.insert(ca.clone(), (pa.0 + dx * e + nx - oa.0, pa.1 + dy * e + ny - oa.1));
+        moves.insert(cb.clone(), (pb.0 - dx * e - nx - ob.0, pb.1 - dy * e - ny - ob.1));
+        if e >= 1.0 {
+            content.insert(a, cb);
+            content.insert(b, ca);
+        }
+    }
+    let n = shapes.len();
+    for (cell, (dx, dy)) in moves {
+        for i in ids(&format!("text {}", cell)).unwrap_or_default().into_iter().filter(|i| *i < n) {
+            for c in &mut shapes[i].path {
+                *c = match *c {
+                    PathCmd::MoveTo(x, y) => PathCmd::MoveTo(x + dx, y + dy),
+                    PathCmd::LineTo(x, y) => PathCmd::LineTo(x + dx, y + dy),
+                    PathCmd::CubicTo(a, b, c, d, x, y) => PathCmd::CubicTo(a + dx, b + dy, c + dx, d + dy, x + dx, y + dy),
+                    PathCmd::Close => PathCmd::Close,
+                };
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Contour de la première forme, en points (les courbes sont découpées en segments)

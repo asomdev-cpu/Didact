@@ -64,6 +64,8 @@ struct TPath {
     cmds: Vec<PathCmd>,
     fill: bool,
     stroke: Option<f32>,
+    /// Couleur donnée dans le LaTeX (`\color`, `\textcolor`) ; None : celle de la figure
+    paint: Option<(u8, u8, u8)>,
 }
 
 /// Résultat d'une composition
@@ -149,12 +151,184 @@ fn typst_str(s: &str) -> String {
 
 /// Formule LaTeX → appel Typst qui l'évalue avec les définitions MiTeX
 fn math_call(tex: &str, block: bool) -> Result<String, String> {
-    let converted = mitex::convert_math(tex, None).map_err(|e| format!("LaTeX invalide dans « {} » : {}", tex, e))?;
+    let fixed = fix_math(tex);
+    let converted = mitex::convert_math(&fixed, None).map_err(|e| format!("LaTeX invalide dans « {} » : {}", tex, e))?;
     Ok(format!(
         "#math.equation(block: {}, eval(\"$\" + {} + \"$\", scope: mitex-scope))",
         block,
         typst_str(&converted)
     ))
+}
+
+/// Le convertisseur MiTeX produit encore d'anciens noms de symboles Typst (`diff`, `sect`,
+/// `angle.l`, `planck.reduce`) et passe le nom d'une couleur lettre par lettre : on complète
+/// sa table pour Typst 0.15
+const SCOPE_FIXES: &str = r##"#let didact-plain(c) = if type(c) == str { c } else if c.has("text") { c.text } else if c.has("children") { c.children.map(didact-plain).join() } else if c.has("body") { didact-plain(c.body) } else { "" }
+#let didact-color(c) = {
+  let s = lower(didact-plain(c).replace(" ", "").replace("#", ""))
+  let named = (black: black, white: white, red: red, green: green, blue: blue, yellow: yellow, orange: orange, purple: purple, gray: gray, grey: gray, cyan: aqua, magenta: fuchsia, pink: rgb("#FFC0CB"), brown: rgb("#A52A2A"), gold: rgb("#FFD700"), navy: navy, teal: teal, lime: lime)
+  if s in named { named.at(s) } else if s.len() == 6 or s.len() == 3 { rgb("#" + s) } else { black }
+}
+#let mitex-scope = mitex-scope + (
+  diff: sym.partial,
+  sect: sym.inter,
+  angle: symbol("∠", ("l", "⟨"), ("r", "⟩"), ("spheric", "∢"), ("arc", "⌒")),
+  planck: symbol("ℎ", ("reduce", "ℏ")),
+  Re: symbol("ℜ"),
+  Im: symbol("ℑ"),
+  mitexcolor: (c, ..body) => text(fill: didact-color(c), body.pos().join()),
+  colortext: (c, body) => text(fill: didact-color(c), body),
+)"##;
+
+// ─────────────────────────────────────────────
+//  RETOUCHES DU LATEX AVANT CONVERSION
+// ─────────────────────────────────────────────
+
+/// Remplacements simples : commandes que MiTeX ne connaît pas ou rend mal
+fn fix_common(tex: &str) -> String {
+    let mut s = tex
+        .replace("\\mathscr", "\\mathcal")
+        .replace("\\not\\in", "\\notin")
+        .replace("\\not=", "\\neq")
+        // 2{,}5 : la virgule décimale de LaTeX (sans espace après)
+        .replace("{,}", "\\mathord{,}");
+    // cases : un espace entre la valeur et la condition, comme en LaTeX
+    let mut out = String::new();
+    while let Some(i) = s.find("\\begin{cases}") {
+        let Some(j) = s[i..].find("\\end{cases}").map(|j| i + j) else { break };
+        out.push_str(&s[..i]);
+        out.push_str(&s[i..j].replace("\\&", "\u{1}").replace('&', "& \\quad ").replace('\u{1}', "\\&"));
+        s = s[j..].to_string();
+        out.push_str("\\end{cases}");
+        s = s["\\end{cases}".len()..].to_string();
+    }
+    out.push_str(&s);
+    out
+}
+
+/// Valeurs absolues et normes : `|x|` et `\|x\|` deviennent `\left| x \right|`, pour que
+/// Typst les traite comme des délimiteurs (sinon chaque barre est un symbole isolé, entouré
+/// d'espaces). Les barres sont appariées dans chaque groupe `{...}` (ou case `&`, ligne `\\`)
+/// seulement si elles vont par deux : `P(A|B)` ou `\{x | x > 0\}` restent tels quels.
+fn pair_bars(tex: &str) -> String {
+    let b = tex.as_bytes();
+    // Barres ouvertes en attente, par groupe `{...}` : (position, longueur)
+    let mut stack: Vec<Vec<(usize, usize)>> = vec![Vec::new()];
+    let mut marks: Vec<(usize, usize, bool)> = Vec::new(); // (pos, len, ouvrante)
+    let sized = ["\\left", "\\right", "\\middle", "\\big", "\\Big", "\\bigg", "\\Bigg", "\\bigl", "\\bigr", "\\Bigl", "\\Bigr", "\\biggl", "\\biggr"];
+    // Le dernier élément lu est-il un opérande (une barre qui suit peut fermer) ?
+    let mut operand = false;
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        let bar_len = if c == b'|' { 1 } else if c == b'\\' && i + 1 < b.len() && b[i + 1] == b'|' { 2 } else { 0 };
+        if bar_len > 0 {
+            if sized.iter().any(|p| tex[..i].trim_end().ends_with(p)) {
+                i += bar_len;
+                continue;
+            }
+            let group = stack.last_mut().unwrap();
+            // Ferme la dernière barre ouverte du même genre, si on vient d'un opérande
+            match group.last() {
+                Some(&(pos, len)) if operand && len == bar_len => {
+                    group.pop();
+                    marks.push((pos, len, true));
+                    marks.push((i, bar_len, false));
+                    operand = true;
+                }
+                _ => {
+                    group.push((i, bar_len));
+                    operand = false;
+                }
+            }
+            i += bar_len;
+            continue;
+        }
+        match c {
+            b'\\' if i + 1 < b.len() && b[i + 1] == b'\\' => {
+                stack.last_mut().unwrap().clear();
+                operand = false;
+                i += 2;
+                continue;
+            }
+            b'\\' => {
+                // Commande : un nom (\alpha est un opérande, \le ou \mid non : seulement les
+                // lettres grecques et quelques symboles) ou un caractère échappé (\{, \})
+                let start = i;
+                i += 1;
+                if i < b.len() && !b[i].is_ascii_alphabetic() {
+                    operand = b[i] == b'}' || b[i] == b')';
+                    if b[i] == b'{' {
+                        operand = false;
+                    }
+                    i += 1;
+                    continue;
+                }
+                while i < b.len() && b[i].is_ascii_alphabetic() {
+                    i += 1;
+                }
+                let name = &tex[start + 1..i];
+                operand = matches!(
+                    name,
+                    "alpha" | "beta" | "gamma" | "delta" | "epsilon" | "varepsilon" | "theta" | "lambda" | "mu" | "pi" | "rho"
+                        | "sigma" | "tau" | "phi" | "varphi" | "psi" | "omega" | "ell" | "infty" | "Delta" | "Gamma" | "Omega" | "nabla"
+                ) || name.starts_with("right");
+                continue;
+            }
+            b'{' => {
+                stack.push(Vec::new());
+                operand = false;
+            }
+            b'}' => {
+                if stack.len() > 1 {
+                    stack.pop();
+                }
+                operand = true;
+            }
+            b'&' => {
+                stack.last_mut().unwrap().clear();
+                operand = false;
+            }
+            b' ' | b'\t' | b'\n' => {}
+            c if c.is_ascii_alphanumeric() || c == b')' || c == b']' || c == b'!' || c == b'\'' || c == b'.' => operand = true,
+            _ => operand = false,
+        }
+        i += 1;
+    }
+    if marks.is_empty() {
+        return tex.to_string();
+    }
+    marks.sort_by_key(|m| m.0);
+    let mut out = String::with_capacity(tex.len() + marks.len() * 8);
+    let mut last = 0;
+    for (pos, len, open) in marks {
+        out.push_str(&tex[last..pos]);
+        out.push_str(if open { "\\left" } else { "\\right" });
+        out.push_str(if len == 1 { "|" } else { "\\|" });
+        out.push(' ');
+        last = pos + len;
+    }
+    out.push_str(&tex[last..]);
+    out
+}
+
+/// LaTeX en mode mathématique, retouché pour MiTeX
+fn fix_math(tex: &str) -> String {
+    pair_bars(&fix_common(tex))
+}
+
+/// LaTeX en mode texte : les maths (`$...$`, `\(...\)`, `\[...\]`) sont retouchées comme
+/// des formules
+fn fix_text(tex: &str) -> String {
+    let s = fix_common(tex);
+    let mut out = String::new();
+    for (i, part) in s.split('$').enumerate() {
+        if i > 0 {
+            out.push('$');
+        }
+        out.push_str(&if i % 2 == 1 { pair_bars(part) } else { part.to_string() });
+    }
+    out
 }
 
 /// Une ligne de texte avec des `$...$` → contenu Typst
@@ -229,7 +403,7 @@ fn document(content: &Content, align: Align) -> Result<String, String> {
         Content::Math(tex) => math_call(tex, true)?,
         Content::Latex(tex) => {
             let converted =
-                mitex::convert_text(tex, None).map_err(|e| format!("LaTeX invalide : {}", e))?;
+                mitex::convert_text(&fix_text(tex), None).map_err(|e| format!("LaTeX invalide : {}", e))?;
             format!("#eval({}, mode: \"markup\", scope: mitex-scope)", typst_str(&converted))
         }
         Content::Table { header, rows } => {
@@ -255,13 +429,17 @@ fn document(content: &Content, align: Align) -> Result<String, String> {
     };
     Ok(format!(
         "#import \"specs/mod.typ\": mitex-scope\n\
+         {}\n\
          #set page(width: auto, height: auto, margin: 0pt, fill: none)\n\
          #set text(font: \"Latin Modern Roman\", size: {}pt)\n\
          #show math.equation: set text(font: \"Latin Modern Math\")\n\
          #set par(leading: 0.6em)\n\
          #set align({})\n\
+         #show list: set align(left)\n\
+         #show enum: set align(left)\n\
+         #show terms: set align(left)\n\
          {}\n",
-        BASE_PT, align, body
+        SCOPE_FIXES, BASE_PT, align, body
     ))
 }
 
@@ -351,10 +529,17 @@ fn collect(group: &usvg::Group, out: &mut Vec<TPath>) {
                     }
                 }
                 let scale = (t.sx * t.sy - t.kx * t.ky).abs().sqrt();
+                // Le texte est composé en noir : toute autre couleur vient du LaTeX
+                let solid = |paint: &usvg::Paint| match paint {
+                    usvg::Paint::Color(c) if (c.red, c.green, c.blue) != (0, 0, 0) => Some((c.red, c.green, c.blue)),
+                    _ => None,
+                };
+                let paint = p.fill().and_then(|f| solid(f.paint())).or_else(|| p.stroke().and_then(|s| solid(s.paint())));
                 out.push(TPath {
                     cmds,
                     fill: p.fill().is_some(),
                     stroke: p.stroke().map(|s| s.width().get() * scale),
+                    paint,
                 });
             }
             _ => {}
@@ -378,6 +563,11 @@ pub fn place(ts: &Typeset, x: f32, y: f32, size: f32, align: Align, color: Rgba)
     };
     let top = y - h / 2.0;
     let m = |px: f32, py: f32| (left + px * k, top + py * k);
+    // Couleur d'un morceau : celle du LaTeX s'il en donne une (avec l'opacité de la figure)
+    let own = |p: &TPath| match p.paint {
+        Some((r, g, b)) => Rgba { a: color.a, ..Rgba::rgb8(r, g, b) },
+        None => color,
+    };
 
     ts.paths
         .iter()
@@ -401,8 +591,8 @@ pub fn place(ts: &Typeset, x: f32, y: f32, size: f32, align: Align, color: Rgba)
                     PathCmd::Close => PathCmd::Close,
                 })
                 .collect(),
-            fill: if p.fill { Some(color) } else { None },
-            stroke: p.stroke.map(|w| (color, w * k)),
+            fill: if p.fill { Some(own(p)) } else { None },
+            stroke: p.stroke.map(|w| (own(p), w * k)),
             image: None,
         })
         .collect()
@@ -438,6 +628,33 @@ pub fn check(content: &Content) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn valeurs_absolues() {
+        assert_eq!(pair_bars("|x|"), "\\left| x\\right| ");
+        assert_eq!(pair_bars("|a| + |b|"), "\\left| a\\right|  + \\left| b\\right| ");
+        assert_eq!(pair_bars("\\|x\\|"), "\\left\\| x\\right\\| ");
+        // Une barre seule reste une barre : probabilité conditionnelle, ensemble
+        assert_eq!(pair_bars("P(A|B)"), "P(A|B)");
+        assert_eq!(pair_bars("\\{x | x > 0\\}"), "\\{x | x > 0\\}");
+        // Déjà dimensionnées : intactes
+        assert_eq!(pair_bars("\\left| x \\right|"), "\\left| x \\right|");
+        // Imbriquées et mélangées
+        assert_eq!(pair_bars("||x| - |y||").matches("\\left|").count(), 3);
+        assert_eq!(pair_bars("|x| + P(A|B)").matches("\\left|").count(), 1);
+    }
+
+    #[test]
+    fn latex_courant() {
+        // Commandes que l'ancienne table de MiTeX ne connaissait plus (Typst 0.15)
+        for t in ["\\partial f", "\\langle u, v \\rangle", "A \\cap B", "\\hbar", "\\Re(z)", "\\Im(z)", "\\mathscr{F}", "x \\not\\in A", "\\color{red}{x}", "\\textcolor{blue}{y}", "\\textcolor{22C55E}{z}"] {
+            assert!(check(&Content::Math(t.into())).is_ok(), "{}", t);
+        }
+        // \textcolor garde sa couleur
+        let ts = typeset(&Content::Math("x + \\textcolor{red}{y}".into()), Align::Center).unwrap();
+        assert!(ts.paths.iter().any(|p| p.paint == Some((255, 65, 54))), "{:?}", ts.paths.iter().map(|p| p.paint).collect::<Vec<_>>());
+        assert!(ts.paths.iter().any(|p| p.paint.is_none()));
+    }
 
     #[test]
     fn gras_et_italique_dans_le_texte() {

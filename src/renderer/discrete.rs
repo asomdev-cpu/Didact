@@ -15,7 +15,8 @@
 //!
 //! Chaque morceau a un nom, utilisable par `color(to=..., part=...)` :
 //! un nœud (`part=b`), une arête (`part="a-b"`), une case (`part="(2,3)"`, ligne puis colonne
-//! à partir de 1), une ligne ou une colonne entière (`part="row 2"`, `part="col 3"`).
+//! à partir de 1), une ligne ou une colonne entière (`part="row 2"`, `part="col 3"`) ;
+//! préfixe `text` : le texte des cases au lieu de leur fond (`part="text (2,3)"`, `part="text row 2"`).
 
 use super::geometry::{self, PathCmd, Refs, Rgba, Scene, Shape};
 use crate::ast::PropValue;
@@ -37,8 +38,17 @@ fn list(src: &str) -> Vec<String> {
     let s = src.trim();
     let inner = s.strip_prefix('[').and_then(|r| r.strip_suffix(']')).unwrap_or(s);
     let mut out = Vec::new();
-    let (mut depth, mut cur, mut math) = (0i32, String::new(), false);
+    let (mut depth, mut cur, mut math, mut quoted) = (0i32, String::new(), false, false);
     for c in inner.chars() {
+        // "a,b" : une seule étiquette (guillemets retirés)
+        if c == '"' {
+            quoted = !quoted;
+            continue;
+        }
+        if quoted {
+            cur.push(c);
+            continue;
+        }
         match c {
             '$' => math = !math,
             '(' | '[' | '{' if !math => depth += 1,
@@ -78,8 +88,18 @@ fn edge(src: &str) -> Result<(String, String, bool), String> {
 }
 
 /// Nom de morceau normalisé (sans espaces, sauf « row 2 » / « col 3 »)
+/// Case d'un `swap` : `"(2,3)"`, ou `3` (3e case d'un tableau d'une seule ligne)
+pub fn cell_key(p: &str) -> String {
+    let p = normalize_part(p);
+    if !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()) { format!("(1,{})", p) } else { p }
+}
+
 pub fn normalize_part(p: &str) -> String {
     let p = p.trim();
+    // `text (2,3)`, `text row 2` : le texte des cases plutôt que leur fond
+    if let Some(rest) = p.strip_prefix("text ") {
+        return format!("text {}", normalize_part(rest));
+    }
     for k in ["row", "col"] {
         if let Some(rest) = p.strip_prefix(k) {
             return format!("{} {}", k, rest.trim());
@@ -334,29 +354,74 @@ fn graph(f: &ResolvedFigure, scene: &Scene, refs: &Refs) -> Result<Built, String
         }
     }
     // Arêtes d'abord (sous les nœuds)
+    let head = geometry::arrow_length(width, scene);
     for (k, &(a, b, dir)) in g.edges.iter().enumerate() {
-        if a == b {
-            continue;
-        }
-        let (pa, pb) = (at[a], at[b]);
-        let (dx, dy) = (pb.0 - pa.0, pb.1 - pa.1);
-        let len = (dx * dx + dy * dy).sqrt().max(1e-6);
-        let (ux, uy) = (dx / len, dy / len);
-        let start = (pa.0 + ux * r, pa.1 + uy * r);
-        let mut end = (pb.0 - ux * r, pb.1 - uy * r);
         let mut ids = Vec::new();
-        if dir {
-            let head = geometry::arrow_length(width, scene);
+        // Point de l'étiquette (poids) : (x, y)
+        let label_at: (f32, f32);
+        if a == b {
+            // Boucle au-dessus du nœud (automate : transition vers lui-même)
+            let (cx, cy) = at[a];
+            let (a0, a1) = (125f32.to_radians(), 55f32.to_radians());
+            let (p0, p1) = ((cx + r * a0.cos(), cy - r * a0.sin()), (cx + r * a1.cos(), cy - r * a1.sin()));
+            let lift = 2.6 * r;
+            let (c0, c1) = ((p0.0 - 0.9 * r, p0.1 - lift), (p1.0 + 0.9 * r, p1.1 - lift));
+            let mut path = vec![PathCmd::MoveTo(p0.0, p0.1)];
+            let mut end = p1;
+            if dir {
+                // Pointe dans la direction d'arrivée (de c1 vers p1)
+                let (dx, dy) = (p1.0 - c1.0, p1.1 - c1.1);
+                let n = (dx * dx + dy * dy).sqrt().max(1e-6);
+                ids.push(shapes.len());
+                shapes.push(geometry::arrow_head(p1.0, p1.1, dx / n, dy / n, head, line));
+                end = (p1.0 - dx / n * head * 0.8, p1.1 - dy / n * head * 0.8);
+            }
+            path.push(PathCmd::CubicTo(c0.0, c0.1, c1.0, c1.1, end.0, end.1));
             ids.push(shapes.len());
-            shapes.push(geometry::arrow_head(end.0, end.1, ux, uy, head, line));
-            end = (end.0 - ux * head * 0.8, end.1 - uy * head * 0.8);
+            shapes.push(Shape { path, fill: None, stroke: Some((line, width)), glow: 0.0, image: None });
+            label_at = (cx, cy - r - 0.75 * lift - 0.6 * r);
+        } else {
+            let (pa, pb) = (at[a], at[b]);
+            let (dx, dy) = (pb.0 - pa.0, pb.1 - pa.1);
+            let len = (dx * dx + dy * dy).sqrt().max(1e-6);
+            let (ux, uy) = (dx / len, dy / len);
+            // Normale à gauche du sens a → b (y écran vers le bas)
+            let (nx, ny) = (uy, -ux);
+            // Arête dans les deux sens (a->b et b->a) : chacune s'incurve de son côté
+            let both = dir && g.edges.iter().any(|&(c, d, o)| o && c == b && d == a);
+            let bend = if both { (0.18 * len).min(3.0 * r) } else { 0.0 };
+            // Point de contrôle (courbe quadratique) et sorties sur le bord des disques
+            let ctrl = ((pa.0 + pb.0) / 2.0 + nx * bend * 2.0, (pa.1 + pb.1) / 2.0 + ny * bend * 2.0);
+            let unit = |from: (f32, f32), to: (f32, f32)| {
+                let (x, y) = (to.0 - from.0, to.1 - from.1);
+                let n = (x * x + y * y).sqrt().max(1e-6);
+                (x / n, y / n)
+            };
+            let (sa, sb) = (unit(pa, ctrl), unit(pb, ctrl));
+            let start = (pa.0 + sa.0 * r, pa.1 + sa.1 * r);
+            let mut end = (pb.0 + sb.0 * r, pb.1 + sb.1 * r);
+            if dir {
+                let (hx, hy) = (-sb.0, -sb.1);
+                ids.push(shapes.len());
+                shapes.push(geometry::arrow_head(end.0, end.1, hx, hy, head, line));
+                end = (end.0 - hx * head * 0.8, end.1 - hy * head * 0.8);
+            }
+            let path = if both {
+                vec![PathCmd::MoveTo(start.0, start.1), PathCmd::CubicTo(
+                    start.0 + (ctrl.0 - start.0) * 2.0 / 3.0, start.1 + (ctrl.1 - start.1) * 2.0 / 3.0,
+                    end.0 + (ctrl.0 - end.0) * 2.0 / 3.0, end.1 + (ctrl.1 - end.1) * 2.0 / 3.0,
+                    end.0, end.1)]
+            } else {
+                vec![PathCmd::MoveTo(start.0, start.1), PathCmd::LineTo(end.0, end.1)]
+            };
+            ids.push(shapes.len());
+            shapes.push(Shape { path, fill: None, stroke: Some((line, width)), glow: 0.0, image: None });
+            // Étiquette à côté du milieu de l'arête, du côté où elle s'incurve (à gauche sinon)
+            let off = bend + r * 0.9;
+            label_at = ((pa.0 + pb.0) / 2.0 + nx * off, (pa.1 + pb.1) / 2.0 + ny * off);
         }
-        ids.push(shapes.len());
-        shapes.push(Shape { path: vec![PathCmd::MoveTo(start.0, start.1), PathCmd::LineTo(end.0, end.1)], fill: None, stroke: Some((line, width)), glow: 0.0, image: None });
         if let Some(w) = &weights {
-            // Étiquette à côté du milieu, du côté gauche de l'arête
-            let (mx, my) = ((pa.0 + pb.0) / 2.0 - uy * r * 0.9, (pa.1 + pb.1) / 2.0 + ux * r * 0.9);
-            let ls = super::text::text_shapes(&w[k], mx, my, r * 1.0, super::text::Align::Center, label_color)?;
+            let ls = super::text::text_shapes(&w[k], label_at.0, label_at.1, r * 1.0, super::text::Align::Center, label_color)?;
             ids.extend(shapes.len()..shapes.len() + ls.len());
             shapes.extend(ls);
         }
@@ -368,6 +433,25 @@ fn graph(f: &ResolvedFigure, scene: &Scene, refs: &Refs) -> Result<Built, String
             parts.push((format!("{}-{}", nb, na), ids));
         }
     }
+    // Automate : état initial (flèche entrante) et états acceptants (double cercle)
+    let node_index = |n: &str| g.nodes.iter().position(|x| x == n);
+    if let Some(init) = text(f, "initial") {
+        let i = node_index(&init).ok_or_else(|| format!("initial : nœud '{}' inconnu", init))?;
+        let (cx, cy) = at[i];
+        let tip = (cx - r, cy);
+        shapes.push(geometry::arrow_head(tip.0, tip.1, 1.0, 0.0, head, line));
+        shapes.push(Shape {
+            path: vec![PathCmd::MoveTo(cx - 2.6 * r, cy), PathCmd::LineTo(tip.0 - head * 0.8, cy)],
+            fill: None,
+            stroke: Some((line, width)),
+            glow: 0.0,
+            image: None,
+        });
+    }
+    let accepting: Vec<usize> = match prop_list(f, "accepting") {
+        Some(l) => l.iter().map(|n| node_index(n).ok_or_else(|| format!("accepting : nœud '{}' inconnu", n))).collect::<Result<_, _>>()?,
+        None => Vec::new(),
+    };
     // Nœuds : disque et nom
     let labels: Option<Vec<String>> = match text(f, "labels").as_deref() {
         Some("false") => None,
@@ -382,6 +466,9 @@ fn graph(f: &ResolvedFigure, scene: &Scene, refs: &Refs) -> Result<Built, String
     for (i, name) in g.nodes.iter().enumerate() {
         let ids = vec![shapes.len()];
         shapes.push(Shape { path: geometry::circle_path(at[i].0, at[i].1, r), fill: Some(fill), stroke: Some((line, width)), glow: 0.0, image: None });
+        if accepting.contains(&i) {
+            shapes.push(Shape { path: geometry::circle_path(at[i].0, at[i].1, r * 0.8), fill: None, stroke: Some((line, width)), glow: 0.0, image: None });
+        }
         if let Some(l) = &labels {
             shapes.extend(super::text::text_shapes(&l[i], at[i].0, at[i].1, r * 1.1, super::text::Align::Center, label_color)?);
         }
@@ -433,10 +520,11 @@ fn array(f: &ResolvedFigure, scene: &Scene, refs: &Refs) -> Result<Built, String
     let (x0, y0) = (cx - w / 2.0, cy - h / 2.0);
     let mut shapes = Vec::new();
     let mut parts = Vec::new();
+    let mut texts: Vec<(String, Vec<usize>)> = Vec::new();
     for (i, row) in rows.iter().enumerate() {
         for (j, v) in row.iter().enumerate() {
             let (x, y) = (x0 + j as f32 * cell, y0 + i as f32 * cell);
-            let mut ids = vec![shapes.len()];
+            let ids = vec![shapes.len()];
             shapes.push(Shape {
                 path: vec![PathCmd::MoveTo(x, y), PathCmd::LineTo(x + cell, y), PathCmd::LineTo(x + cell, y + cell), PathCmd::LineTo(x, y + cell), PathCmd::Close],
                 fill: Some(back),
@@ -446,20 +534,27 @@ fn array(f: &ResolvedFigure, scene: &Scene, refs: &Refs) -> Result<Built, String
             });
             if !v.is_empty() {
                 let ts = super::text::text_shapes(v, x + cell / 2.0, y + cell / 2.0, font, super::text::Align::Center, txt)?;
-                // Le texte de la case n'est pas recoloré : seul le fond l'est
-                let _ = &mut ids;
+                // Le texte de la case n'est pas recoloré avec le fond : morceau `text (i,j)` à part
+                texts.push((format!("({},{})", i + 1, j + 1), (shapes.len()..shapes.len() + ts.len()).collect()));
                 shapes.extend(ts);
             }
             parts.push((format!("({},{})", i + 1, j + 1), ids));
         }
     }
-    for i in 0..nr {
-        let ids: Vec<usize> = parts.iter().filter(|(k, _)| k.starts_with(&format!("({},", i + 1))).flat_map(|(_, v)| v.clone()).collect();
-        parts.push((format!("row {}", i + 1), ids));
-    }
-    for j in 0..nc {
-        let ids: Vec<usize> = parts.iter().filter(|(k, _)| k.ends_with(&format!(",{})", j + 1)) && k.starts_with('(')).flat_map(|(_, v)| v.clone()).collect();
-        parts.push((format!("col {}", j + 1), ids));
+    for (cells, prefix) in [(parts.clone(), ""), (texts, "text ")] {
+        for (k, v) in &cells {
+            if !prefix.is_empty() {
+                parts.push((format!("{}{}", prefix, k), v.clone()));
+            }
+        }
+        for i in 0..nr {
+            let ids: Vec<usize> = cells.iter().filter(|(k, _)| k.starts_with(&format!("({},", i + 1))).flat_map(|(_, v)| v.clone()).collect();
+            parts.push((format!("{}row {}", prefix, i + 1), ids));
+        }
+        for j in 0..nc {
+            let ids: Vec<usize> = cells.iter().filter(|(k, _)| k.ends_with(&format!(",{})", j + 1)) && k.starts_with('(')).flat_map(|(_, v)| v.clone()).collect();
+            parts.push((format!("{}col {}", prefix, j + 1), ids));
+        }
     }
     if brackets {
         // Crochets de matrice : [ à gauche, ] à droite
@@ -522,6 +617,8 @@ pub fn part_names(f: &ResolvedFigure) -> Result<Vec<String>, String> {
             }
             let nc = rows.iter().map(|r| r.len()).max().unwrap_or(0);
             v.extend((1..=nc).map(|j| format!("col {}", j)));
+            let texts: Vec<String> = v.iter().map(|p| format!("text {}", p)).collect();
+            v.extend(texts);
             Ok(v)
         }
     }

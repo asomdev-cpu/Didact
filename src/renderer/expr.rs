@@ -37,7 +37,7 @@ pub enum Expr {
 }
 
 /// Fonctions : nom, nombre d'arguments (min, max ; 0 = illimité), disponible en complexe
-const FUNCTIONS: &[(&str, usize, usize, bool)] = &[
+pub(crate) const FUNCTIONS: &[(&str, usize, usize, bool)] = &[
     ("sin", 1, 1, true),
     ("cos", 1, 1, true),
     ("tan", 1, 1, true),
@@ -587,6 +587,71 @@ impl Expr {
 //  LECTURE
 // ─────────────────────────────────────────────
 
+// ─────────────────────────────────────────────
+//  FONCTIONS DE L'UTILISATEUR (deffunction)
+// ─────────────────────────────────────────────
+
+/// `deffunction f(x, y) = corps` : arguments et corps (texte)
+struct UserFn {
+    params: Vec<String>,
+    body: String,
+}
+
+fn functions() -> &'static std::sync::RwLock<HashMap<String, std::sync::Arc<UserFn>>> {
+    static F: std::sync::OnceLock<std::sync::RwLock<HashMap<String, std::sync::Arc<UserFn>>>> = std::sync::OnceLock::new();
+    F.get_or_init(|| std::sync::RwLock::new(HashMap::new()))
+}
+
+/// Oublie les fonctions (nouveau document)
+pub fn clear_functions() {
+    functions().write().unwrap().clear();
+}
+
+/// Définit (ou redéfinit) une fonction ; le corps est vérifié avec ses arguments et les
+/// paramètres `params`
+pub fn define_function(name: &str, args: &[String], body: &str, params: &[String]) -> Result<(), String> {
+    if is_reserved(name) || FUNCTIONS.iter().any(|f| f.0 == name) {
+        return Err(format!("'{}' est un nom réservé des formules : choisir un autre nom", name));
+    }
+    for a in args {
+        if a != "x" && is_reserved(a) {
+            return Err(format!("argument '{}' : nom réservé des formules", a));
+        }
+    }
+    let mut names: Vec<String> = args.to_vec();
+    names.extend(params.iter().filter(|p| !args.contains(p)).cloned());
+    // Vérifie le corps sans la fonction elle-même (pas de récursion)
+    parse_with(body, &names).map_err(|e| format!("{}({}) = {} : {}", name, args.join(", "), body, e))?;
+    functions()
+        .write()
+        .unwrap()
+        .insert(name.to_string(), std::sync::Arc::new(UserFn { params: args.to_vec(), body: body.to_string() }));
+    Ok(())
+}
+
+/// Le texte de toutes les fonctions (le cache de calcul en dépend)
+pub fn functions_text() -> String {
+    let f = functions().read().unwrap();
+    let mut v: Vec<String> = f.iter().map(|(n, u)| format!("{}({})={}", n, u.params.join(","), u.body)).collect();
+    v.sort();
+    v.join(";")
+}
+
+impl Expr {
+    /// Remplace les variables `Var(nom)` par des expressions
+    fn subst(&self, map: &HashMap<String, Expr>) -> Expr {
+        let b = |e: &Expr| Box::new(e.subst(map));
+        match self {
+            Expr::Var(n) => map.get(n).cloned().unwrap_or_else(|| self.clone()),
+            Expr::Neg(a) => Expr::Neg(b(a)),
+            Expr::Bin(op, l, r) => Expr::Bin(*op, b(l), b(r)),
+            Expr::Call(name, args) => Expr::Call(name, args.iter().map(|a| a.subst(map)).collect()),
+            Expr::Sum { prod, from, to, body } => Expr::Sum { prod: *prod, from: b(from), to: b(to), body: b(body) },
+            other => other.clone(),
+        }
+    }
+}
+
 /// Lit une expression ; l'erreur explique ce qui ne va pas
 pub fn parse(src: &str) -> Result<Expr, String> {
     parse_with(src, &[])
@@ -604,7 +669,7 @@ pub fn parse_complex(src: &str, params: &[String]) -> Result<Expr, String> {
 
 fn parse_mode(src: &str, params: &[String], complex: bool) -> Result<Expr, String> {
     let chars: Vec<char> = src.chars().filter(|c| !c.is_whitespace()).collect();
-    let mut p = P { c: &chars, i: 0, params, bound: Vec::new(), complex };
+    let mut p = P { c: &chars, i: 0, params, bound: Vec::new(), complex, depth: 0 };
     let e = p.expr()?;
     if p.i < chars.len() {
         return Err(format!("expression '{}' : caractère inattendu '{}'", src, chars[p.i]));
@@ -636,6 +701,8 @@ struct P<'a> {
     /// Variables des sommes en cours (la dernière est la plus intérieure)
     bound: Vec<String>,
     complex: bool,
+    /// Profondeur d'appels de fonctions de l'utilisateur (une fonction peut en appeler une autre)
+    depth: usize,
 }
 
 impl P<'_> {
@@ -749,12 +816,19 @@ impl P<'_> {
                     self.i += word.chars().count();
                     return Ok(Expr::Var(word));
                 }
+                // Fonction de l'utilisateur au nom complet (peut contenir des _ et des chiffres)
+                if functions().read().unwrap().contains_key(&word) {
+                    self.i += word.chars().count();
+                    return self.name(&word);
+                }
                 // Plus long nom connu au début : « sinx » → sin, « xsin » → x puis sin, « kx » → k puis x
                 let rest: String = self.c[self.i..].iter().take_while(|c| c.is_ascii_alphanumeric()).collect();
                 let builtin = builtin_names(self.complex);
+                let user: Vec<String> = functions().read().unwrap().keys().cloned().collect();
                 let known = builtin
                     .iter()
                     .copied()
+                    .chain(user.iter().map(|u| u.as_str()))
                     .chain(self.params.iter().map(|p| p.as_str()))
                     .chain(self.bound.iter().map(|b| b.as_str()))
                     .filter(|n| rest.starts_with(n))
@@ -800,6 +874,30 @@ impl P<'_> {
         }
         self.i += 1;
         Ok(args)
+    }
+
+    /// Appel d'une fonction de l'utilisateur : son corps, arguments remplacés
+    fn user_call(&mut self, name: &str, f: &UserFn) -> Result<Expr, String> {
+        if self.depth > 24 {
+            return Err(format!("{} : trop d'appels imbriqués (une fonction qui s'appelle elle-même ?)", name));
+        }
+        let args = self.args(name)?;
+        if args.len() != f.params.len() {
+            return Err(format!("{} attend {} argument(s) ({}), {} donné(s)", name, f.params.len(), f.params.join(", "), args.len()));
+        }
+        // Le corps voit ses arguments et les paramètres ; les variables de sommes en cours
+        // gardent leur place (les indices restent justes)
+        let mut names: Vec<String> = f.params.clone();
+        names.extend(self.params.iter().filter(|p| !f.params.contains(p)).cloned());
+        let chars: Vec<char> = f.body.chars().filter(|c| !c.is_whitespace()).collect();
+        let hidden: Vec<String> = self.bound.iter().map(|_| "\u{1}".to_string()).collect();
+        let mut sub = P { c: &chars, i: 0, params: &names, bound: hidden, complex: self.complex, depth: self.depth + 1 };
+        let body = sub.expr().map_err(|e| format!("{} : {}", name, e))?;
+        if sub.i < chars.len() {
+            return Err(format!("{} : corps illisible", name));
+        }
+        let map: HashMap<String, Expr> = f.params.iter().cloned().zip(args).collect();
+        Ok(body.subst(&map))
     }
 
     /// sum(k, début, fin, corps)
@@ -850,6 +948,10 @@ impl P<'_> {
         if name == "sum" || name == "prod" {
             return self.sum_call(name == "prod");
         }
+        let user = functions().read().unwrap().get(name).cloned();
+        if let Some(f) = user {
+            return self.user_call(name, &f);
+        }
         if let Some(&(fname, min, max, complex_ok)) = FUNCTIONS.iter().find(|f| f.0 == name) {
             if self.complex && !complex_ok {
                 return Err(format!("{} n'est pas disponible avec les nombres complexes", fname));
@@ -885,6 +987,28 @@ mod tests {
 
     fn f(src: &str, x: f64) -> f64 {
         parse(src).unwrap().eval(x, &HashMap::new())
+    }
+
+    #[test]
+    fn fonctions_utilisateur() {
+        let p = vec!["a".to_string()];
+        define_function("tfu_f", &["x".to_string()], "x^2 + a", &p).unwrap();
+        define_function("tfu_g", &["u".to_string(), "v".to_string()], "tfu_f(u) - v", &p).unwrap();
+        let vals: HashMap<String, f64> = [("a".to_string(), 1.0)].into();
+        let ev = |s: &str, x: f64| parse_with(s, &p).unwrap().eval(x, &vals);
+        assert_eq!(ev("tfu_f(x)", 3.0), 10.0);
+        assert_eq!(ev("tfu_f(2) + 1", 0.0), 6.0);
+        assert_eq!(ev("tfu_g(3, 2)", 0.0), 8.0);
+        assert_eq!(ev("2tfu_f(x)", 1.0), 4.0);
+        // dans une somme : l'indice reste juste, même si le corps a sa propre somme
+        define_function("tfu_s", &["n".to_string()], "sum(j, 1, n, j)", &[]).unwrap();
+        assert_eq!(ev("sum(k, 1, 3, tfu_f(k))", 0.0), 1.0 + 1.0 + 4.0 + 1.0 + 9.0 + 1.0);
+        assert_eq!(ev("sum(k, 1, 3, tfu_s(k))", 0.0), 1.0 + 3.0 + 6.0);
+        // pas de x dans f(2) ; erreurs claires
+        assert!(!parse_with("tfu_f(2)", &p).unwrap().uses_x());
+        assert!(parse_with("tfu_f(1, 2)", &p).unwrap_err().contains("attend 1 argument"));
+        assert!(define_function("sin", &["x".to_string()], "x", &[]).unwrap_err().contains("réservé"));
+        assert!(define_function("tfu_bad", &["x".to_string()], "x + q", &[]).unwrap_err().contains("q"));
     }
 
     #[test]

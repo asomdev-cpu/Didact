@@ -20,6 +20,8 @@ pub struct Config {
     pub background: String,
     pub languages: Vec<String>,
     pub default_lang: String,
+    /// `decimal : comma` : les nombres affichés (`#{...}`, graduations) s'écrivent 2,5
+    pub decimal_comma: bool,
     /// Ligne de chaque propriété écrite dans [config] (ex: "default_lang" → 4)
     pub lines: HashMap<String, usize>,
 }
@@ -31,6 +33,7 @@ impl Default for Config {
             background: "white".to_string(),
             languages: vec!["FR".to_string()],
             default_lang: "FR".to_string(),
+            decimal_comma: false,
             lines: HashMap::new(),
         }
     }

@@ -251,14 +251,14 @@ mod tests {
 
     #[test]
     fn timeline_triee() {
-        let doc = resolve_src(
-            "[figures]
+        // Le validateur refuse ce désordre ; le résolveur trie quand même
+        let src = "[figures]
             deffigure a =
                 type : line
             [timeline]
             5.000 => { end : [a] }
-            0.000 => { start : [a] }",
-        );
+            0.000 => { start : [a] }";
+        let doc = resolve(&parser::parse(lexer::tokenize(src)).unwrap());
         let ts: Vec<f64> = doc.timeline.iter().map(|e| e.timestamp).collect();
         assert_eq!(ts, [0.0, 5.0]);
     }

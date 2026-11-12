@@ -37,7 +37,7 @@ deffigure r1 =
 # pos d'un groupe = décalage de toutes ses figures (ici : 10% vers la droite)
 defgroup g =
     items : [c1, r1]
-    pos   : (10%, 0%)
+    offset   : (10%, 0%)
 
 # ─── Texte et équation ───
 
@@ -45,13 +45,13 @@ deffigure titre =
     type    : text
     content : "La dérivée de $x^2$ est $2x$"
     pos     : (65%, 80%)
-    font    : 48px
+    size    : 48px
 
 deffigure eq =
     type : equation
     expr : \int_0^1 x^n \, dx = \frac{1}{n+1}
     pos  : (65%, 55%)
-    font : 56px
+    size : 56px
 
 # ─── Morphing : le carré devient un cercle ───
 

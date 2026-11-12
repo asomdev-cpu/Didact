@@ -17,7 +17,7 @@ deffigure espace =
     yrange : [-4, 4]
     zrange : [-2, 3]
     camera : (28, -60)
-    axes   : box
+    frame   : box
     floor  : 8
 
 deffigure tore =

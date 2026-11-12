@@ -174,7 +174,7 @@ fn schedule(
 ) -> f64 {
     match animation::parse_call(call) {
         Ok((kind, duration, ease)) => {
-            if let AnimKind::Transform { to } = &kind {
+            if let AnimKind::Transform { to, .. } = &kind {
                 swaps.push(Swap { time: start + duration, from: figure.to_string(), to: to.clone() });
             }
             anims.entry(figure.to_string()).or_default().push(Anim {
@@ -226,7 +226,7 @@ impl Timeline {
             let t = ev.timestamp;
             // Fins de transform d'avant ce bloc : instantanés intermédiaires
             flush_swaps(&mut swaps, &mut current, Some(t), &mut times, &mut snapshots);
-            // Ordre fixe : destroy → end → start → anim → comment (SPEC §6.3)
+            // Ordre fixe : destroy → end → start → anim → comment (SPEC §8)
             // On parcourt le bloc une fois par commande.
             for located in &ev.actions {
                 if let TimelineAction::Destroy(names) = &located.action {
@@ -740,7 +740,7 @@ mod tests {
                 type : star
             defgroup g =
                 items : [a, b]
-                pos : (10%, -5%)
+                offset : (10%, -5%)
             [timeline]
             0.000 => { start : [g fadein(1s)] }
             2.000 => { anim : [a transform(to=c, 1.5s)] }
