@@ -1,0 +1,1160 @@
+# ─────────────────────────────────────────────
+#  Q(λ)-learning de Watkins : apprendre Q* en explorant
+#  LINMA2222 — Chapitre 3.5.6 (environ 6 minutes)
+#  didact demo-Qlambdalearning.dct
+#
+#  Plan :
+#   1. De TD(λ)-PI à Q(λ) : la cible devient gloutonne
+#   2. Off-policy : politique de comportement vs politique cible
+#   3. Un exemple : chaîne S → M → but, deux actions par état
+#   4. Pas 1 : action gloutonne, cible avec le min
+#   5. Pas 2 : exploration → la trace est coupée
+#   6. Pas 3 : retour au glouton, la trace repart
+#   7. Convergence vers Q* et politique optimale
+#   8. L'algorithme complet
+#   9. TD(λ)-PI vs Q(λ), limites
+#  10. Récapitulatif
+# ─────────────────────────────────────────────
+
+[config]
+window       : [16:9]
+background   : white
+languages    : [FR]
+default_lang : FR
+decimal      : comma
+
+[figures]
+
+# ═════════════ Styles ═════════════
+
+defstyle titre_scene =
+    size  : 46px
+    color : #1E3A8A
+
+defstyle formule =
+    size : 40px
+
+defstyle note =
+    size  : 30px
+    color : #4B5563
+
+defstyle noeud =
+    radius : 3.5%
+    fill   : white
+    color  : #374151
+    stroke : 3px
+    layer  : 2
+
+defstyle fleche =
+    color  : #6B7280
+    stroke : 3px
+    arrow  : end
+
+defstyle boucle =
+    color  : #7C3AED
+    stroke : 3px
+    arrow  : end
+
+defstyle barre_av =
+    fill  : #2563EB
+    color : #1D4ED8
+    layer : 1
+
+defstyle barre_att =
+    fill  : #7C3AED
+    color : #6D28D9
+    layer : 1
+
+defstyle valeur =
+    size : 24px
+
+defstyle calcul =
+    size : 32px
+
+# ═════════════ Paramètres ═════════════
+
+# Estimations Q(état, action) : av = avancer, att = attendre
+defparam SA = 2
+defparam SW = 4
+defparam MA = 0.5
+defparam MW = 3
+
+# Trace d'éligibilité sur chaque couple (état, action)
+defparam tSA = 0
+defparam tSW = 0
+defparam tMA = 0
+defparam tMW = 0
+
+# ═════════════ 0. Titre ═════════════
+
+deffigure titre =
+    type    : text
+    content : "Q($\lambda$)-learning"
+    pos     : (50%, 58%)
+    size    : 80px
+    color   : #1E3A8A
+
+deffigure sous_titre =
+    type    : text
+    content : "Apprendre $Q^\star$ directement, tout en explorant"
+    pos     : (50%, 44%)
+    size    : 42px
+    color   : #4B5563
+
+deffigure source =
+    type    : text
+    content : "LINMA2222 — Chapitre 3.5.6 — algorithme de Watkins"
+    pos     : (50%, 34%)
+    size    : 30px
+    color   : #9CA3AF
+
+defgroup g_titre =
+    items : [titre, sous_titre, source]
+
+# ═════════════ 1. De TD(λ)-PI à Q(λ) ═════════════
+
+deffigure s1_titre =
+    type    : text
+    content : "Une seule différence : la cible"
+    pos     : (50%, 91%)
+    style   : titre_scene
+
+deffigure s1_tdpi =
+    type    : text
+    content : "TD($\lambda$)-PI : évaluer $\pi_n$ pendant $N$ pas, \textit{puis} améliorer"
+    pos     : (50%, 78%)
+    size    : 34px
+
+deffigure s1_d_td =
+    type  : equation
+    expr  : \mathcal{D}_{k+1} = -Q_\theta(x_k,u_k) + c_k + Q_\theta\big(x_{k+1},\, \pi(x_{k+1})\big)
+    pos   : (50%, 68%)
+    style : formule
+
+deffigure s1_ql =
+    type    : text
+    content : "Q($\lambda$) : à \textit{chaque} pas, la cible prend la meilleure action selon $Q_\theta$"
+    pos     : (50%, 52%)
+    size    : 34px
+
+deffigure s1_d_q =
+    type  : equation
+    expr  : \mathcal{D}_{k+1} = -Q_\theta(x_k,u_k) + c_k + \min_{u} Q_\theta(x_{k+1},\, u)
+    pos   : (50%, 42%)
+    style : formule
+
+deffigure s1_bellman =
+    type  : equation
+    expr  : \text{C'est Bellman pour l'optimum : } Q^\star(x,u) = c(x,u) + \min_w Q^\star\big(F(x,u),\, w\big)
+    pos   : (50%, 27%)
+    size  : 34px
+    color : #16A34A
+
+deffigure s1_vi =
+    type    : text
+    content : "→ on apprend $Q^\star$ directement, sans politique intermédiaire (esprit « value iteration »)"
+    pos     : (50%, 18%)
+    style   : note
+
+defgroup g_s1 =
+    items : [s1_titre, s1_tdpi, s1_d_td, s1_ql, s1_d_q, s1_bellman, s1_vi]
+
+# ═════════════ 2. Off-policy ═════════════
+
+deffigure s2_titre =
+    type    : text
+    content : "Deux politiques différentes : off-policy"
+    pos     : (50%, 91%)
+    style   : titre_scene
+
+deffigure boite_comp =
+    type          : rect
+    pos           : (27%, 60%)
+    width         : 62%
+    height        : 34%
+    corner_radius : 2%
+    color         : #EA580C
+    fill          : #FFF7ED
+    stroke        : 3px
+
+deffigure boite_cible =
+    type          : rect
+    pos           : (73%, 60%)
+    width         : 62%
+    height        : 34%
+    corner_radius : 2%
+    color         : #16A34A
+    fill          : #F0FDF4
+    stroke        : 3px
+
+deffigure t_comp =
+    type    : text
+    content : "\textbf{Politique de comportement}
+celle qu'on \textit{applique} au système
+
+explore : parfois une action au hasard
+($\varepsilon$-gloutonne, signal de sondage...)
+
+→ génère les données $(x_k, u_k, x_{k+1})$"
+    pos     : (27%, 60%)
+    size    : 28px
+    color   : #9A3412
+    layer   : 1
+
+deffigure t_cible =
+    type    : text
+    content : "\textbf{Politique cible}
+celle qu'on \textit{apprend}
+
+gloutonne : $\arg\min_u Q_\theta(x, u)$
+
+→ apparaît seulement dans la cible,
+via $\min_u Q_\theta(x_{k+1}, u)$"
+    pos     : (73%, 60%)
+    size    : 28px
+    color   : #14532D
+    layer   : 1
+
+deffigure s2_pourquoi =
+    type    : text
+    content : "Sans exploration, on ne testerait jamais les autres actions :
+$Q_\theta(x, u)$ resterait inconnue pour tous les $u \neq$ action gloutonne"
+    pos     : (50%, 25%)
+    style   : note
+
+defgroup g_s2 =
+    items : [s2_titre, boite_comp, boite_cible, t_comp, t_cible, s2_pourquoi]
+
+# ═════════════ 3-7. L'exemple ═════════════
+
+deffigure ex_titre =
+    type    : text
+    content : "Un exemple : apprendre en explorant"
+    pos     : (40%, 94%)
+    style   : titre_scene
+
+# --- La chaîne S → M → but ---
+
+deffigure n_s =
+    type   : circle
+    center : (14%, 50%)
+    style  : noeud
+
+deffigure n_m =
+    type   : circle
+    center : (40%, 50%)
+    style  : noeud
+
+deffigure n_g =
+    type   : circle
+    center : (64%, 50%)
+    style  : noeud
+    fill   : #DCFCE7
+    color  : #16A34A
+
+deffigure l_s =
+    type    : text
+    content : "$S$"
+    pos     : (14%, 50%)
+    size    : 36px
+    layer   : 3
+
+deffigure l_m =
+    type    : text
+    content : "$M$"
+    pos     : (40%, 50%)
+    size    : 36px
+    layer   : 3
+
+deffigure l_g =
+    type    : text
+    content : "but"
+    pos     : (64%, 42.5%)
+    size    : 26px
+    color   : #16A34A
+
+deffigure f_sm =
+    type  : line
+    from  : (16.3%, 50%)
+    to    : (37.7%, 50%)
+    style : fleche
+
+deffigure f_mg =
+    type  : line
+    from  : (42.3%, 50%)
+    to    : (61.7%, 50%)
+    style : fleche
+
+deffigure lab_sm =
+    type    : text
+    content : "avancer, $c = 1$"
+    pos     : (27%, 46%)
+    size    : 24px
+    color   : #1D4ED8
+
+deffigure lab_mg =
+    type    : text
+    content : "avancer, $c = 1$"
+    pos     : (52%, 46%)
+    size    : 24px
+    color   : #1D4ED8
+
+deffigure boucle_s =
+    type       : arc
+    center     : (14%, 58%)
+    radius     : 3%
+    from_angle : -50
+    to_angle   : 230
+    style      : boucle
+
+deffigure boucle_m =
+    type       : arc
+    center     : (40%, 58%)
+    radius     : 3%
+    from_angle : -50
+    to_angle   : 230
+    style      : boucle
+
+deffigure lab_bs =
+    type    : text
+    content : "attendre, $c = 2$"
+    pos     : (14%, 64.5%)
+    size    : 24px
+    color   : #6D28D9
+
+deffigure lab_bm =
+    type    : text
+    content : "attendre, $c = 2$"
+    pos     : (40%, 64.5%)
+    size    : 24px
+    color   : #6D28D9
+
+deffigure agent =
+    type   : circle
+    center : (14%, 50%)
+    radius : 4.6%
+    fill   : none
+    color  : #DC2626
+    stroke : 5px
+    layer  : 5
+
+# --- Barres Q sous les nœuds (base à 16 %, 5 % par unité) ---
+
+deffigure b_sa =
+    type   : polygon
+    points : [(11%, 16%), (13.5%, 16%), (13.5%, (16 + 5*SA)%), (11%, (16 + 5*SA)%)]
+    style  : barre_av
+
+deffigure b_sw =
+    type   : polygon
+    points : [(14.5%, 16%), (17%, 16%), (17%, (16 + 5*SW)%), (14.5%, (16 + 5*SW)%)]
+    style  : barre_att
+
+deffigure b_ma =
+    type   : polygon
+    points : [(37%, 16%), (39.5%, 16%), (39.5%, (16 + 5*MA)%), (37%, (16 + 5*MA)%)]
+    style  : barre_av
+
+deffigure b_mw =
+    type   : polygon
+    points : [(40.5%, 16%), (43%, 16%), (43%, (16 + 5*MW)%), (40.5%, (16 + 5*MW)%)]
+    style  : barre_att
+
+deffigure v_sa =
+    type    : text
+    content : "#{SA}"
+    pos     : (12.25%, (18.5 + 5*SA)%)
+    style   : valeur
+    color   : #1D4ED8
+
+deffigure v_sw =
+    type    : text
+    content : "#{SW}"
+    pos     : (15.75%, (18.5 + 5*SW)%)
+    style   : valeur
+    color   : #6D28D9
+
+deffigure v_ma =
+    type    : text
+    content : "#{MA}"
+    pos     : (38.25%, (18.5 + 5*MA)%)
+    style   : valeur
+    color   : #1D4ED8
+
+deffigure v_mw =
+    type    : text
+    content : "#{MW}"
+    pos     : (41.75%, (18.5 + 5*MW)%)
+    style   : valeur
+    color   : #6D28D9
+
+deffigure leg_av =
+    type    : text
+    content : "$Q_\theta(\cdot, \text{avancer})$"
+    pos     : (64%, 30%)
+    size    : 26px
+    color   : #1D4ED8
+
+deffigure leg_att =
+    type    : text
+    content : "$Q_\theta(\cdot, \text{attendre})$"
+    pos     : (64%, 23%)
+    size    : 26px
+    color   : #6D28D9
+
+# --- Tableaux à droite : Q et trace ---
+
+deffigure nom_qtab =
+    type    : text
+    content : "Estimations $Q_\theta$"
+    pos     : (88%, 86%)
+    size    : 28px
+    color   : #1E3A8A
+
+defmodel case(x, y) =
+    type   : rect
+    pos    : (@x%, @y%)
+    width  : 7.5%
+    height : 7.5%
+    color  : #9CA3AF
+    stroke : 2px
+    fill   : white
+    layer  : 1
+
+deffigure qc_h00 = case(83.78, 79.5)
+deffigure qc_h01 = case(88, 79.5)
+deffigure qc_h02 = case(92.22, 79.5)
+deffigure qc_h10 = case(83.78, 72)
+deffigure qc_sa = case(88, 72)
+deffigure qc_sw = case(92.22, 72)
+deffigure qc_h20 = case(83.78, 64.5)
+deffigure qc_ma = case(88, 64.5)
+deffigure qc_mw = case(92.22, 64.5)
+deffigure qct_h00 =
+    type    : text
+    content : "$Q$"
+    pos     : (83.78%, 79.5%)
+    size    : 26px
+    color   : black
+    layer   : 2
+
+deffigure qct_h01 =
+    type    : text
+    content : "av"
+    pos     : (88%, 79.5%)
+    size    : 26px
+    color   : black
+    layer   : 2
+
+deffigure qct_h02 =
+    type    : text
+    content : "att"
+    pos     : (92.22%, 79.5%)
+    size    : 26px
+    color   : black
+    layer   : 2
+
+deffigure qct_h10 =
+    type    : text
+    content : "$S$"
+    pos     : (83.78%, 72%)
+    size    : 26px
+    color   : black
+    layer   : 2
+
+deffigure qct_sa =
+    type    : text
+    content : "#{SA}"
+    pos     : (88%, 72%)
+    size    : 26px
+    color   : black
+    layer   : 2
+
+deffigure qct_sw =
+    type    : text
+    content : "#{SW}"
+    pos     : (92.22%, 72%)
+    size    : 26px
+    color   : black
+    layer   : 2
+
+deffigure qct_h20 =
+    type    : text
+    content : "$M$"
+    pos     : (83.78%, 64.5%)
+    size    : 26px
+    color   : black
+    layer   : 2
+
+deffigure qct_ma =
+    type    : text
+    content : "#{MA}"
+    pos     : (88%, 64.5%)
+    size    : 26px
+    color   : black
+    layer   : 2
+
+deffigure qct_mw =
+    type    : text
+    content : "#{MW}"
+    pos     : (92.22%, 64.5%)
+    size    : 26px
+    color   : black
+    layer   : 2
+
+defgroup g_qtab =
+    items : [qc_h00, qc_h01, qc_h02, qc_h10, qc_sa, qc_sw, qc_h20, qc_ma, qc_mw, qct_h00, qct_h01, qct_h02, qct_h10, qct_sa, qct_sw, qct_h20, qct_ma, qct_mw]
+
+deffigure nom_etab =
+    type    : text
+    content : "Trace $e$"
+    pos     : (88%, 52%)
+    size    : 28px
+    color   : #B45309
+
+deffigure ec_h00 = case(83.78, 45.5)
+deffigure ec_h01 = case(88, 45.5)
+deffigure ec_h02 = case(92.22, 45.5)
+deffigure ec_h10 = case(83.78, 38)
+deffigure ec_sa = case(88, 38)
+deffigure ec_sw = case(92.22, 38)
+deffigure ec_h20 = case(83.78, 30.5)
+deffigure ec_ma = case(88, 30.5)
+deffigure ec_mw = case(92.22, 30.5)
+deffigure ect_h00 =
+    type    : text
+    content : "$e$"
+    pos     : (83.78%, 45.5%)
+    size    : 26px
+    color   : #B45309
+    layer   : 2
+
+deffigure ect_h01 =
+    type    : text
+    content : "av"
+    pos     : (88%, 45.5%)
+    size    : 26px
+    color   : #B45309
+    layer   : 2
+
+deffigure ect_h02 =
+    type    : text
+    content : "att"
+    pos     : (92.22%, 45.5%)
+    size    : 26px
+    color   : #B45309
+    layer   : 2
+
+deffigure ect_h10 =
+    type    : text
+    content : "$S$"
+    pos     : (83.78%, 38%)
+    size    : 26px
+    color   : #B45309
+    layer   : 2
+
+deffigure ect_sa =
+    type    : text
+    content : "#{tSA}"
+    pos     : (88%, 38%)
+    size    : 26px
+    color   : #B45309
+    layer   : 2
+
+deffigure ect_sw =
+    type    : text
+    content : "#{tSW}"
+    pos     : (92.22%, 38%)
+    size    : 26px
+    color   : #B45309
+    layer   : 2
+
+deffigure ect_h20 =
+    type    : text
+    content : "$M$"
+    pos     : (83.78%, 30.5%)
+    size    : 26px
+    color   : #B45309
+    layer   : 2
+
+deffigure ect_ma =
+    type    : text
+    content : "#{tMA}"
+    pos     : (88%, 30.5%)
+    size    : 26px
+    color   : #B45309
+    layer   : 2
+
+deffigure ect_mw =
+    type    : text
+    content : "#{tMW}"
+    pos     : (92.22%, 30.5%)
+    size    : 26px
+    color   : #B45309
+    layer   : 2
+
+defgroup g_etab =
+    items : [ec_h00, ec_h01, ec_h02, ec_h10, ec_sa, ec_sw, ec_h20, ec_ma, ec_mw, ect_h00, ect_h01, ect_h02, ect_h10, ect_sa, ect_sw, ect_h20, ect_ma, ect_mw]
+
+deffigure qstar =
+    type    : text
+    content : "Valeurs exactes :
+$Q^\star(M, \text{av}) = 1$, $Q^\star(M, \text{att}) = 2 + 1 = 3$
+$Q^\star(S, \text{av}) = 1 + 1 = 2$, $Q^\star(S, \text{att}) = 2 + 2 = 4$"
+    pos     : (38%, 80%)
+    size    : 28px
+    color   : #16A34A
+
+deffigure params =
+    type    : text
+    content : "Estimations en cours d'apprentissage
+$\alpha = 0{,}5$,  $\lambda = 0{,}5$"
+    pos     : (88%, 22.5%)
+    size    : 22px
+    color   : #4B5563
+
+# --- Pas 1 : en S, action gloutonne ---
+
+deffigure p1_a =
+    type    : text
+    content : "Pas 1 : en $S$, on choisit « avancer » — gloutonne, car $2 < 4$"
+    pos     : (38%, 85%)
+    style   : calcul
+
+deffigure p1_b =
+    type  : equation
+    expr  : \mathcal{D} = -Q(S,\text{av}) + c + \min_u Q(M,u) = -2 + 1 + 0{,}5 = -0{,}5
+    pos   : (38%, 78%)
+    size  : 34px
+    color : #DC2626
+
+deffigure p1_c =
+    type  : equation
+    expr  : Q(S,\text{av}) \leftarrow 2 + 0{,}5 \times (-0{,}5) \times e(S,\text{av}) = 1{,}75
+    pos   : (38%, 71.5%)
+    size  : 34px
+    color : #2563EB
+
+# --- Pas 2 : exploration en M ---
+
+deffigure p2_a =
+    type    : text
+    content : "Pas 2 : en $M$, on \textbf{explore} : « attendre » — pas gloutonne ($3 > 0{,}5$)"
+    pos     : (38%, 85%)
+    style   : calcul
+    color   : #EA580C
+
+deffigure p2_b =
+    type    : text
+    content : "→ on \textbf{coupe la trace} : $e \leftarrow \psi(M, \text{att})$"
+    pos     : (38%, 78.5%)
+    style   : calcul
+    color   : #B45309
+
+deffigure p2_c =
+    type  : equation
+    expr  : \mathcal{D} = -3 + 2 + \min_u Q(M,u) = -3 + 2 + 0{,}5 = -0{,}5 \quad\Rightarrow\quad Q(M,\text{att}) = 2{,}75
+    pos   : (38%, 72%)
+    size  : 32px
+    color : #DC2626
+
+deffigure explo =
+    type    : text
+    content : "exploration !"
+    pos     : (51%, 60%)
+    size    : 30px
+    color   : #EA580C
+
+deffigure pourquoi =
+    type    : text
+    content : "Pourquoi couper ?
+Ce coût vient d'une action que la
+politique gloutonne n'aurait \textit{jamais}
+prise. Il ne dit rien sur $Q^\star(S, \text{av})$ :
+depuis $S$, l'optimum continue par « avancer »."
+    pos     : (62%, 25%)
+    size    : 22px
+    color   : #9A3412
+
+# --- Pas 3 : retour au glouton ---
+
+deffigure p3_a =
+    type    : text
+    content : "Pas 3 : en $M$, « avancer » — gloutonne : la trace continue"
+    pos     : (38%, 85%)
+    style   : calcul
+
+deffigure p3_b =
+    type  : equation
+    expr  : e = \lambda\, e + \psi(M,\text{av}), \qquad \mathcal{D} = -0{,}5 + 1 + 0 = 0{,}5 \quad (\text{but : } Q = 0)
+    pos   : (38%, 78%)
+    size  : 32px
+    color : #DC2626
+
+deffigure p3_c =
+    type  : equation
+    expr  : Q(M,\text{av}) \leftarrow 0{,}5 + 0{,}25 \times 1 = 0{,}75, \qquad Q(M,\text{att}) \leftarrow 2{,}75 + 0{,}25 \times 0{,}5 \approx 2{,}88
+    pos   : (38%, 71.5%)
+    size  : 30px
+    color : #2563EB
+
+# --- Convergence ---
+
+deffigure conv_a =
+    type    : text
+    content : "Après de nombreux épisodes : $Q_\theta \to Q^\star$"
+    pos     : (38%, 84%)
+    size    : 36px
+    color   : #16A34A
+
+deffigure conv_b =
+    type  : equation
+    expr  : \pi^\star(x) \in \arg\min_u Q_\theta(x, u) = \text{avancer} \quad \text{en } S \text{ et en } M
+    pos   : (38%, 76%)
+    size  : 34px
+    color : #1E3A8A
+
+defgroup g_ex =
+    items : [ex_titre, n_s, n_m, n_g, l_s, l_m, l_g, f_sm, f_mg, lab_sm, lab_mg, boucle_s, boucle_m, lab_bs, lab_bm, agent, b_sa, b_sw, b_ma, b_mw, v_sa, v_sw, v_ma, v_mw, leg_av, leg_att, nom_qtab, g_qtab, nom_etab, g_etab, qstar, params, p1_a, p1_b, p1_c, p2_a, p2_b, p2_c, explo, pourquoi, p3_a, p3_b, p3_c, conv_a, conv_b]
+
+# ═════════════ 8. Algorithme ═════════════
+
+deffigure s8_titre =
+    type    : text
+    content : "Q($\lambda$) de Watkins, $Q_\theta = \theta^\top\psi$"
+    pos     : (50%, 92%)
+    style   : titre_scene
+
+deffigure a0 =
+    type    : text
+    content : "Entrées : transitions d'une politique \textit{exploratoire}, features $\psi$, $\lambda \in [0,1]$, pas $\alpha_k$, $\theta_0$ ;  $e_{-1} = 0$"
+    pos     : (6%, 81%)
+    align   : left
+    size    : 28px
+    color   : #4B5563
+
+deffigure a1 =
+    type    : text
+    content : "1.  Actions gloutonnes en $x_k$ :  $U^\star_k = \arg\min_u Q_{\theta_k}(x_k, u)$"
+    pos     : (6%, 71%)
+    align   : left
+    size    : 32px
+
+deffigure a2 =
+    type    : text
+    content : "2.  Trace :  $e_k = \lambda\, e_{k-1} + \psi(k)$ si $u_k \in U^\star_k$,  sinon  $e_k = \psi(k)$  (coupure)"
+    pos     : (6%, 62%)
+    align   : left
+    size    : 32px
+    color   : #B45309
+
+deffigure a3 =
+    type    : text
+    content : "3.  Action gloutonne à l'état suivant :  $u^\star_{k+1} \in \arg\min_u Q_{\theta_k}(x_{k+1}, u)$"
+    pos     : (6%, 53%)
+    align   : left
+    size    : 32px
+    color   : #16A34A
+
+deffigure a4 =
+    type    : text
+    content : "4.  $\mathcal{D}_{k+1} = -Q_{\theta_k}(x_k, u_k) + c_k + Q_{\theta_k}(x_{k+1}, u^\star_{k+1})$"
+    pos     : (6%, 44%)
+    align   : left
+    size    : 32px
+    color   : #DC2626
+
+deffigure a5 =
+    type    : text
+    content : "5.  $\theta_{k+1} = \theta_k + \alpha_{k+1}\, \mathcal{D}_{k+1}\, e_k$"
+    pos     : (6%, 35%)
+    align   : left
+    size    : 32px
+    color   : #2563EB
+
+deffigure a6 =
+    type    : text
+    content : "6.  Sortie : $Q_{\theta_N}$ et la politique $\pi^\star_N(x) \in \arg\min_u Q_{\theta_N}(x, u)$"
+    pos     : (6%, 26%)
+    align   : left
+    size    : 32px
+
+deffigure a7 =
+    type    : text
+    content : "$\lambda = 0$ :  $e_k = \psi(k)$, c'est le Q-learning classique (Q(0)), base de DQN"
+    pos     : (50%, 19%)
+    style   : note
+
+defgroup g_s8 =
+    items : [s8_titre, a0, a1, a2, a3, a4, a5, a6, a7]
+
+# ═════════════ 9. Comparaison ═════════════
+
+deffigure s9_titre =
+    type    : text
+    content : "TD($\lambda$)-PI ou Q($\lambda$) ?"
+    pos     : (50%, 91%)
+    style   : titre_scene
+
+deffigure s9_table =
+    type   : table
+    pos    : (50%, 58%)
+    size   : 32px
+    header : ["Critère", "TD($\lambda$)-PI", "Q($\lambda$)"]
+    rows   : |
+        Ce qu'on apprend | $Q^{\pi_n}$, puis on améliore | $Q^\star$ directement
+        Action dans la cible | $\pi_n(x_{k+1})$, fixée | $\arg\min_u Q_\theta(x_{k+1}, u)$
+        Évaluation / amélioration | séparées | mélangées à chaque pas
+        Données | celles de $\pi_n$ (+ exploration) | n'importe quelle politique exploratoire
+        Trace | toujours $\lambda e_{k-1} + \psi(k)$ | coupée après une action non gloutonne
+
+deffigure s9_note =
+    type    : text
+    content : "Limite : beaucoup d'exploration ⇒ coupures fréquentes ⇒ traces courtes, peu de gain par rapport à $\lambda = 0$
+Off-policy + bootstrapping + approximation : pas de garantie de convergence en général"
+    pos     : (50%, 22%)
+    size    : 28px
+    color   : #4B5563
+
+defgroup g_s9 =
+    items : [s9_titre, s9_table, s9_note]
+
+# ═════════════ 10. Récapitulatif ═════════════
+
+deffigure s10_titre =
+    type    : text
+    content : "À retenir"
+    pos     : (50%, 88%)
+    style   : titre_scene
+
+deffigure r_1 =
+    type    : text
+    content : "• Cible gloutonne : $c_k + \min_u Q_\theta(x_{k+1}, u)$ — on apprend $Q^\star$, pas $Q^\pi$"
+    pos     : (10%, 74%)
+    align   : left
+    size    : 34px
+
+deffigure r_2 =
+    type    : text
+    content : "• Off-policy : on explore pour agir, on reste glouton pour apprendre"
+    pos     : (10%, 63%)
+    align   : left
+    size    : 34px
+
+deffigure r_3 =
+    type    : text
+    content : "• Trace de Watkins : coupée dès qu'une action n'est pas gloutonne"
+    pos     : (10%, 52%)
+    align   : left
+    size    : 34px
+
+deffigure r_4 =
+    type    : text
+    content : "• Évaluation et amélioration à chaque pas, plus de politique $\pi_n$ fixée"
+    pos     : (10%, 41%)
+    align   : left
+    size    : 34px
+
+deffigure r_5 =
+    type    : text
+    content : "• Politique finale : $\pi^\star(x) \in \arg\min_u Q_{\theta_N}(x, u)$"
+    pos     : (10%, 30%)
+    align   : left
+    size    : 34px
+
+defgroup g_s10 =
+    items : [s10_titre, r_1, r_2, r_3, r_4, r_5]
+
+[timeline]
+
+# ═════════════ 0. Titre ═════════════
+
+0.000 => {
+    start   : [titre fadein(1s), sous_titre fadein(1.5s), source fadein(1.5s)]
+    comment : ["Dans cette vidéo : le Q lambda learning de Watkins, qui apprend directement la fonction Q optimale tout en explorant."]
+}
+
+7.000 => {
+    end : [g_titre fadeout(0.8s)]
+}
+
+# ═════════════ 1. La cible devient gloutonne ═════════════
+
+8.000 => {
+    start   : [s1_titre fadein(0.8s), s1_tdpi fadein(1s), s1_d_td write(1.5s)]
+    comment : ["Avec TD lambda PI, on évalue une politique pi n fixée pendant N pas, puis on l'améliore. Dans la cible, l'action suivante est celle de pi n."]
+}
+
+16.000 => {
+    anim    : [s1_d_td color(to=#EA580C, 0.6s, part="\pi(x_{k+1})")]
+    comment : ["Le point clé, c'est ce terme : la politique qu'on évalue."]
+}
+
+21.000 => {
+    start   : [s1_ql fadein(1s), s1_d_q write(1.5s)]
+    comment : ["Q lambda remplace ce terme par le minimum sur u : à chaque pas, la cible suppose qu'on prendra ensuite la meilleure action selon l'estimation actuelle."]
+}
+
+27.500 => {
+    anim : [s1_d_q color(to=#16A34A, 0.6s, part="\min_{u} Q_\theta(x_{k+1},\, u)")]
+}
+
+31.000 => {
+    start   : [s1_bellman fadein(1s)]
+    comment : ["C'est exactement l'équation de Bellman pour la fonction Q optimale."]
+}
+
+37.000 => {
+    start   : [s1_vi fadein(1s)]
+    comment : ["On apprend donc Q étoile directement, sans passer par une suite de politiques : c'est l'esprit de la value iteration."]
+}
+
+44.000 => {
+    end : [g_s1 fadeout(0.8s)]
+}
+
+# ═════════════ 2. Off-policy ═════════════
+
+45.000 => {
+    start   : [s2_titre fadein(0.8s), boite_comp grow(0.6s), t_comp fadein(1s)]
+    comment : ["Il y a maintenant deux politiques. La politique de comportement est celle qu'on applique au système : elle explore, en choisissant parfois une action au hasard."]
+}
+
+54.000 => {
+    start   : [boite_cible grow(0.6s), t_cible fadein(1s)]
+    comment : ["La politique cible est celle qu'on apprend : gloutonne par rapport à Q. Elle n'est jamais appliquée, elle apparaît seulement dans le minimum de la cible."]
+}
+
+63.000 => {
+    start   : [s2_pourquoi fadein(1s)]
+    comment : ["Sans exploration, on ne testerait jamais les autres actions, et leur valeur resterait inconnue. C'est l'apprentissage off-policy."]
+}
+
+72.000 => {
+    end : [g_s2 fadeout(0.8s)]
+}
+
+# ═════════════ 3. L'exemple : mise en place ═════════════
+
+73.000 => {
+    start   : [ex_titre fadein(0.8s), n_s grow(0.5s), n_m grow(0.5s), n_g grow(0.5s), l_s fadein(0.8s), l_m fadein(0.8s), l_g fadein(0.8s), f_sm draw(1s), f_mg draw(1s), lab_sm fadein(1s), lab_mg fadein(1s)]
+    comment : ["Prenons une chaîne : S, M, puis le but. Dans chaque état, on peut avancer, pour un coût de 1,"]
+}
+
+79.000 => {
+    start   : [boucle_s draw(1s), boucle_m draw(1s), lab_bs fadein(1s), lab_bm fadein(1s)]
+    comment : ["ou attendre sur place, pour un coût de 2. Une feature par couple état-action : c'est un tableau de quatre valeurs."]
+}
+
+86.000 => {
+    start   : [qstar fadein(1s)]
+    comment : ["Les vraies valeurs se calculent à la main. Depuis M, avancer coûte 1 ; attendre coûte 2, plus 1 ensuite. Depuis S : 2 et 4."]
+}
+
+95.000 => {
+    end     : [qstar fadeout(0.6s)]
+    start   : [b_sa, b_sw, b_ma, b_mw, v_sa fadein(0.6s), v_sw fadein(0.6s), v_ma fadein(0.6s), v_mw fadein(0.6s), leg_av fadein(0.8s), leg_att fadein(0.8s), nom_qtab fadein(0.8s), g_qtab fadein(1s), params fadein(0.8s)]
+    comment : ["Voici nos estimations actuelles, en cours d'apprentissage. Elles sont presque justes, sauf Q de M avancer, sous-estimé à 0,5. Pas alpha 0,5, lambda 0,5."]
+}
+
+104.000 => {
+    start   : [nom_etab fadein(0.8s), g_etab fadein(1s), agent grow(0.5s)]
+    comment : ["En dessous, la trace d'éligibilité, une case par couple état-action, nulle au départ. L'agent part de S."]
+}
+
+# ═════════════ 4. Pas 1 : action gloutonne ═════════════
+
+110.000 => {
+    start   : [p1_a fadein(0.8s)]
+    anim    : [qc_sa fill(to=#BFDBFE, 0.5s)]
+    comment : ["Premier pas. En S, avancer vaut 2, attendre vaut 4 : avancer est l'action gloutonne. La politique de comportement la choisit."]
+}
+
+117.000 => {
+    anim    : [agent move(to=(40%, 50%), 0.8s), tSA to(1, 0.6s, ease=smooth), ec_sa fill(to=#FDE68A, 0.5s)]
+    comment : ["L'action est gloutonne : la trace est multipliée par lambda, puis on ajoute un sur la case S avancer."]
+}
+
+122.000 => {
+    start   : [p1_b fadein(1s)]
+    anim    : [qc_ma fill(to=#BBF7D0, 0.5s)]
+    comment : ["La cible : coût 1, plus le minimum de Q en M, soit 0,5, la case verte. Différence temporelle : moins 0,5. On avait surestimé."]
+}
+
+131.000 => {
+    start   : [p1_c fadein(1s)]
+    anim    : [SA to(1.75, 1.2s, ease=smooth)]
+    comment : ["On corrige dans la direction de la trace : Q de S avancer descend à 1,75. Il s'éloigne un peu de 2, à cause du 0,5 trop bas en M : on y reviendra."]
+}
+
+140.000 => {
+    end  : [p1_a fadeout(0.5s), p1_b fadeout(0.5s), p1_c fadeout(0.5s)]
+    anim : [qc_sa fill(to=white, 0.5s), qc_ma fill(to=white, 0.5s)]
+}
+
+# ═════════════ 5. Pas 2 : exploration, coupure ═════════════
+
+141.000 => {
+    start   : [p2_a fadein(0.8s), explo fadein(0.5s)]
+    anim    : [agent [move(to=(40%, 61%), 0.5s), move(to=(40%, 50%), 0.5s)], qc_mw fill(to=#FED7AA, 0.5s)]
+    comment : ["Deuxième pas. En M, la politique de comportement explore : elle choisit attendre. Ce n'est pas l'action gloutonne, car 3 est plus grand que 0,5."]
+}
+
+149.000 => {
+    start   : [p2_b fadein(0.8s)]
+    anim    : [tSA to(0, 0.8s, ease=smooth), tMW to(1, 0.8s, ease=smooth), ec_sa fill(to=white, 0.5s), ec_mw fill(to=#FDE68A, 0.5s)]
+    comment : ["Règle de Watkins : on coupe la trace. Le passé est oublié, et la trace ne garde que la case M attendre."]
+}
+
+156.000 => {
+    end     : [leg_av fadeout(0.4s), leg_att fadeout(0.4s)]
+    start   : [pourquoi fadein(1s)]
+    comment : ["Pourquoi ? Ce qui suit vient d'une action que la politique gloutonne n'aurait jamais prise. Cela ne dit rien sur la valeur optimale de S avancer."]
+}
+
+166.000 => {
+    start   : [p2_c fadein(1s)]
+    anim    : [MW to(2.75, 1.2s, ease=smooth)]
+    comment : ["La cible reste gloutonne : coût 2, plus le minimum en M, 0,5. D vaut moins 0,5, et seule la case M attendre est corrigée, à 2,75. S avancer n'est pas touché."]
+}
+
+176.000 => {
+    end  : [p2_a fadeout(0.5s), p2_b fadeout(0.5s), p2_c fadeout(0.5s), explo fadeout(0.5s), pourquoi fadeout(0.5s)]
+    start : [leg_av fadein(0.5s), leg_att fadein(0.5s)]
+    anim : [qc_mw fill(to=white, 0.5s)]
+}
+
+# ═════════════ 6. Pas 3 : retour au glouton ═════════════
+
+177.000 => {
+    start   : [p3_a fadein(0.8s)]
+    anim    : [agent move(to=(64%, 50%), 0.8s), tMW to(0.5, 0.8s, ease=smooth), tMA to(1, 0.8s, ease=smooth), ec_ma fill(to=#FDE68A, 0.5s), qc_ma fill(to=#BFDBFE, 0.5s)]
+    comment : ["Troisième pas. En M, l'agent avance : c'est glouton, donc la trace continue. M attendre est divisé par deux, et M avancer passe à 1."]
+}
+
+185.000 => {
+    start   : [p3_b fadein(1s)]
+    comment : ["On arrive au but, où Q vaut zéro. Cible : 1 plus 0, prédiction 0,5 : D vaut plus 0,5. On avait sous-estimé."]
+}
+
+192.000 => {
+    start   : [p3_c fadein(1s)]
+    anim    : [MA to(0.75, 1.2s, ease=smooth), MW to(2.875, 1.2s, ease=smooth)]
+    comment : ["Les deux cases de la trace montent. M avancer passe à 0,75, et M attendre à environ 2,88 : c'est juste, car attendre puis avancer coûte 2 plus Q de M avancer."]
+}
+
+202.000 => {
+    end  : [p3_a fadeout(0.5s), p3_b fadeout(0.5s), p3_c fadeout(0.5s)]
+    anim : [qc_ma fill(to=white, 0.5s), tMA to(0, 0.5s), tMW to(0, 0.5s), ec_ma fill(to=white, 0.5s), ec_mw fill(to=white, 0.5s)]
+}
+
+# ═════════════ 7. Convergence ═════════════
+
+203.000 => {
+    start   : [conv_a fadein(1s)]
+    anim    : [agent move(to=(14%, 50%), 0.8s), SA to(2, 3s, ease=smooth), MA to(1, 3s, ease=smooth), MW to(3, 3s, ease=smooth)]
+    comment : ["En répétant les épisodes, avec assez d'exploration pour visiter toutes les actions, les estimations convergent vers les vraies valeurs : 2, 4, 1 et 3."]
+}
+
+212.000 => {
+    start   : [conv_b fadein(1s)]
+    anim    : [qc_sa fill(to=#BBF7D0, 0.5s), qc_ma fill(to=#BBF7D0, 0.5s)]
+    comment : ["La politique optimale se lit directement dans le tableau : l'argmin de chaque ligne. Ici, avancer partout."]
+}
+
+220.000 => {
+    end : [g_ex fadeout(0.8s)]
+}
+
+# ═════════════ 8. Algorithme ═════════════
+
+221.000 => {
+    start   : [s8_titre fadein(0.8s), a0 fadein(1s)]
+    comment : ["Voici l'algorithme complet. Les données viennent d'une politique exploratoire, et la trace part de zéro."]
+}
+
+227.000 => {
+    start   : [a1 write(1.2s)]
+    comment : ["À chaque transition, on calcule d'abord l'ensemble des actions gloutonnes dans l'état courant."]
+}
+
+232.000 => {
+    start   : [a2 write(1.5s)]
+    comment : ["Si l'action jouée en fait partie, la trace continue. Sinon, on la coupe et on repart du vecteur de features courant."]
+}
+
+239.000 => {
+    start   : [a3 write(1.2s)]
+    comment : ["On cherche l'action gloutonne dans l'état suivant,"]
+}
+
+243.000 => {
+    start   : [a4 write(1.2s)]
+    comment : ["qui sert de cible dans la différence temporelle,"]
+}
+
+247.000 => {
+    start   : [a5 write(1.2s)]
+    comment : ["et on corrige theta dans la direction de la trace."]
+}
+
+251.000 => {
+    start   : [a6 fadein(1s), a7 fadein(1s)]
+    comment : ["En sortie, Q et la politique gloutonne associée. Avec lambda égal 0, la trace vaut psi : c'est le Q-learning classique, à la base de DQN."]
+}
+
+260.000 => {
+    end : [g_s8 fadeout(0.8s)]
+}
+
+# ═════════════ 9. Comparaison ═════════════
+
+261.000 => {
+    start   : [s9_titre fadein(0.8s), s9_table fadein(1.2s)]
+    comment : ["TD lambda PI apprend Q de pi n, puis améliore. Q lambda apprend Q étoile directement, en mélangeant évaluation et amélioration à chaque pas."]
+}
+
+272.000 => {
+    comment : ["Q lambda accepte les données de n'importe quelle politique exploratoire. En échange, sa trace est coupée après chaque action non gloutonne."]
+}
+
+280.000 => {
+    start   : [s9_note fadein(1s)]
+    comment : ["Deux limites. Si on explore beaucoup, les coupures sont fréquentes et les traces restent courtes."]
+}
+
+285.500 => {
+    comment : ["Et en combinant off-policy, bootstrapping et approximation, on n'a pas de garantie de convergence en général."]
+}
+
+291.000 => {
+    end : [g_s9 fadeout(0.8s)]
+}
+
+# ═════════════ 10. Récapitulatif ═════════════
+
+292.000 => {
+    start   : [s10_titre fadein(0.8s), r_1 fadein(0.8s)]
+    comment : ["À retenir."]
+}
+
+294.000 => {
+    start : [r_2 fadein(0.8s)]
+}
+
+296.000 => {
+    start : [r_3 fadein(0.8s)]
+}
+
+298.000 => {
+    start : [r_4 fadein(0.8s)]
+}
+
+300.000 => {
+    start : [r_5 fadein(0.8s)]
+}
+
+310.000 => {
+    end     : [g_s10 fadeout(1s)]
+    comment : none
+}

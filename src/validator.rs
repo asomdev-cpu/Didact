@@ -426,9 +426,17 @@ impl Validator {
                     let mut known: Vec<&str> = COMMON_PROPS.iter().chain(own).chain(family).copied().collect();
                     known.sort();
                     known.dedup();
-                    let hint = match suggest(k, &known) {
-                        Some(s) => format!(" ; vouliez-vous dire `{}` ?", s),
-                        None => String::new(),
+                    // Propriétés renommées (v0.2) : dire le nouveau nom
+                    let renamed = match (k, ftype) {
+                        ("font", "text" | "equation" | "latex" | "raw.latex" | "table") => Some("size"),
+                        ("pos", "group") => Some("offset"),
+                        ("axes", "scene3d") => Some("frame"),
+                        _ => None,
+                    };
+                    let hint = match (renamed, suggest(k, &known)) {
+                        (Some(new), _) => format!(" ; `{}` s'appelle maintenant `{}`", k, new),
+                        (None, Some(s)) => format!(" ; vouliez-vous dire `{}` ?", s),
+                        (None, None) => String::new(),
                     };
                     self.error(
                         line_of(k),

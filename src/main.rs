@@ -1,4 +1,4 @@
-use didact::{check, lexer, output, parser, renderer, resolver, runtime, validator};
+use didact_lib::{check, lexer, output, parser, renderer, resolver, runtime, validator};
 
 use std::env;
 use std::fs;
@@ -146,7 +146,7 @@ fn main() {
         fail(&format!("Erreur lors de la lecture du fichier '{}': {}", filename, e))
     });
     // Les fichiers des figures `image` sont cherchés à côté du .dct
-    didact::renderer::image::set_base_dir(std::path::Path::new(&filename).parent().unwrap_or(std::path::Path::new("")));
+    didact_lib::renderer::image::set_base_dir(std::path::Path::new(&filename).parent().unwrap_or(std::path::Path::new("")));
 
     // ── Vérification seule (--check) ──
     if check_mode {
@@ -298,7 +298,7 @@ fn export_png(resolved: &resolver::ResolvedDocument, timeline: &runtime::Timelin
     }
     // Le sous-titre de cet instant, comme dans la vidéo (sauf --no-subtitles)
     if let (true, Some(c)) = (subtitles, frame.comment) {
-        if let Err(e) = didact::output::video::draw_subtitle(&mut backend, c) {
+        if let Err(e) = didact_lib::output::video::draw_subtitle(&mut backend, c) {
             eprintln!("Attention : sous-titre non dessiné : {}", e);
         }
     }
@@ -349,7 +349,7 @@ fn audio_files(timeline: &runtime::Timeline, source: &std::path::Path) -> Vec<(S
         }
     }
     // Images (type `image`) : incluses de la même façon dans une page autonome
-    for file in didact::renderer::image::files(timeline.figures()) {
+    for file in didact_lib::renderer::image::files(timeline.figures()) {
         if !files.iter().any(|(f, _)| *f == file) {
             let path = base.join(&file);
             files.push((file, path));
@@ -444,7 +444,7 @@ fn shift_command(args: &[String]) {
     };
     let (start, delta) = (number(start, "à partir de"), number(delta, "décalage"));
     let source = fs::read_to_string(file).unwrap_or_else(|e| fail(&format!("Lecture de '{}' impossible : {}", file, e)));
-    let (text, moved) = didact::shift::shift(&source, start, delta).unwrap_or_else(|e| fail(&format!("✗ Rien n'a été modifié : {}", e)));
+    let (text, moved) = didact_lib::shift::shift(&source, start, delta).unwrap_or_else(|e| fail(&format!("✗ Rien n'a été modifié : {}", e)));
     fs::write(file, text).unwrap_or_else(|e| fail(&format!("Écriture de '{}' impossible : {}", file, e)));
     let n = moved.len();
     println!("✓ {} bloc{} décalé{} de {:+.3} s :", n, if n > 1 { "s" } else { "" }, if n > 1 { "s" } else { "" }, delta);

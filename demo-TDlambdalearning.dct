@@ -1,0 +1,1231 @@
+# ─────────────────────────────────────────────
+#  TD(λ)-learning : évaluer une politique pas à pas
+#  LINMA2222 — Chapitre 3.5.4 (environ 5 minutes)
+#  didact demo-TDlambdalearning.dct
+#
+#  Plan :
+#   1. Objectif : évaluer Q^π sans former la matrice de LSTD
+#   2. La différence temporelle sur un exemple chiffré (Q = θx²)
+#   3. TD(0) en général, semi-gradient, lien avec LSTD par l'ODE
+#   4. Le problème de l'attribution du mérite (chaîne A-B-C-D)
+#   5. La trace d'éligibilité : TD(λ) sur la même chaîne
+#   6. Le compromis biais / variance selon λ
+#   7. L'algorithme complet
+#   8. TD(λ) non linéaire et TD(λ)-PI
+#   9. Récapitulatif
+# ─────────────────────────────────────────────
+
+[config]
+window       : [16:9]
+background   : white
+languages    : [FR]
+default_lang : FR
+
+[figures]
+
+# ═════════════ Styles ═════════════
+
+defstyle titre_scene =
+    font  : 46px
+    color : #1E3A8A
+
+defstyle formule =
+    size : 40px
+
+defstyle note =
+    font  : 30px
+    color : #4B5563
+
+defstyle noeud =
+    radius : 3.5%
+    fill   : white
+    color  : #374151
+    stroke : 3px
+    layer  : 2
+
+defstyle fleche =
+    color  : #6B7280
+    stroke : 3px
+    arrow  : end
+
+defstyle barre_q =
+    fill  : #2563EB
+    color : #1D4ED8
+    layer : 1
+
+defstyle barre_e =
+    fill  : #F59E0B
+    color : #B45309
+    layer : 1
+
+defstyle valeur =
+    font : 26px
+
+# ═════════════ Paramètres ═════════════
+
+defparam th = 1        # θ de l'exemple chiffré
+defparam qA = 0        # estimations Q(A) ... Q(D) de la chaîne
+defparam qB = 0
+defparam qC = 0
+defparam qD = 0
+defparam eA = 0        # trace d'éligibilité sur A ... D
+defparam eB = 0
+defparam eC = 0
+defparam eD = 0
+
+# ═════════════ 0. Titre ═════════════
+
+deffigure titre =
+    type    : text
+    content : "TD($\lambda$)-learning"
+    pos     : (50%, 58%)
+    size    : 80px
+    color   : #1E3A8A
+
+deffigure sous_titre =
+    type    : text
+    content : "Évaluer une politique, une transition à la fois"
+    pos     : (50%, 44%)
+    size    : 42px
+    color   : #4B5563
+
+deffigure source =
+    type    : text
+    content : "LINMA2222 — Chapitre 3.5.4"
+    pos     : (50%, 34%)
+    size    : 30px
+    color   : #9CA3AF
+
+defgroup g_titre =
+    items : [titre, sous_titre, source]
+
+# ═════════════ 1. Objectif ═════════════
+
+deffigure s1_titre =
+    type    : text
+    content : "Le but : évaluer une politique $\pi$ fixée"
+    pos     : (50%, 90%)
+    style   : titre_scene
+
+deffigure s1_bellman =
+    type  : equation
+    expr  : Q^\pi(x,u) = c(x,u) + Q^\pi\big(x^+, \pi(x^+)\big)
+    pos   : (50%, 74%)
+    style : formule
+
+deffigure s1_param =
+    type  : equation
+    expr  : Q_\theta(x,u) = \theta^\top \psi(x,u), \qquad \theta \in \mathbb{R}^d
+    pos   : (50%, 60%)
+    style : formule
+
+deffigure s1_lstd =
+    type  : equation
+    expr  : \text{LSTD : } \theta = A_N^{-1} b_N \qquad \text{mémoire } O(d^2),\ \text{inversion } O(d^3)
+    pos   : (50%, 45%)
+    size  : 36px
+    color : #6B7280
+
+deffigure s1_but =
+    type    : text
+    content : "TD($\lambda$) : même solution visée, mais $\theta$ est corrigé
+après \textbf{chaque} transition, en $O(d)$"
+    pos     : (50%, 28%)
+    size    : 36px
+    color   : #16A34A
+
+defgroup g_s1 =
+    items : [s1_titre, s1_bellman, s1_param, s1_lstd, s1_but]
+
+# ═════════════ 2. Exemple chiffré : la différence temporelle ═════════════
+
+deffigure s2_titre =
+    type    : text
+    content : "La différence temporelle, sur un exemple"
+    pos     : (50%, 93%)
+    style   : titre_scene
+
+deffigure r1 =
+    type   : axes
+    from   : (5%, 12%)
+    to     : (48%, 86%)
+    xrange : [0, 2.6]
+    yrange : [0, 6]
+    equal  : false
+    grid   : true
+    xlabel : "$x$"
+    color  : #374151
+
+deffigure q_courbe =
+    type   : plot
+    expr   : th*x^2
+    axes   : r1
+    color  : #2563EB
+    stroke : 4px
+    layer  : 1
+
+deffigure q_nom =
+    type    : text
+    content : "$Q_\theta(x) = \theta\,x^2$,  $\theta = #{th:2}$"
+    pos     : r1(0.75, 5.3)
+    size    : 30px
+    color   : #2563EB
+
+deffigure trans =
+    type   : line
+    from   : r1(1.95, 0.35)
+    to     : r1(1.05, 0.35)
+    color  : #6B7280
+    stroke : 3px
+    arrow  : end
+    layer  : 2
+
+deffigure trans_nom =
+    type    : text
+    content : "transition"
+    pos     : r1(1.5, 0.75)
+    size    : 24px
+    color   : #6B7280
+
+deffigure pt_suiv =
+    type   : circle
+    center : r1(1, th)
+    radius : 1.1%
+    fill   : #6B7280
+    color  : white
+    layer  : 3
+
+deffigure pt_suiv_nom =
+    type    : text
+    content : "$Q_\theta(x_{k+1})$"
+    pos     : r1(0.62, th + 0.45)
+    size    : 26px
+    color   : #6B7280
+
+deffigure pt_pred =
+    type   : circle
+    center : r1(2, 4*th)
+    radius : 1.3%
+    fill   : #2563EB
+    color  : white
+    layer  : 4
+
+deffigure pt_cible =
+    type   : circle
+    center : r1(2, 4 + th)
+    radius : 1.3%
+    fill   : #16A34A
+    color  : white
+    layer  : 4
+
+deffigure seg_d =
+    type   : line
+    from   : r1(2, 4*th)
+    to     : r1(2, 4 + th)
+    color  : #DC2626
+    stroke : 6px
+    layer  : 3
+
+deffigure seg_d_nom =
+    type    : text
+    content : "$\mathcal{D}$"
+    pos     : r1(2.25, (4 + 5*th)/2)
+    size    : 34px
+    color   : #DC2626
+
+deffigure p_trans =
+    type    : text
+    content : "Transition observée : $x_k = 2 \;\to\; x_{k+1} = 1$
+coût payé : $c_k = 4$"
+    pos     : (75%, 81%)
+    size    : 30px
+
+deffigure p_pred =
+    type  : equation
+    expr  : \text{prédiction : } Q_\theta(x_k) = #{4*th:2}
+    pos   : (75%, 67%)
+    size  : 36px
+    color : #2563EB
+
+deffigure p_cible =
+    type  : equation
+    expr  : \text{cible : } c_k + Q_\theta(x_{k+1}) = 4 + #{th:2} = #{4 + th:2}
+    pos   : (75%, 58%)
+    size  : 36px
+    color : #16A34A
+
+deffigure p_d =
+    type  : equation
+    expr  : \mathcal{D}_{k+1} = \text{cible} - \text{prédiction} = #{4 + th - 4*th:2}
+    pos   : (75%, 49%)
+    size  : 36px
+    color : #DC2626
+
+deffigure p_maj =
+    type  : equation
+    expr  : \theta \leftarrow \theta + \alpha\,\mathcal{D}_{k+1}\,\psi(x_k), \quad \psi(x) = x^2
+    pos   : (75%, 37%)
+    size  : 36px
+
+deffigure p_maj_num =
+    type  : equation
+    expr  : \theta \leftarrow 1 + 0.05 \times 1 \times 4 = 1.2
+    pos   : (75%, 28%)
+    size  : 36px
+
+deffigure p_note =
+    type    : text
+    content : "La cible bouge aussi : elle dépend de $\theta$
+(on « bootstrappe »)"
+    pos     : (75%, 16%)
+    style   : note
+
+defgroup g_s2 =
+    items : [s2_titre, r1, q_courbe, q_nom, trans, trans_nom, pt_suiv, pt_suiv_nom, pt_pred, pt_cible, seg_d, seg_d_nom, p_trans, p_pred, p_cible, p_d, p_maj, p_maj_num, p_note]
+
+# ═════════════ 3. TD(0) en général ═════════════
+
+deffigure s3_titre =
+    type    : text
+    content : "TD(0) en général"
+    pos     : (50%, 90%)
+    style   : titre_scene
+
+deffigure s3_td0 =
+    type  : equation
+    expr  : \theta_{k+1} = \theta_k + \alpha_{k+1}\,\mathcal{D}_{k+1}\,\psi(k), \qquad \mathcal{D}_{k+1} = c_k - \Delta\psi_k^\top \theta_k
+    pos   : (50%, 75%)
+    style : formule
+
+deffigure s3_brm =
+    type  : equation
+    expr  : \text{BRM (vrai gradient de } \tfrac12\mathcal{D}^2) : \ \theta \mathrel{+}= \alpha\,\mathcal{D}\,\Delta\psi \qquad \text{TD (semi-gradient)} : \ \theta \mathrel{+}= \alpha\,\mathcal{D}\,\psi
+    pos   : (50%, 61%)
+    size  : 34px
+    color : #6B7280
+
+deffigure s3_ode =
+    type  : equation
+    expr  : \mathbb{E}_\varpi[\mathcal{D}\,\psi] = b - A\theta \;\Longrightarrow\; \dot\vartheta = b - A\vartheta \;\Longrightarrow\; \vartheta_t \to A^{-1} b
+    pos   : (50%, 46%)
+    style : formule
+
+deffigure s3_concl =
+    type    : text
+    content : "TD(0) = LSTD résolu par petits pas, sans jamais former la matrice $A$"
+    pos     : (50%, 30%)
+    size    : 36px
+    color   : #16A34A
+
+defgroup g_s3 =
+    items : [s3_titre, s3_td0, s3_brm, s3_ode, s3_concl]
+
+# ═════════════ 4-5. La chaîne : attribution du mérite ═════════════
+
+deffigure s4_titre =
+    type    : text
+    content : "Le problème : à qui attribuer le coût ?"
+    pos     : (50%, 93%)
+    style   : titre_scene
+
+deffigure s5_titre =
+    type    : text
+    content : "La trace d'éligibilité : $e_k = \lambda\, e_{k-1} + \psi(k)$"
+    pos     : (50%, 93%)
+    style   : titre_scene
+
+deffigure n_a =
+    type   : circle
+    center : (14%, 45%)
+    style  : noeud
+
+deffigure n_b =
+    type   : circle
+    center : (30%, 45%)
+    style  : noeud
+
+deffigure n_c =
+    type   : circle
+    center : (46%, 45%)
+    style  : noeud
+
+deffigure n_d =
+    type   : circle
+    center : (62%, 45%)
+    style  : noeud
+
+deffigure n_g =
+    type   : circle
+    center : (80%, 45%)
+    style  : noeud
+    fill   : #DCFCE7
+    color  : #16A34A
+
+deffigure l_a =
+    type    : text
+    content : "$A$"
+    pos     : (14%, 45%)
+    size    : 34px
+    layer   : 3
+
+deffigure l_b =
+    type    : text
+    content : "$B$"
+    pos     : (30%, 45%)
+    size    : 34px
+    layer   : 3
+
+deffigure l_c =
+    type    : text
+    content : "$C$"
+    pos     : (46%, 45%)
+    size    : 34px
+    layer   : 3
+
+deffigure l_d =
+    type    : text
+    content : "$D$"
+    pos     : (62%, 45%)
+    size    : 34px
+    layer   : 3
+
+deffigure l_g =
+    type    : text
+    content : "but"
+    pos     : (80%, 37%)
+    size    : 28px
+    color   : #16A34A
+    layer   : 3
+
+deffigure f_ab =
+    type  : line
+    from  : (16.3%, 45%)
+    to    : (27.7%, 45%)
+    style : fleche
+
+deffigure f_bc =
+    type  : line
+    from  : (32.3%, 45%)
+    to    : (43.7%, 45%)
+    style : fleche
+
+deffigure f_cd =
+    type  : line
+    from  : (48.3%, 45%)
+    to    : (59.7%, 45%)
+    style : fleche
+
+deffigure f_dg =
+    type   : line
+    from   : (64.3%, 45%)
+    to     : (77.7%, 45%)
+    style  : fleche
+    color  : #DC2626
+
+deffigure c_ab =
+    type    : text
+    content : "$c = 0$"
+    pos     : (22%, 49%)
+    size    : 24px
+    color   : #6B7280
+
+deffigure c_bc =
+    type    : text
+    content : "$c = 0$"
+    pos     : (38%, 49%)
+    size    : 24px
+    color   : #6B7280
+
+deffigure c_cd =
+    type    : text
+    content : "$c = 0$"
+    pos     : (54%, 49%)
+    size    : 24px
+    color   : #6B7280
+
+deffigure c_dg =
+    type    : text
+    content : "$c = 10$"
+    pos     : (71%, 49%)
+    size    : 26px
+    color   : #DC2626
+
+deffigure agent =
+    type   : circle
+    center : (14%, 45%)
+    radius : 1.4%
+    fill   : #DC2626
+    color  : white
+    layer  : 5
+
+# Barres bleues : estimations Q (base à 51 %, 3 % de hauteur par unité)
+
+deffigure bq_a =
+    type   : polygon
+    points : [(12%, 51%), (16%, 51%), (16%, (51 + 3*qA)%), (12%, (51 + 3*qA)%)]
+    style  : barre_q
+
+deffigure bq_b =
+    type   : polygon
+    points : [(28%, 51%), (32%, 51%), (32%, (51 + 3*qB)%), (28%, (51 + 3*qB)%)]
+    style  : barre_q
+
+deffigure bq_c =
+    type   : polygon
+    points : [(44%, 51%), (48%, 51%), (48%, (51 + 3*qC)%), (44%, (51 + 3*qC)%)]
+    style  : barre_q
+
+deffigure bq_d =
+    type   : polygon
+    points : [(60%, 51%), (64%, 51%), (64%, (51 + 3*qD)%), (60%, (51 + 3*qD)%)]
+    style  : barre_q
+
+deffigure vq_a =
+    type    : text
+    content : "#{qA}"
+    pos     : (14%, (54 + 3*qA)%)
+    style   : valeur
+    color   : #1D4ED8
+
+deffigure vq_b =
+    type    : text
+    content : "#{qB}"
+    pos     : (30%, (54 + 3*qB)%)
+    style   : valeur
+    color   : #1D4ED8
+
+deffigure vq_c =
+    type    : text
+    content : "#{qC}"
+    pos     : (46%, (54 + 3*qC)%)
+    style   : valeur
+    color   : #1D4ED8
+
+deffigure vq_d =
+    type    : text
+    content : "#{qD}"
+    pos     : (62%, (54 + 3*qD)%)
+    style   : valeur
+    color   : #1D4ED8
+
+deffigure nom_q =
+    type    : text
+    content : "estimations
+$Q_\theta(s)$"
+    pos     : (5%, 60%)
+    size    : 26px
+    color   : #1D4ED8
+
+# Barres orange : trace d'éligibilité (sommet à 39 %, 12 % de hauteur pour 1)
+
+deffigure be_a =
+    type   : polygon
+    points : [(12.5%, 39%), (15.5%, 39%), (15.5%, (39 - 12*eA)%), (12.5%, (39 - 12*eA)%)]
+    style  : barre_e
+
+deffigure be_b =
+    type   : polygon
+    points : [(28.5%, 39%), (31.5%, 39%), (31.5%, (39 - 12*eB)%), (28.5%, (39 - 12*eB)%)]
+    style  : barre_e
+
+deffigure be_c =
+    type   : polygon
+    points : [(44.5%, 39%), (47.5%, 39%), (47.5%, (39 - 12*eC)%), (44.5%, (39 - 12*eC)%)]
+    style  : barre_e
+
+deffigure be_d =
+    type   : polygon
+    points : [(60.5%, 39%), (63.5%, 39%), (63.5%, (39 - 12*eD)%), (60.5%, (39 - 12*eD)%)]
+    style  : barre_e
+
+deffigure ve_a =
+    type    : text
+    content : "#{eA:3}"
+    pos     : (14%, 23%)
+    style   : valeur
+    color   : #B45309
+
+deffigure ve_b =
+    type    : text
+    content : "#{eB:3}"
+    pos     : (30%, 23%)
+    style   : valeur
+    color   : #B45309
+
+deffigure ve_c =
+    type    : text
+    content : "#{eC:3}"
+    pos     : (46%, 23%)
+    style   : valeur
+    color   : #B45309
+
+deffigure ve_d =
+    type    : text
+    content : "#{eD:3}"
+    pos     : (62%, 23%)
+    style   : valeur
+    color   : #B45309
+
+deffigure nom_e =
+    type    : text
+    content : "trace
+$e_k$"
+    pos     : (5%, 33%)
+    size    : 26px
+    color   : #B45309
+
+# Étiquettes d'épisode (à droite)
+
+deffigure ep1 =
+    type    : text
+    content : "Épisode 1
+TD(0), $\alpha = 0.5$"
+    pos     : (89%, 72%)
+    size    : 30px
+
+deffigure ep2 =
+    type    : text
+    content : "Épisode 2
+TD(0), $\alpha = 0.5$"
+    pos     : (89%, 72%)
+    size    : 30px
+
+deffigure ep3 =
+    type    : text
+    content : "Épisode 1
+TD($\lambda$), $\lambda = 0.5$"
+    pos     : (89%, 72%)
+    size    : 30px
+
+deffigure ep4 =
+    type    : text
+    content : "Épisode 1
+TD($\lambda$), $\lambda = 1$"
+    pos     : (89%, 72%)
+    size    : 30px
+
+# Différences temporelles affichées au moment où elles apparaissent
+
+deffigure d_dg10 =
+    type    : text
+    content : "$\mathcal{D} = 10$"
+    pos     : (71%, 37%)
+    size    : 32px
+    color   : #DC2626
+
+deffigure d_cd5 =
+    type    : text
+    content : "$\mathcal{D} = 5$"
+    pos     : (54%, 37%)
+    size    : 32px
+    color   : #DC2626
+
+deffigure d_dg5 =
+    type    : text
+    content : "$\mathcal{D} = 5$"
+    pos     : (71%, 37%)
+    size    : 32px
+    color   : #DC2626
+
+deffigure maj_lambda =
+    type    : text
+    content : "$\theta \mathrel{+}= \alpha\,\mathcal{D}\,e_k$ :
+chaque état reçoit
+$0.5 \times 10 \times$ sa trace"
+    pos     : (89%, 30%)
+    size    : 26px
+    color   : #DC2626
+
+deffigure bilan_td0 =
+    type    : text
+    content : "1 état de plus
+par épisode"
+    pos     : (89%, 30%)
+    size    : 28px
+    color   : #4B5563
+
+defgroup g_chaine =
+    items : [n_a, n_b, n_c, n_d, n_g, l_a, l_b, l_c, l_d, l_g, f_ab, f_bc, f_cd, f_dg, c_ab, c_bc, c_cd, c_dg, agent, bq_a, bq_b, bq_c, bq_d, vq_a, vq_b, vq_c, vq_d, nom_q, be_a, be_b, be_c, be_d, ve_a, ve_b, ve_c, ve_d, nom_e, ep1, ep2, ep3, ep4, d_dg10, d_cd5, d_dg5, maj_lambda, bilan_td0, s4_titre, s5_titre]
+
+# ═════════════ 6. Compromis selon λ ═════════════
+
+deffigure s6_titre =
+    type    : text
+    content : "Choisir $\lambda$ : un compromis biais / variance"
+    pos     : (50%, 90%)
+    style   : titre_scene
+
+deffigure s6_table =
+    type   : table
+    pos    : (50%, 58%)
+    size   : 34px
+    header : ["$\lambda$", "Sur quoi s'appuie la correction", "Biais", "Variance"]
+    rows   : |
+        $0$ | un pas, puis l'estimation $Q_\theta$ | fort si $Q_\theta$ est mal approchée | faible
+        $0 < \lambda < 1$ | mélange, poids $\lambda^{\text{âge}}$ | intermédiaire | intermédiaire
+        $1$ | les coûts réels de toute la suite | faible | forte
+
+deffigure s6_note =
+    type    : text
+    content : "Grand $\lambda$ : un coût retardé remonte plus vite le long de la trajectoire
+Convergence garantie : $\lambda = 0$, données on-policy"
+    pos     : (50%, 27%)
+    style   : note
+
+defgroup g_s6 =
+    items : [s6_titre, s6_table, s6_note]
+
+# ═════════════ 7. Algorithme complet ═════════════
+
+deffigure s7_titre =
+    type    : text
+    content : "TD($\lambda$) avec $Q_\theta = \theta^\top\psi$ linéaire"
+    pos     : (50%, 90%)
+    style   : titre_scene
+
+deffigure a0 =
+    type    : text
+    content : "Entrées : transitions $(x_k, u_k, x_{k+1})$, politique $\pi$, features $\psi$, $\lambda \in [0,1]$, pas $\alpha_k$, $\theta_0$"
+    pos     : (10%, 78%)
+    align   : left
+    size    : 30px
+    color   : #4B5563
+
+deffigure a1 =
+    type    : text
+    content : "1.  $e_{-1} = 0$"
+    pos     : (10%, 68%)
+    align   : left
+    size    : 34px
+
+deffigure a2 =
+    type    : text
+    content : "2.  Trace : $e_k = \lambda\, e_{k-1} + \psi(x_k, u_k)$"
+    pos     : (10%, 59%)
+    align   : left
+    size    : 34px
+    color   : #B45309
+
+deffigure a3 =
+    type    : text
+    content : "3.  Différence temporelle : $\mathcal{D}_{k+1} = -Q_{\theta_k}(x_k,u_k) + c_k + Q_{\theta_k}\big(x_{k+1}, \pi(x_{k+1})\big)$"
+    pos     : (10%, 50%)
+    align   : left
+    size    : 34px
+    color   : #DC2626
+
+deffigure a4 =
+    type    : text
+    content : "4.  Mise à jour : $\theta_{k+1} = \theta_k + \alpha_{k+1}\,\mathcal{D}_{k+1}\,e_k$"
+    pos     : (10%, 41%)
+    align   : left
+    size    : 34px
+    color   : #2563EB
+
+deffigure a5 =
+    type    : text
+    content : "5.  Si $k = N-1$ : fin ; sinon $k \leftarrow k+1$, retour en 2"
+    pos     : (10%, 32%)
+    align   : left
+    size    : 34px
+
+deffigure a6 =
+    type    : text
+    content : "Par transition : mémoire et calcul en $O(d)$ (LSTD : $O(d^2)$ et $O(d^3)$)
+$\lambda = 0$ : $e_k = \psi(k)$, même direction de test que LSTD classique"
+    pos     : (50%, 18%)
+    style   : note
+
+defgroup g_s7 =
+    items : [s7_titre, a0, a1, a2, a3, a4, a5, a6]
+
+# ═════════════ 8. Non linéaire et TD(λ)-PI ═════════════
+
+deffigure s8_titre =
+    type    : text
+    content : "Avec un réseau de neurones"
+    pos     : (27%, 88%)
+    style   : titre_scene
+
+deffigure nl1 =
+    type  : equation
+    expr  : g_k = \nabla_\theta Q_\theta(x_k, u_k)\big|_{\theta = \theta_k}
+    pos   : (27%, 72%)
+    size  : 36px
+
+deffigure nl2 =
+    type  : equation
+    expr  : e_k = \lambda\, e_{k-1} + g_k
+    pos   : (27%, 61%)
+    size  : 36px
+    color : #B45309
+
+deffigure nl3 =
+    type    : text
+    content : "Cas linéaire : $\nabla_\theta(\theta^\top\psi) = \psi$
+on retrouve exactement TD($\lambda$)
+
+$g_k$ = direction qui fait monter $Q$
+au point où l'on s'est trompé
+
+Plus de garantie de convergence"
+    pos     : (27%, 34%)
+    size    : 30px
+    color   : #4B5563
+
+deffigure sep =
+    type   : line
+    from   : (52%, 15%)
+    to     : (52%, 92%)
+    color  : #D1D5DB
+    stroke : 2px
+
+deffigure s8b_titre =
+    type    : text
+    content : "TD($\lambda$)-PI"
+    pos     : (76%, 88%)
+    style   : titre_scene
+
+deffigure pi1 =
+    type    : text
+    content : "(i)  collecter des transitions avec $\pi_n$"
+    pos     : (56%, 74%)
+    align   : left
+    size    : 30px
+
+deffigure pi2 =
+    type    : text
+    content : "(ii)  évaluer $\pi_n$ par TD($\lambda$) $\to \theta^n_N$"
+    pos     : (56%, 64%)
+    align   : left
+    size    : 30px
+
+deffigure pi3 =
+    type    : text
+    content : "(iii)  $\pi_{n+1}(x) \in \arg\min_u Q_{\theta^n_N}(x, u)$"
+    pos     : (56%, 54%)
+    align   : left
+    size    : 30px
+
+deffigure pi4 =
+    type    : text
+    content : "(iv)  repartir de $\theta^{n+1}_0 = \theta^n_N$ (warm start)"
+    pos     : (56%, 44%)
+    align   : left
+    size    : 30px
+
+deffigure pi5 =
+    type    : text
+    content : "$\pi_n$ reste fixe pendant toute l'évaluation,
+elle ne change qu'à l'étape (iii)"
+    pos     : (76%, 28%)
+    size    : 28px
+    color   : #4B5563
+
+defgroup g_s8 =
+    items : [s8_titre, nl1, nl2, nl3, sep, s8b_titre, pi1, pi2, pi3, pi4, pi5]
+
+# ═════════════ 9. Récapitulatif ═════════════
+
+deffigure s9_titre =
+    type    : text
+    content : "À retenir"
+    pos     : (50%, 88%)
+    style   : titre_scene
+
+deffigure r_1 =
+    type    : text
+    content : "• $\mathcal{D}_{k+1}$ = cible de Bellman $-$ prédiction : l'erreur à corriger"
+    pos     : (12%, 74%)
+    align   : left
+    size    : 34px
+
+deffigure r_2 =
+    type    : text
+    content : "• TD(0) : $\theta \mathrel{+}= \alpha\,\mathcal{D}\,\psi$ ; en moyenne, converge vers la solution de LSTD"
+    pos     : (12%, 63%)
+    align   : left
+    size    : 34px
+
+deffigure r_3 =
+    type    : text
+    content : "• La trace $e_k$ garde la mémoire des états récents, avec un poids $\lambda^{\text{âge}}$"
+    pos     : (12%, 52%)
+    align   : left
+    size    : 34px
+
+deffigure r_4 =
+    type    : text
+    content : "• Une seule erreur corrige tout le chemin qui y a mené"
+    pos     : (12%, 41%)
+    align   : left
+    size    : 34px
+
+deffigure r_5 =
+    type    : text
+    content : "• $\lambda$ petit : biais, peu de variance — $\lambda$ grand : l'inverse"
+    pos     : (12%, 30%)
+    align   : left
+    size    : 34px
+
+defgroup g_s9 =
+    items : [s9_titre, r_1, r_2, r_3, r_4, r_5]
+
+[timeline]
+
+# ═════════════ 0. Titre ═════════════
+
+0.000 => {
+    start   : [titre fadein(1s), sous_titre fadein(1.5s), source fadein(1.5s)]
+    comment : ["Dans cette vidéo : TD lambda, la méthode itérative pour évaluer une politique en apprentissage par renforcement."]
+}
+
+7.000 => {
+    end : [g_titre fadeout(0.8s)]
+}
+
+# ═════════════ 1. Objectif ═════════════
+
+8.000 => {
+    start   : [s1_titre fadein(0.8s), s1_bellman write(1.5s)]
+    comment : ["Le but : évaluer une politique pi fixée, c'est-à-dire trouver sa fonction Q, qui vérifie l'équation de Bellman."]
+}
+
+15.000 => {
+    start   : [s1_param write(1.5s)]
+    comment : ["Comme Q pi est trop compliquée, on la cherche dans une famille linéaire : theta transposé psi, avec d paramètres."]
+}
+
+22.000 => {
+    start   : [s1_lstd fadein(1s)]
+    comment : ["LSTD trouve theta d'un coup, en résolvant un système d par d. Mais stocker et inverser cette matrice coûte cher quand d est grand."]
+}
+
+30.000 => {
+    start   : [s1_but fadein(1s)]
+    comment : ["TD lambda vise la même solution, mais corrige theta après chaque transition, avec un coût proportionnel à d seulement."]
+}
+
+37.000 => {
+    end : [g_s1 fadeout(0.8s)]
+}
+
+# ═════════════ 2. Exemple chiffré ═════════════
+
+38.000 => {
+    start   : [s2_titre fadein(0.8s), r1 fadein(1s), q_courbe draw(1.5s), q_nom fadein(1s)]
+    comment : ["Prenons un exemple minimal : un état scalaire, une seule feature, x carré. Donc Q theta de x vaut theta x carré, avec theta égal à 1."]
+}
+
+45.000 => {
+    start   : [trans draw(1s), trans_nom fadein(1s), p_trans fadein(1s), pt_suiv grow(0.5s), pt_suiv_nom fadein(0.8s)]
+    comment : ["On observe une transition : depuis x égal 2, le système va en x égal 1, et on paie un coût de 4."]
+}
+
+52.000 => {
+    start   : [pt_pred grow(0.5s), p_pred fadein(1s)]
+    comment : ["Notre prédiction actuelle du coût total depuis 2, c'est Q de 2, qui vaut 4."]
+}
+
+58.000 => {
+    start   : [pt_cible grow(0.5s), p_cible fadein(1s)]
+    comment : ["Mais Bellman dit que ce coût doit valoir : le coût payé, plus le coût prédit depuis l'état d'arrivée. Soit 4 plus 1, égal 5."]
+}
+
+66.000 => {
+    start   : [seg_d draw(0.8s), seg_d_nom fadein(0.8s), p_d fadein(1s)]
+    comment : ["L'écart entre la cible et la prédiction, c'est la différence temporelle D. Ici D vaut 1 : on a sous-estimé le coût."]
+}
+
+73.000 => {
+    start   : [p_maj write(1.5s)]
+    comment : ["TD corrige theta proportionnellement à cette erreur, dans la direction psi de x k : celle qui fait monter Q au point où l'on s'est trompé."]
+}
+
+81.000 => {
+    start   : [p_maj_num fadein(1s)]
+    comment : ["Avec un pas alpha de 0,05 : theta passe de 1 à 1,2."]
+}
+
+86.000 => {
+    anim    : [th to(1.2, 2.5s, ease=smooth)]
+    comment : ["La prédiction monte à 4,8. Mais la cible monte aussi, à 5,2, car elle dépend elle-même de theta."]
+}
+
+93.000 => {
+    start   : [p_note fadein(1s)]
+    comment : ["On apprend Q à partir de sa propre estimation : c'est le bootstrapping. L'erreur restante, 0,4, sera corrigée aux transitions suivantes."]
+}
+
+101.000 => {
+    end : [g_s2 fadeout(0.8s)]
+}
+
+# ═════════════ 3. TD(0) en général ═════════════
+
+102.000 => {
+    start   : [s3_titre fadein(0.8s), s3_td0 write(1.5s)]
+    comment : ["En général, TD zéro s'écrit ainsi : on ajoute à theta le pas, fois la différence temporelle, fois le vecteur de features de la transition."]
+}
+
+110.000 => {
+    start   : [s3_brm fadein(1s)]
+    comment : ["Ce n'est pas un vrai gradient. Dériver D carré sur deux donnerait delta psi : c'est la BRM. TD traite la cible comme une constante : on parle de semi-gradient."]
+}
+
+120.000 => {
+    start   : [s3_ode write(1.5s)]
+    comment : ["En moyenne, l'incrément vaut b moins A theta. L'ODE associée, si elle est stable, converge vers A inverse b : la solution de LSTD."]
+}
+
+129.000 => {
+    start   : [s3_concl fadein(1s)]
+    comment : ["TD zéro, c'est donc LSTD résolu par petits pas, sans jamais former la matrice A."]
+}
+
+135.000 => {
+    end : [g_s3 fadeout(0.8s)]
+}
+
+# ═════════════ 4. Attribution du mérite avec TD(0) ═════════════
+
+136.000 => {
+    start   : [s4_titre fadein(0.8s), n_a grow(0.5s), n_b grow(0.5s), n_c grow(0.5s), n_d grow(0.5s), n_g grow(0.5s), l_a fadein(0.8s), l_b fadein(0.8s), l_c fadein(0.8s), l_d fadein(0.8s), l_g fadein(0.8s), f_ab draw(1s), f_bc draw(1s), f_cd draw(1s), f_dg draw(1s), c_ab fadein(1s), c_bc fadein(1s), c_cd fadein(1s), c_dg fadein(1s)]
+    comment : ["Mais TD zéro a un défaut. Prenons une chaîne d'états A, B, C, D, puis le but. Seul le dernier pas coûte quelque chose : 10."]
+}
+
+144.000 => {
+    start   : [bq_a, bq_b, bq_c, bq_d, vq_a fadein(0.6s), vq_b fadein(0.6s), vq_c fadein(0.6s), vq_d fadein(0.6s), nom_q fadein(0.8s), agent grow(0.5s), ep1 fadein(0.8s)]
+    comment : ["En bleu, les estimations de Q pour chaque état, toutes nulles au départ. Une feature par état, et un pas alpha de 0,5."]
+}
+
+151.000 => {
+    anim    : [agent move(to=(30%, 45%), 0.8s)]
+    comment : ["Premier épisode. De A à B : coût nul, prédictions nulles, donc D égal 0. Rien ne change."]
+}
+
+153.500 => {
+    anim : [agent move(to=(46%, 45%), 0.8s)]
+}
+
+156.000 => {
+    anim : [agent move(to=(62%, 45%), 0.8s)]
+}
+
+158.500 => {
+    start   : [d_dg10 fadein(0.5s)]
+    anim    : [agent move(to=(80%, 45%), 0.8s)]
+    comment : ["Au dernier pas, D vaut 10. Mais TD zéro ne corrige que l'état courant : seul Q de D monte, à 5."]
+}
+
+160.500 => {
+    anim : [qD to(5, 1.2s, ease=smooth)]
+}
+
+165.000 => {
+    end     : [d_dg10 fadeout(0.5s)]
+    start   : [bilan_td0 fadein(0.8s)]
+    comment : ["A, B et C n'ont rien appris, alors que ce sont eux qui ont mené à ce coût."]
+}
+
+170.000 => {
+    end     : [ep1 fadeout(0.4s)]
+    start   : [ep2 fadein(0.6s)]
+    anim    : [agent move(to=(14%, 45%), 0.8s)]
+    comment : ["Deuxième épisode, toujours avec TD zéro."]
+}
+
+173.000 => {
+    anim : [agent move(to=(30%, 45%), 0.6s)]
+}
+
+174.500 => {
+    anim : [agent move(to=(46%, 45%), 0.6s)]
+}
+
+176.000 => {
+    start   : [d_cd5 fadein(0.5s)]
+    anim    : [agent move(to=(62%, 45%), 0.8s)]
+    comment : ["De C à D : la cible vaut 0 plus Q de D, soit 5. Donc D vaut 5, et Q de C monte à 2,5."]
+}
+
+178.000 => {
+    anim : [qC to(2.5, 1.2s, ease=smooth)]
+}
+
+182.000 => {
+    end     : [d_cd5 fadeout(0.4s)]
+    start   : [d_dg5 fadein(0.5s)]
+    anim    : [agent move(to=(80%, 45%), 0.8s)]
+    comment : ["Puis de D au but : D vaut 10 moins 5, égal 5, et Q de D monte à 7,5."]
+}
+
+184.000 => {
+    anim : [qD to(7.5, 1.2s, ease=smooth)]
+}
+
+188.000 => {
+    end     : [d_dg5 fadeout(0.4s)]
+    anim    : [bilan_td0 [scale(1.15, 0.4s), scale(1, 0.4s)]]
+    comment : ["L'information remonte d'un seul état par épisode. Il faudra quatre épisodes pour que A apprenne quoi que ce soit."]
+}
+
+# ═════════════ 5. La trace d'éligibilité : TD(λ) ═════════════
+
+196.000 => {
+    end     : [s4_titre fadeout(0.5s), ep2 fadeout(0.4s), bilan_td0 fadeout(0.4s)]
+    start   : [s5_titre fadein(0.8s), ep3 fadein(0.6s), be_a, be_b, be_c, be_d, ve_a fadein(0.6s), ve_b fadein(0.6s), ve_c fadein(0.6s), ve_d fadein(0.6s), nom_e fadein(0.8s)]
+    anim    : [qC to(0, 0.8s), qD to(0, 0.8s), agent move(to=(14%, 45%), 0.8s)]
+    comment : ["TD lambda règle ce problème avec une trace d'éligibilité, en orange : la mémoire des états récemment visités. On repart de zéro."]
+}
+
+204.000 => {
+    comment : ["À chaque pas, la trace est multipliée par lambda, puis on ajoute le vecteur de l'état courant. Ici lambda vaut 0,5."]
+}
+
+210.000 => {
+    anim    : [eA to(1, 0.6s, ease=smooth)]
+    comment : ["En A, la trace vaut 1 sur A. D est nul : theta ne bouge pas, mais la trace s'en souvient."]
+}
+
+215.000 => {
+    anim    : [agent move(to=(30%, 45%), 0.8s), eA to(0.5, 0.6s, ease=smooth), eB to(1, 0.6s, ease=smooth)]
+    comment : ["On passe en B : le poids de A est divisé par deux, B vaut 1."]
+}
+
+219.000 => {
+    anim    : [agent move(to=(46%, 45%), 0.8s), eA to(0.25, 0.6s, ease=smooth), eB to(0.5, 0.6s, ease=smooth), eC to(1, 0.6s, ease=smooth)]
+    comment : ["Puis C. Plus un état est ancien, plus son poids est faible : lambda puissance son âge."]
+}
+
+224.000 => {
+    anim    : [agent move(to=(62%, 45%), 0.8s), eA to(0.125, 0.6s, ease=smooth), eB to(0.25, 0.6s, ease=smooth), eC to(0.5, 0.6s, ease=smooth), eD to(1, 0.6s, ease=smooth)]
+}
+
+227.000 => {
+    start   : [d_dg10 fadein(0.5s)]
+    anim    : [agent move(to=(80%, 45%), 0.8s)]
+    comment : ["Au dernier pas, D vaut 10. Cette fois, la correction suit toute la trace, et pas seulement l'état courant."]
+}
+
+232.000 => {
+    start   : [maj_lambda fadein(0.8s)]
+    anim    : [qD to(5, 1.5s, ease=smooth), qC to(2.5, 1.5s, ease=smooth), qB to(1.25, 1.5s, ease=smooth), qA to(0.625, 1.5s, ease=smooth)]
+    comment : ["D gagne 5, C 2,5, B 1,25, et A 0,63. Dès le premier épisode, tout le chemin qui a mené au coût a appris."]
+}
+
+241.000 => {
+    end     : [ep3 fadeout(0.4s), maj_lambda fadeout(0.4s)]
+    start   : [ep4 fadein(0.6s)]
+    anim    : [eA to(1, 1s, ease=smooth), eB to(1, 1s, ease=smooth), eC to(1, 1s, ease=smooth), qA to(5, 1.5s, ease=smooth), qB to(5, 1.5s, ease=smooth), qC to(5, 1.5s, ease=smooth)]
+    comment : ["Avec lambda égal 1, la trace ne s'efface jamais : tous les états reçoivent la même correction. C'est l'esprit Monte-Carlo, qui s'appuie sur les coûts réellement payés."]
+}
+
+251.000 => {
+    end : [g_chaine fadeout(0.8s)]
+}
+
+# ═════════════ 6. Compromis ═════════════
+
+252.000 => {
+    start   : [s6_titre fadein(0.8s), s6_table fadein(1.2s)]
+    comment : ["Lambda règle donc un compromis. Avec lambda égal 0, on s'appuie sur un seul pas et sur l'estimation de Q : peu de variance, mais un biais si Q est mal approchée."]
+}
+
+261.000 => {
+    comment : ["Avec lambda égal 1, on s'appuie sur les coûts réels de toute la suite : peu de biais, mais ces coûts accumulés sont bruités, donc beaucoup de variance."]
+}
+
+269.000 => {
+    start   : [s6_note fadein(1s)]
+    comment : ["Un grand lambda propage plus vite un coût retardé. En revanche, la convergence n'est garantie que pour lambda égal 0, avec des données on-policy."]
+}
+
+278.000 => {
+    end : [g_s6 fadeout(0.8s)]
+}
+
+# ═════════════ 7. Algorithme ═════════════
+
+279.000 => {
+    start   : [s7_titre fadein(0.8s), a0 fadein(1s), a1 fadein(1s)]
+    comment : ["Voici l'algorithme complet. On part d'une trace nulle."]
+}
+
+284.000 => {
+    start   : [a2 write(1.2s)]
+    comment : ["À chaque transition : on met à jour la trace,"]
+}
+
+288.000 => {
+    start   : [a3 write(1.5s)]
+    comment : ["on calcule la différence temporelle avec le theta actuel,"]
+}
+
+292.000 => {
+    start   : [a4 write(1.2s)]
+    comment : ["et on corrige theta dans la direction de la trace, et non plus de psi seul."]
+}
+
+297.000 => {
+    start   : [a5 fadein(1s), a6 fadein(1s)]
+    comment : ["Chaque mise à jour ne coûte que de l'ordre de d opérations. Et avec lambda égal 0, la trace vaut psi : on retrouve TD zéro."]
+}
+
+305.000 => {
+    end : [g_s7 fadeout(0.8s)]
+}
+
+# ═════════════ 8. Non linéaire et TD(λ)-PI ═════════════
+
+306.000 => {
+    start   : [s8_titre fadein(0.8s), nl1 write(1.2s), nl2 write(1.2s), sep draw(0.8s)]
+    comment : ["Si Q est un réseau de neurones, on remplace psi par le gradient de Q par rapport à theta."]
+}
+
+312.000 => {
+    start   : [nl3 fadein(1s)]
+    comment : ["C'est cohérent : dans le cas linéaire, ce gradient vaut exactement psi. Mais on perd la garantie de convergence."]
+}
+
+320.000 => {
+    start   : [s8b_titre fadein(0.8s), pi1 fadein(0.8s), pi2 fadein(0.8s), pi3 fadein(0.8s), pi4 fadein(0.8s)]
+    comment : ["Enfin, TD lambda ne fait qu'évaluer. Pour améliorer la politique, on l'insère dans une policy iteration : collecter, évaluer, prendre l'argmin, et repartir du theta précédent."]
+}
+
+330.000 => {
+    start   : [pi5 fadein(1s)]
+    comment : ["Pendant l'évaluation, la politique reste fixe : elle ne change qu'à l'étape d'amélioration."]
+}
+
+336.000 => {
+    end : [g_s8 fadeout(0.8s)]
+}
+
+# ═════════════ 9. Récapitulatif ═════════════
+
+337.000 => {
+    start   : [s9_titre fadein(0.8s), r_1 fadein(0.8s)]
+    comment : ["À retenir."]
+}
+
+339.000 => {
+    start : [r_2 fadein(0.8s)]
+}
+
+341.000 => {
+    start : [r_3 fadein(0.8s)]
+}
+
+343.000 => {
+    start : [r_4 fadein(0.8s)]
+}
+
+345.000 => {
+    start : [r_5 fadein(0.8s)]
+}
+
+354.000 => {
+    end     : [g_s9 fadeout(1s)]
+    comment : none
+}

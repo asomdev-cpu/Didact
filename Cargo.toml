@@ -1,12 +1,12 @@
 [package]
 name = "didact"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 # Bibliothèque : tout le moteur (parser → rendu). Utilisée par le programme natif
 # et compilée en WebAssembly pour le web (cdylib).
 [lib]
-name = "didact"
+name = "didact_lib"
 path = "src/lib.rs"
 crate-type = ["cdylib", "rlib"]
 

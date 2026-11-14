@@ -4,7 +4,7 @@
 set -e
 cargo build --lib --profile web --target wasm32-unknown-unknown
 wasm-bindgen --target web --no-typescript --remove-name-section --remove-producers-section \
-    --out-dir web/pkg --out-name didact target/wasm32-unknown-unknown/web/didact.wasm
+    --out-dir web/pkg --out-name didact target/wasm32-unknown-unknown/web/didact_lib.wasm
 WASM=web/pkg/didact_bg.wasm
 if [ -n "$OPT" ]; then
     wasm-opt "$WASM" -O2 --enable-bulk-memory --enable-nontrapping-float-to-int \

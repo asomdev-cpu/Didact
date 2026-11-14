@@ -210,7 +210,7 @@ L'export n'est pas le mode normal d'utilisation. C'est une fonctionnalité opt-i
 - Délègue à LaTeX/Matplotlib pour les contenus complexes (à faire)
 
 **Rechargement (`src/output/reload.rs`) — ✅ implémenté**
-- Surveille la date et la taille du `.dct`, attend qu'il soit stable, relit avec `didact::load`
+- Surveille la date et la taille du `.dct`, attend qu'il soit stable, relit avec `didact_lib::load`
 - La fenêtre garde l'instant courant ; en cas d'erreur, elle garde l'ancienne version et affiche l'erreur
 
 **3D (`src/renderer/three.rs`) — ✅ implémenté**
